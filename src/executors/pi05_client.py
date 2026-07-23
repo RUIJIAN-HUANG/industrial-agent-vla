@@ -18,8 +18,12 @@ openpi API 关键事实（官方源码 Policy.infer）：
 """
 from __future__ import annotations
 
+import json
+import time
 import logging
-from typing import Optional, Protocol, runtime_checkable
+from typing import Any, Dict, Optional, Protocol, runtime_checkable
+
+import numpy as np
 
 logger = logging.getLogger("pi05_client")
 if not logger.handlers:
@@ -48,6 +52,21 @@ try:
     WS_CLIENT_AVAILABLE = True
 except Exception:
     WS_CLIENT_AVAILABLE = False
+
+# ---------------------------------------------------------------------------
+# 原生 WebSocket 依赖（用于与 openpi_service.py 协议通信）
+# ---------------------------------------------------------------------------
+try:
+    import websockets  # type: ignore
+    _NATIVE_WS_AVAILABLE = True
+except Exception:
+    _NATIVE_WS_AVAILABLE = False
+
+try:
+    import msgpack as _msgpack  # type: ignore
+    _MSGPACK_AVAILABLE = True
+except Exception:
+    _MSGPACK_AVAILABLE = False
 
 
 @runtime_checkable
@@ -86,22 +105,149 @@ def _safe_clear_cache(obj: object) -> None:
 
 
 class WebsocketPolicyClient:
-    """WebSocket 远程客户端（封装 openpi_client.WebsocketClientPolicy）。
+    """WebSocket 远程客户端（与 openpi_service.py ObsPacket 协议对齐）。
 
     方案书 §3.3：远程推理解决仿真显存争用；总 Agent 只走版本化 RPC。
+    发送 ObsPacket 格式数据包，接收 CanonicalActionChunk 响应，
+    将 openpi example 键名透明转换为服务端期望的 ObsPacket 字段。
     """
 
     def __init__(self, host: str, port: int) -> None:
-        self._client = _ws_client.WebsocketClientPolicy(host=host, port=port)
+        if not _NATIVE_WS_AVAILABLE:
+            raise RuntimeError(
+                "websockets 库不可用，无法创建 WebSocket 连接。"
+                "请安装: pip install websockets"
+            )
         self._host = host
         self._port = port
-        logger.info("【WS 客户端】连接 openpi WebSocket %s:%s", host, port)
+        self._ws_url = f"ws://{host}:{port}"
+        self._client: Any = None   # native websockets 连接对象
+        self._loop: Any = None
+        logger.info("【WS 客户端】目标 %s (待首次 infer 时连接)", self._ws_url)
+
+    def _ensure_connected(self) -> None:
+        """建立 / 重建 WebSocket 连接。"""
+        import asyncio
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        self._loop = loop
+
+        async def _connect():
+            self._client = await websockets.connect(
+                self._ws_url,
+                max_size=10 * 1024 * 1024,   # 10 MB 上限（方案书 §3.4 长度校验）
+                ping_interval=20,
+                ping_timeout=10,
+            )
+
+        if self._client is None or self._client.closed:
+            self._loop.run_until_complete(_connect())
+            logger.info("【WS 客户端】已连接 %s", self._ws_url)
+
+    @staticmethod
+    def _serialize(data: Dict[str, Any]) -> bytes:
+        """序列化为 openpi_service 兼容格式：msgpack 优先，fallback JSON。"""
+        if _MSGPACK_AVAILABLE:
+            try:
+                return _msgpack.packb(data, use_bin_type=True)
+            except Exception as e:
+                logger.warning("msgpack 序列化失败，回退 JSON: %s", e)
+        return json.dumps(data, ensure_ascii=False).encode("utf-8")
+
+    @staticmethod
+    def _deserialize(raw: bytes) -> Dict[str, Any]:
+        """反序列化 openpi_service 响应。"""
+        if _MSGPACK_AVAILABLE:
+            try:
+                result = _msgpack.unpackb(raw, raw=False)
+                if isinstance(result, dict):
+                    return result
+            except Exception:
+                pass
+        return json.loads(raw.decode("utf-8"))
 
     def infer(self, example: dict) -> dict:
-        return self._client.infer(example)
+        """将 openpi example dict 转为 ObsPacket 格式发送，提取 actions 返回。
+
+        example 键名映射（pi05.py _build_example → openpi_service ObsPacket）：
+          "observation/exterior_image_1_left"  → "rgb_front"
+          "observation/wrist_image_left"       → "rgb_wrist"
+          "observation/state"                  → "robot_state"
+          "prompt"                             → "instruction"
+          "episode_id" / "step_id" / …         → 透传
+        """
+        self._ensure_connected()
+
+        # ---- 协议转换：openpi example → ObsPacket（方案书 §3.4） ----
+        request: Dict[str, Any] = {
+            "schema_version": "v1",
+            "episode_id": str(example.get("episode_id", "unknown")),
+            "step_id": int(example.get("step_id", 0)),
+            "timestamp_ns": int(example.get("timestamp_ns", int(time.time() * 1e9))),
+            "instruction": str(example.get("prompt", "")),
+            "rgb_front": (
+                example.get("observation/exterior_image_1_left",
+                            np.zeros((480, 640, 3), dtype=np.uint8)).tolist()
+                if isinstance(example.get("observation/exterior_image_1_left"), np.ndarray)
+                else example.get("observation/exterior_image_1_left", [])
+            ),
+            "robot_state": (
+                example.get("observation/state",
+                            np.zeros(8, dtype=np.float32)).tolist()
+                if isinstance(example.get("observation/state"), np.ndarray)
+                else example.get("observation/state", [])
+            ),
+            "runtime_flags": example.get(
+                "runtime_flags",
+                {"terminated": False, "truncated": False, "camera_ok": True},
+            ),
+        }
+        wrist = example.get("observation/wrist_image_left")
+        if wrist is not None:
+            request["rgb_wrist"] = (
+                wrist.tolist() if isinstance(wrist, np.ndarray) else wrist
+            )
+
+        # ---- 发送与接收 ----
+        async def _send_recv():
+            await self._client.send(self._serialize(request))
+            raw = await self._client.recv()
+            return self._deserialize(raw)
+
+        try:
+            response: Dict[str, Any] = self._loop.run_until_complete(_send_recv())
+        except Exception as e:
+            logger.error("WebSocket 请求失败: %s", e)
+            self._client = None   # 标记断开，下次 infer 时重连
+            raise ConnectionError(
+                f"WebSocket 推理失败 ({self._ws_url}): {e}"
+            ) from e
+
+        # ---- 校验响应（方案书 §3.4 协议不变量：非法不下发） ----
+        if not isinstance(response, dict):
+            raise ValueError(f"服务端返回非 dict: {type(response)}")
+        if "error" in response:
+            raise RuntimeError(f"服务端返回错误: {response['error']}")
+        if "actions" not in response:
+            raise ValueError(
+                f"服务端响应缺少 'actions' 字段，现有 keys: {list(response.keys())[:10]}"
+            )
+        return {"actions": np.array(response["actions"], dtype=np.float32)}
 
     def clear_cache(self) -> None:
-        _safe_clear_cache(self._client)
+        """清空客户端连接缓存（失败切换时调用，方案书 §3.3.1 Para186）。"""
+        if self._client is not None:
+            try:
+                async def _close():
+                    await self._client.close()
+                self._loop.run_until_complete(_close())
+            except Exception:
+                pass
+            self._client = None
+            logger.info("【WS 客户端】连接已关闭（clear_cache）")
 
     @property
     def client_type(self) -> str:

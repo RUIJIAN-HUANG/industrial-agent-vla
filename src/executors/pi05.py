@@ -308,6 +308,11 @@ class Pi05Executor(BaseExecutor):
             "observation/exterior_image_1_left": _prep_image(obs.rgb_front),  # 前视 RGB
             "observation/state": np.asarray(obs.robot_state, dtype=np.float32),
             "prompt": obs.instruction,   # 完整自然语言，不拆槽位
+            # ---- 通信字段（WebSocket 客户端透传至 openpi_service 构建 ObsPacket） ----
+            "episode_id": obs.episode_id,
+            "step_id": obs.step_id,
+            "timestamp_ns": obs.timestamp_ns,
+            "runtime_flags": obs.runtime_flags,
         }
         if obs.rgb_wrist is not None:
             example["observation/wrist_image_left"] = _prep_image(obs.rgb_wrist)

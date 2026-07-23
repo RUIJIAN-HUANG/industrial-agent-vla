@@ -134,4 +134,4 @@ VOLUME ["/workspace/openpi_data", "/workspace/project/data", "/workspace/openpi/
 # 11. 启动命令：openpi_service WebSocket 服务
 #     默认 dummy 模式启动；真实推理时 `docker run -e PI05_SERVICE_MODE=real`
 # -----------------------------------------------------------------------------
-CMD ["python", "-m", "src.services.openpi_service"]
+CMD ["/workspace/openpi/.venv/bin/python", "-m", "src.services.openpi_service"]

@@ -116,6 +116,7 @@ _START_TIME = time.time()
 #     "expires_after_ms": int, "actions": list
 # }
 pending_chunks: Dict[str, dict] = {}
+_pending_chunks_lock: asyncio.Lock = asyncio.Lock()  # 并发保护（方案书 §7.1：多 episode 并发安全）
 current_episode_id: Optional[str] = None
 last_step_id: Optional[int] = None
 
@@ -309,43 +310,34 @@ def _validate_request(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _check_episode_step(data: Dict[str, Any]) -> None:
-    """episode_id / step_id 连续性与动作块过期检查（方案书 §3.4 动作过期）。"""
+def _check_episode_step(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """episode_id / step_id 连续性与动作块过期检查（方案书 §3.4 动作过期）。
+
+    返回值：错误 dict 表示应拒绝请求；None 表示通过。
+    pending_chunks 的并发读写由 ws_infer 中的 _pending_chunks_lock 保护。
+    """
     global current_episode_id, last_step_id
     ep = data["episode_id"]
     sid = data["step_id"]
 
-    # episode 切换：清空 pending_chunks，重置执行器
+    # episode 切换：标记（实际清理由 ws_infer 在异步上下文中加锁完成）
     if ep != current_episode_id:
         logger.info("Episode changed, cleared pending chunks (prev=%s new=%s)",
                     current_episode_id, ep)
-        pending_chunks.clear()
-        if executor is not None:
-            try:
-                executor.reset()
-                executor.cancel_pending_chunk()
-            except Exception as e:
-                logger.warning("执行器 reset/cancel 异常：%s", e)
         current_episode_id = ep
         last_step_id = None
 
-    # step_id 连续性：同一 episode 内应递增
+    # episode 内 step_id 应递增（方案书 §7.2：防止超时返回的旧动作进入新 episode）
     if last_step_id is not None and sid != last_step_id + 1:
         logger.warning("step_id 不连续：期望 %d，收到 %d", last_step_id + 1, sid)
-    # 同一 episode 内 step_id 应递增（非递增告警）
+    # 同一 episode 内 step_id 应递增；非递增拒绝执行（方案书 §3.4：step_id 不匹配必须丢弃）
     if last_step_id is not None and sid <= last_step_id:
-        logger.warning("step_id 未递增：last=%d curr=%d", last_step_id, sid)
+        return {"error": "stale_step_id",
+                "reason": f"step_id 未递增: last={last_step_id}, curr={sid}",
+                "schema_version": SCHEMA_VERSION}
     last_step_id = sid
 
-    # 检查当前 episode 的 pending chunk 是否过期，过期则丢弃
-    chunk = pending_chunks.get(ep)
-    if chunk is not None:
-        age_ms = (time.time() - chunk["timestamp"]) * 1000.0
-        ttl = chunk.get("expires_after_ms", DEFAULT_EXPIRES_AFTER_MS)
-        if age_ms > ttl:
-            logger.warning("Action chunk expired (episode=%s age_ms=%.0f > %dms)",
-                           ep, age_ms, ttl)
-            pending_chunks.pop(ep, None)
+    return None
 
 
 def _build_obs(data: Dict[str, Any]) -> Any:
@@ -405,6 +397,9 @@ async def ws_infer(ws: WebSocket) -> None:
     await ws.send_text(json.dumps(metadata, ensure_ascii=False))
     logger.info("WebSocket 连接建立，已发送 metadata")
 
+    # 本连接内的 episode 追踪（用于在异步上下文中触发 episode 切换清理）
+    _ws_prev_episode_id: Optional[str] = None
+
     try:
         while True:
             # 同时兼容二进制（msgpack）与文本（JSON）帧
@@ -430,8 +425,36 @@ async def ws_infer(ws: WebSocket) -> None:
                 await _send_error(ws, err)
                 continue
 
-            # episode/step 连续性与动作过期检查
-            _check_episode_step(data)
+            # episode/step 连续性与动作过期检查（方案书 §3.4）
+            step_err = _check_episode_step(data)
+            if step_err is not None:
+                await _send_error(ws, step_err)
+                continue
+
+            # episode 切换时在异步上下文中加锁清空 pending_chunks + 重置执行器
+            ep = data["episode_id"]
+            async with _pending_chunks_lock:
+                if ep != _ws_prev_episode_id:
+                    pending_chunks.clear()
+                    _ws_prev_episode_id = ep
+                # 检查当前 episode 的 pending chunk 是否过期，过期则丢弃
+                expired_chunk = pending_chunks.get(ep)
+                if expired_chunk is not None:
+                    age_ms = (time.time() - expired_chunk["timestamp"]) * 1000.0
+                    ttl = expired_chunk.get("expires_after_ms", DEFAULT_EXPIRES_AFTER_MS)
+                    if age_ms > ttl:
+                        logger.warning("Action chunk expired (episode=%s age_ms=%.0f > %dms)",
+                                       ep, age_ms, ttl)
+                        pending_chunks.pop(ep, None)
+
+            # episode 切换时重置执行器（方案书 §3.3.1 Para186：清空动作队列与客户端缓存）
+            if ep != current_episode_id:
+                if executor is not None:
+                    try:
+                        executor.reset()
+                        executor.cancel_pending_chunk()
+                    except Exception as e:
+                        logger.warning("执行器 reset/cancel 异常：%s", e)
 
             # 构造 ObsPacket
             try:
@@ -457,13 +480,14 @@ async def ws_infer(ws: WebSocket) -> None:
                                        "schema_version": SCHEMA_VERSION})
                 continue
 
-            # 记录 pending chunk，用于后续请求的过期判断
-            pending_chunks[data["episode_id"]] = {
-                "generated_step": chunk.generated_step,
-                "timestamp": time.time(),
-                "expires_after_ms": chunk.expires_after_ms,
-                "actions": chunk.actions.tolist(),
-            }
+            # 记录 pending chunk，用于后续请求的过期判断（加锁保护并发写入）
+            async with _pending_chunks_lock:
+                pending_chunks[data["episode_id"]] = {
+                    "generated_step": chunk.generated_step,
+                    "timestamp": time.time(),
+                    "expires_after_ms": chunk.expires_after_ms,
+                    "actions": chunk.actions.tolist(),
+                }
 
             # 序列化返回（方案书 §3.4 CanonicalActionChunk v1）
             response = {
