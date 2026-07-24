@@ -12,7 +12,7 @@
 #    - π0.5 推理依赖 JAX CUDA 后端，必须基于官方 CUDA 镜像
 #    - CUDA 12.4 与 jax[cuda12] 轮子 ABI 匹配，避免运行时报错
 # -----------------------------------------------------------------------------
-FROM nvidia/cuda:12.4.1-cudnn-ubuntu22.04
+FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
 
 # -----------------------------------------------------------------------------
 # 2. 系统依赖
@@ -96,6 +96,17 @@ WORKDIR /workspace/project
 ENV PYTHONPATH=/workspace/project:${PYTHONPATH}
 
 # -----------------------------------------------------------------------------
+# 7.5 安装本项目服务依赖（openpi venv 不含 FastAPI/uvicorn/msgpack）
+#    方案书 §7.1：openpi_service 需要 FastAPI + uvicorn 提供 WebSocket 与 HTTP 端点；
+#    msgpack 用于高性能序列化（与 openpi 官方兼容，fallback JSON）。
+#    numpy 已由 openpi 依赖树安装，此处不重复安装以避免版本冲突。
+# -----------------------------------------------------------------------------
+RUN /workspace/openpi/.venv/bin/pip install --no-cache-dir \
+    fastapi \
+    "uvicorn[standard]" \
+    msgpack
+
+# -----------------------------------------------------------------------------
 # 8. 运行时环境变量
 #    PI05_SERVICE_MODE=dummy:
 #        默认 dummy 模式，不 import openpi，便于联调与健康检查
@@ -116,13 +127,20 @@ ENV PI05_SERVICE_MODE=dummy \
     OPENPI_DATA_HOME=/workspace/openpi_data
 
 # -----------------------------------------------------------------------------
-# 9. 暴露服务端口
+# 9. 健康检查（方案书 §7.1：/health 端点）
+#    每 30s 探测一次，超时 5s，连续失败 3 次标记 unhealthy
+# -----------------------------------------------------------------------------
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=30s \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# -----------------------------------------------------------------------------
+# 10. 暴露服务端口
 #    WebSocket 推理通道与 HTTP 健康检查端点均走 8000
 # -----------------------------------------------------------------------------
 EXPOSE 8000
 
 # -----------------------------------------------------------------------------
-# 10. 声明 volume（运行时挂载，绝不打包进镜像）
+# 11. 声明 volume（运行时挂载，绝不打包进镜像）
 #     /workspace/openpi_data:        openpi 数据/缓存（OPENPI_DATA_HOME）
 #     /workspace/project/data:       本项目数据集 / 录制样本
 #     /workspace/openpi/checkpoints: 模型权重（base 权重与微调后权重）
@@ -131,7 +149,7 @@ EXPOSE 8000
 VOLUME ["/workspace/openpi_data", "/workspace/project/data", "/workspace/openpi/checkpoints"]
 
 # -----------------------------------------------------------------------------
-# 11. 启动命令：openpi_service WebSocket 服务
+# 12. 启动命令：openpi_service WebSocket 服务
 #     默认 dummy 模式启动；真实推理时 `docker run -e PI05_SERVICE_MODE=real`
 # -----------------------------------------------------------------------------
 CMD ["/workspace/openpi/.venv/bin/python", "-m", "src.services.openpi_service"]

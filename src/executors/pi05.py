@@ -509,7 +509,14 @@ class Pi05Executor(BaseExecutor):
             if devs:
                 ms = devs[0].memory_stats()
                 if ms:
-                    return int(ms.get("bytes_used", 0) // (1024 * 1024))
+                    # JAX memory_stats 键名因版本可能不同：bytes_used / bytes_in_use / peak_bytes_in_use
+                    bytes_used = (
+                        ms.get("bytes_used")
+                        or ms.get("bytes_in_use")
+                        or ms.get("peak_bytes_in_use")
+                    )
+                    if bytes_used is not None:
+                        return int(bytes_used // (1024 * 1024))
         except Exception:
             pass
         # 退化为 nvidia-smi

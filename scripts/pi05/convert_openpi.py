@@ -259,6 +259,10 @@ def parse_args() -> argparse.Namespace:
         "--image_size", type=int, nargs=2, default=list(DEFAULT_IMAGE_HW),
         help="图像 resize 尺寸（H W），默认 256 256。",
     )
+    parser.add_argument(
+        "--filter_success_only", action="store_true",
+        help="仅转换 result.json 中 success=true 的 episode（方案书 §5.3：标准成功占约 70%）。",
+    )
     return parser.parse_args()
 
 
@@ -375,7 +379,29 @@ def main() -> int:
         if not instruction:
             logger.warning("[%s] meta.json 缺少 instruction，使用空字符串", ep_name)
 
-        # 2. 读取 steps
+        # 2. 可选：按 result.json 过滤失败 episode（方案书 §5.1 / §5.3）
+        if args.filter_success_only:
+            result_path = ep_dir / "result.json"
+            if result_path.exists():
+                try:
+                    with open(result_path, "r", encoding="utf-8") as f:
+                        result = json.load(f)
+                    if not result.get("success", True):
+                        logger.info("[%s] result.json success=false，跳过（--filter_success_only）", ep_name)
+                        stats["skipped_episodes"] += 1
+                        stats["skipped_reasons"]["result_not_success"] = (
+                            stats["skipped_reasons"].get("result_not_success", 0) + 1
+                        )
+                        continue
+                except Exception as e:
+                    logger.warning("[%s] result.json 读取失败：%s，不跳过", ep_name, e)
+            else:
+                logger.warning(
+                    "[%s] --filter_success_only 启用但 result.json 缺失，不跳过（按通过处理）",
+                    ep_name,
+                )
+
+        # 3. 读取 steps
         steps = load_steps(ep_dir)
         if steps is None:
             logger.warning("[%s] steps 读取失败，跳过 episode", ep_name)
@@ -400,7 +426,7 @@ def main() -> int:
         wrist_dir = ep_dir / "wrist_rgb"
         has_wrist_dir = wrist_dir.exists()
 
-        # 3. 逐 step 处理
+        # 4. 逐 step 处理
         added = 0
         for i in range(n_steps):
             action = actions[i]
@@ -472,7 +498,7 @@ def main() -> int:
                 record_skip("add_frame_failed")
                 continue
 
-        # 4. 保存 episode
+        # 5. 保存 episode
         if added > 0:
             try:
                 dataset.save_episode(task=instruction)

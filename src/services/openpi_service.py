@@ -426,14 +426,16 @@ async def ws_infer(ws: WebSocket) -> None:
                 continue
 
             # episode/step 连续性与动作过期检查（方案书 §3.4）
-            step_err = _check_episode_step(data)
-            if step_err is not None:
-                await _send_error(ws, step_err)
-                continue
-
-            # episode 切换时在异步上下文中加锁清空 pending_chunks + 重置执行器
-            ep = data["episode_id"]
+            # ---- 加锁保护 global current_episode_id / last_step_id / pending_chunks ----
+            # §7.1：多 episode 并发安全，所有全局状态读写必须在锁内完成。
             async with _pending_chunks_lock:
+                step_err = _check_episode_step(data)
+                if step_err is not None:
+                    await _send_error(ws, step_err)
+                    continue
+
+                # episode 切换时清空 pending_chunks（方案书 §3.3.1 Para186）
+                ep = data["episode_id"]
                 if ep != _ws_prev_episode_id:
                     pending_chunks.clear()
                     _ws_prev_episode_id = ep
@@ -447,14 +449,13 @@ async def ws_infer(ws: WebSocket) -> None:
                                        ep, age_ms, ttl)
                         pending_chunks.pop(ep, None)
 
-            # episode 切换时重置执行器（方案书 §3.3.1 Para186：清空动作队列与客户端缓存）
-            if ep != current_episode_id:
-                if executor is not None:
-                    try:
-                        executor.reset()
-                        executor.cancel_pending_chunk()
-                    except Exception as e:
-                        logger.warning("执行器 reset/cancel 异常：%s", e)
+                # episode 切换时重置执行器（reset() 内部已调用 cancel_pending_chunk()）
+                if ep != current_episode_id:
+                    if executor is not None:
+                        try:
+                            executor.reset()
+                        except Exception as e:
+                            logger.warning("执行器 reset 异常：%s", e)
 
             # 构造 ObsPacket
             try:
