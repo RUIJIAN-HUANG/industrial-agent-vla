@@ -249,6 +249,11 @@ scratch/
 .DS_Store
 Thumbs.db
 
+# Claude Code
+CLAUDE.md
+AGENTS.md
+.claude/
+
 # Runtime output, caches, and experiment trackers
 artifacts/
 outputs/
