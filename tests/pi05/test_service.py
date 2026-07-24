@@ -35,6 +35,8 @@ import pytest
 # 必须在 import openpi_service 之前设置
 # ---------------------------------------------------------------------------
 os.environ.setdefault("PI05_SERVICE_MODE", "dummy")
+os.environ.setdefault("PI05_CHECKPOINT_SHA", "sha256:0000000000000000000000000000000000000000000000000000000000000000")
+os.environ.setdefault("PI05_NORM_STATS_SHA", "sha256:0000000000000000000000000000000000000000000000000000000000000000")
 
 # 项目根目录加入 sys.path（与被测模块一致，任意目录可运行）
 _PROJECT_ROOT = os.path.dirname(
@@ -62,8 +64,8 @@ MOCK_CHUNK_LEN = 10
 SPACE_ID = "eef_delta_xyz_axisangle_gripper_v1"
 FRAME_ID = "robot_base"
 
-TEST_CHECKPOINT_SHA = "test_ckpt_sha_1234567890ab"
-TEST_NORM_STATS_SHA = "test_norm_sha_abcdef"
+TEST_CHECKPOINT_SHA = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+TEST_NORM_STATS_SHA = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
 
 
 # ---------------------------------------------------------------------------
@@ -201,8 +203,10 @@ def test_client(mock_executor: MagicMock):
     openpi_service.pending_chunks.clear()
     openpi_service.current_episode_id = None
     openpi_service.last_step_id = None
+    openpi_service._cancelled_tasks.clear()
     # 重建 lock：避免绑定到上一个 TestClient 的事件循环（Python 3.10+ _LoopBoundMixin）
     openpi_service._pending_chunks_lock = asyncio.Lock()
+    openpi_service._cancelled_tasks_lock = asyncio.Lock()
 
     # ---- patch Pi05Executor：使 _init_executor() 创建 mock 而非真实执行器 ----
     with patch.object(openpi_service, "Pi05Executor", return_value=mock_executor):
@@ -214,6 +218,7 @@ def test_client(mock_executor: MagicMock):
     openpi_service.pending_chunks.clear()
     openpi_service.current_episode_id = None
     openpi_service.last_step_id = None
+    openpi_service._cancelled_tasks.clear()
 
 
 @pytest.fixture
@@ -244,17 +249,26 @@ def ws_context(test_client: TestClient):
 def test_service_lifecycle(test_client: TestClient, mock_executor: MagicMock):
     """验证 WebSocket 连接建立、就绪、断开的状态流转；executor 正确初始化与释放。
 
-    方案书 §7.1：服务边界与健康检查；openpi_service.ws_infer 连接建立流程。
+    方案书 §6 / §7.1：服务边界与健康检查；openpi_service.ws_infer 连接建立流程。
+    /health 响应对齐 schemas/executor-health.schema.json（7 必填字段）。
     """
-    # ---- 健康检查端点（方案书 §7.1）----
+    # ---- 健康检查端点（schemas/executor-health.schema.json）----
     resp = test_client.get("/health")
     assert resp.status_code == 200
     body = resp.json()
-    assert body["status"] == "ok", "executor 就绪时 health 应返回 ok"
-    assert body["mode"] == "dummy"
+    # 7 必填字段
+    assert body["schema_version"] == "1.0"
+    assert body["service"] == "pi05"
+    assert body["status"] in ("ready", "loading", "degraded"), "health.status 必须为 ready/loading/degraded"
+    assert body["status"] == "ready", "executor 就绪时 health 应返回 ready"
     assert body["checkpoint_sha"] == TEST_CHECKPOINT_SHA
     assert body["norm_stats_sha"] == TEST_NORM_STATS_SHA
-    assert "uptime_seconds" in body
+    assert "pick_place" in body["supported_task_types"]
+    assert "visual_manipulation" in body["supported_task_types"]
+    assert "instruction_interaction" in body["supported_task_types"]
+    assert "1.0" in body["supported_action_contracts"]
+    # 可选字段 uptime_ms（非负整数）
+    assert "uptime_ms" in body and body["uptime_ms"] >= 0
 
     # ---- executor 已初始化（startup → _init_executor → mock）----
     assert openpi_service.executor is not None
@@ -272,9 +286,9 @@ def test_service_lifecycle(test_client: TestClient, mock_executor: MagicMock):
         assert metadata["expires_after_ms"] == DEFAULT_EXPIRES_AFTER_MS
         assert "norm_stats_sha" in metadata
         # 连接正常断开（with 退出触发 WebSocketDisconnect，服务端 finally 清理）
-    # 断开后服务端不崩溃：再次健康检查仍 ok
+    # 断开后服务端不崩溃：再次健康检查仍 ready
     resp2 = test_client.get("/health")
-    assert resp2.json()["status"] == "ok"
+    assert resp2.json()["status"] == "ready"
 
 
 # ---------------------------------------------------------------------------

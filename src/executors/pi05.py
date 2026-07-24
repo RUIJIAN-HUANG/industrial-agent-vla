@@ -118,6 +118,25 @@ except Exception:  # pi05_client 不可用时降级 Mock
 
 
 # ---------------------------------------------------------------------------
+# 冻结契约叠加层 imports（体系B 对齐）
+# 方案书 interface-contracts.md §4 公共标识、§7.4/§7.5 统一 7 维动作合同。
+# ExecutorDescriptor / is_pinned_artifact_digest 定义在 src.industrial_agent.executor
+# （非 contracts.py），ACTION_CONTRACT_VERSION / ActionChunk / ActionStep 在 contracts。
+# ---------------------------------------------------------------------------
+import uuid
+
+from src.industrial_agent.contracts import (  # type: ignore
+    ACTION_CONTRACT_VERSION,
+    ActionChunk,
+    ActionStep,
+)
+from src.industrial_agent.executor import (  # type: ignore
+    ExecutorDescriptor,
+    is_pinned_artifact_digest,
+)
+
+
+# ---------------------------------------------------------------------------
 # 安全限幅常量（方案书 Table 69 Row7 / 附录B；D5 实测前用候选值）
 # ---------------------------------------------------------------------------
 MAX_TRANSLATION_M = 0.02      # 单步平移 ≤ 2cm
@@ -543,6 +562,74 @@ class Pi05Executor(BaseExecutor):
             "openpi_available": OPENPI_AVAILABLE,
             "ws_available": WS_CLIENT_AVAILABLE,
         }
+
+    # ===================== 冻结契约叠加层（体系B 对齐）=====================
+    # 以下两个成员为"叠加层"：让现有体系A 的 Pi05Executor 满足体系B 的
+    # Executor Protocol（src/industrial_agent/executor.py），不改动任何现有方法。
+    # 方案书 interface-contracts.md §4 公共标识、§7.4/§7.5 统一 7 维动作合同。
+    @property
+    def descriptor(self) -> "ExecutorDescriptor":
+        """返回体系B ExecutorDescriptor（冻结契约对齐）。
+
+        - name="pi05"；task_types 覆盖 pick_place / visual_manipulation /
+          instruction_interaction；action_contract_version="1.0"。
+        - checkpoint_sha / norm_stats_sha 从环境变量 PI05_CHECKPOINT_SHA /
+          PI05_NORM_STATS_SHA 读取，必须为完整 sha256:<64hex>。
+        - ★禁止使用 self._checkpoint_sha（hexdigest()[:16] 截断值，不符合契约）。
+        """
+        checkpoint_sha = os.environ.get("PI05_CHECKPOINT_SHA", "")
+        norm_stats_sha = os.environ.get("PI05_NORM_STATS_SHA", "")
+        if not is_pinned_artifact_digest(checkpoint_sha) or not is_pinned_artifact_digest(
+            norm_stats_sha
+        ):
+            raise ValueError(
+                "必须设置 PI05_CHECKPOINT_SHA / PI05_NORM_STATS_SHA 环境变量为 "
+                "sha256:<64hex> 格式"
+            )
+        return ExecutorDescriptor(
+            name="pi05",
+            task_types=frozenset(
+                {"pick_place", "visual_manipulation", "instruction_interaction"}
+            ),
+            action_contract_version=ACTION_CONTRACT_VERSION,
+            checkpoint_sha=checkpoint_sha,
+            norm_stats_sha=norm_stats_sha,
+        )
+
+    def to_action_chunk(
+        self,
+        canonical: "CanonicalActionChunk",
+        task_id: str,
+        executor_name: str,
+    ) -> "ActionChunk":
+        """把体系A CanonicalActionChunk 包装成体系B ActionChunk（冻结契约对齐）。
+
+        - canonical.actions[:, :7] 逐行转 tuple(float, ...)，每步恰好 7 维；
+        - ActionStep.duration_ms 默认 100（CanonicalActionChunk 无此字段）；
+        - action_space 固定 "ee_delta_pose_gripper"，不用 canonical.space_id；
+        - 构造完调 validate_contract() 自校验。
+        """
+        actions = np.asarray(canonical.actions, dtype=np.float32)
+        # duration_ms 是传输元数据（非第 8 维模型输出），schema 要求 int∈[1,10000]；
+        # 这里用固定 100ms 作为默认控制周期，与 HTTP 路径动态推导无冲突（两者都满足契约下限）。
+        steps = tuple(
+            ActionStep.from_sequence(row[:7].tolist(), duration_ms=100)
+            for row in actions
+        )
+        chunk = ActionChunk(
+            contract_version=ACTION_CONTRACT_VERSION,
+            chunk_id=str(uuid.uuid4()),
+            task_id=task_id,
+            executor=executor_name,
+            steps=steps,
+            action_space="ee_delta_pose_gripper",
+            frame="robot_base",
+            translation_unit="m",
+            rotation_unit="rad",
+            gripper_unit="normalized",
+        )
+        chunk.validate_contract()
+        return chunk
 
 
 # ---------------------------------------------------------------------------
