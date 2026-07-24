@@ -6,6 +6,7 @@ the supervisor, simulator, test tools, and executor service clients.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from math import isfinite
@@ -16,6 +17,7 @@ from .errors import ContractError, FailureCode
 TASK_SCHEMA_VERSION = "1.0"
 OBSERVATION_VERSION = "1.0"
 ACTION_CONTRACT_VERSION = "1.0"
+TASK_SCHEMA_VERSION_PATTERN = re.compile(r"^1\.[0-9]+$")
 
 SUPPORTED_TASK_TYPES = frozenset(
     {
@@ -64,13 +66,25 @@ class Postcondition:
             raise ContractError(
                 FailureCode.INVALID_TASK, f"unsupported postcondition kind: {self.kind}"
             )
-        if self.required_votes < 1 or self.required_votes > 9:
+        if (
+            isinstance(self.required_votes, bool)
+            or not isinstance(self.required_votes, int)
+            or self.required_votes < 1
+            or self.required_votes > 9
+        ):
             raise ContractError(
-                FailureCode.INVALID_TASK, "required_votes must be in [1, 9]"
+                FailureCode.INVALID_TASK,
+                "required_votes must be an integer in [1, 9]",
             )
-        if not 0.0 <= self.min_confidence <= 1.0:
+        if (
+            isinstance(self.min_confidence, bool)
+            or not isinstance(self.min_confidence, (int, float))
+            or not isfinite(float(self.min_confidence))
+            or not 0.0 <= self.min_confidence <= 1.0
+        ):
             raise ContractError(
-                FailureCode.INVALID_TASK, "min_confidence must be in [0, 1]"
+                FailureCode.INVALID_TASK,
+                "min_confidence must be a finite number in [0, 1]",
             )
         if self.kind in {"field_equals", "numeric_range"} and not self.path:
             raise ContractError(FailureCode.INVALID_TASK, f"{self.kind} requires path")
@@ -80,6 +94,19 @@ class Postcondition:
                     FailureCode.INVALID_TASK,
                     "numeric_range requires minimum and/or maximum",
                 )
+            for name, value in (
+                ("minimum", self.minimum),
+                ("maximum", self.maximum),
+            ):
+                if value is not None and (
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not isfinite(float(value))
+                ):
+                    raise ContractError(
+                        FailureCode.INVALID_TASK,
+                        f"numeric_range {name} must be a finite number",
+                    )
             if (
                 self.minimum is not None
                 and self.maximum is not None
@@ -107,8 +134,8 @@ class Postcondition:
             maximum=value.get("maximum"),
             object_id=value.get("object_id"),
             zone_id=value.get("zone_id"),
-            min_confidence=float(value.get("min_confidence", 0.60)),
-            required_votes=int(value.get("required_votes", 2)),
+            min_confidence=value.get("min_confidence", 0.60),
+            required_votes=value.get("required_votes", 2),
         )
         condition.validate()
         return condition
@@ -147,7 +174,10 @@ class TaskSchema:
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def validate(self) -> None:
-        if _major(self.schema_version) != _major(TASK_SCHEMA_VERSION):
+        if (
+            not isinstance(self.schema_version, str)
+            or TASK_SCHEMA_VERSION_PATTERN.fullmatch(self.schema_version) is None
+        ):
             raise ContractError(
                 FailureCode.UNSUPPORTED_TASK_VERSION,
                 f"task schema {self.schema_version!r} is incompatible with {TASK_SCHEMA_VERSION!r}",
@@ -165,6 +195,11 @@ class TaskSchema:
             raise ContractError(
                 FailureCode.INVALID_TASK,
                 f"unsupported task_type: {self.task_type}",
+            )
+        if self.preferred_executor not in {None, "openvla_oft", "pi05"}:
+            raise ContractError(
+                FailureCode.INVALID_TASK,
+                f"unsupported preferred_executor: {self.preferred_executor}",
             )
         if not self.postconditions:
             raise ContractError(

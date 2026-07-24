@@ -378,6 +378,24 @@ class ExecutorAdapterTests(unittest.TestCase):
                 lambda name, base_url: EchoTransport(service=name),
             )
 
+    def test_executor_factory_builds_only_explicitly_enabled_services(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        config = json.loads(
+            (root / "configs" / "agent.default.json").read_text(encoding="utf-8")
+        )
+        config["executors"]["openvla_oft"]["checkpoint_sha"] = CHECKPOINT_SHA
+        config["executors"]["openvla_oft"]["norm_stats_sha"] = NORM_STATS_SHA
+        config["executors"]["pi05"]["enabled"] = False
+        calls: list[tuple[str, str]] = []
+
+        def factory(name: str, base_url: str) -> EchoTransport:
+            calls.append((name, base_url))
+            return EchoTransport(service=name)
+
+        executors = build_executors_from_config(config, factory)
+        self.assertEqual([item.descriptor.name for item in executors], ["openvla_oft"])
+        self.assertEqual(calls, [("openvla_oft", "http://127.0.0.1:8101")])
+
     def test_adapters_and_factory_reject_mutable_artifact_aliases(self) -> None:
         with self.assertRaisesRegex(ValueError, "64 hexadecimal"):
             OpenVLAOFTAdapter(

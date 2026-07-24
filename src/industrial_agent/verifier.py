@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from math import isfinite
 from typing import Any, Mapping, Sequence
 
 from .contracts import Observation, Postcondition, TaskSchema
@@ -50,11 +51,17 @@ def _frame_verdict(
     condition: Postcondition, observation: Observation
 ) -> tuple[Verdict, str]:
     quality = observation.data.get("quality", {})
-    if isinstance(quality, Mapping):
-        confidence = quality.get("confidence", 1.0)
-        if isinstance(confidence, (int, float)) and not isinstance(confidence, bool):
-            if float(confidence) < condition.min_confidence:
-                return Verdict.UNCERTAIN, "frame confidence below threshold"
+    if not isinstance(quality, Mapping):
+        return Verdict.UNCERTAIN, "frame quality is not an object"
+    confidence = quality.get("confidence", 1.0)
+    if (
+        isinstance(confidence, bool)
+        or not isinstance(confidence, (int, float))
+        or not isfinite(float(confidence))
+    ):
+        return Verdict.UNCERTAIN, "frame confidence is not a finite number"
+    if float(confidence) < condition.min_confidence:
+        return Verdict.UNCERTAIN, "frame confidence below threshold"
     if condition.kind == "field_equals":
         value = _resolve_path(observation.data, condition.path)
         if value is _MISSING:
@@ -66,8 +73,15 @@ def _frame_verdict(
         )
     if condition.kind == "numeric_range":
         value = _resolve_path(observation.data, condition.path)
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            return Verdict.UNCERTAIN, f"path {condition.path!r} is not numeric"
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not isfinite(float(value))
+        ):
+            return (
+                Verdict.UNCERTAIN,
+                f"path {condition.path!r} is not a finite numeric value",
+            )
         if condition.minimum is not None and value < condition.minimum:
             return Verdict.FAIL, f"{value} is below {condition.minimum}"
         if condition.maximum is not None and value > condition.maximum:
@@ -87,9 +101,13 @@ def _frame_verdict(
     if (
         not isinstance(detection_confidence, (int, float))
         or isinstance(detection_confidence, bool)
+        or not isfinite(float(detection_confidence))
         or float(detection_confidence) < condition.min_confidence
     ):
-        return Verdict.UNCERTAIN, "object detection confidence below threshold"
+        return (
+            Verdict.UNCERTAIN,
+            "object detection confidence is invalid or below threshold",
+        )
     if condition.kind == "object_detected":
         return Verdict.PASS, "object detected"
     observed_zone = matched.get("zone_id")
@@ -127,12 +145,24 @@ class PostconditionVerifier:
             pass_votes = sum(item[0] is Verdict.PASS for item in votes)
             fail_votes = sum(item[0] is Verdict.FAIL for item in votes)
             uncertain_votes = len(votes) - pass_votes - fail_votes
-            if pass_votes >= condition.required_votes:
+            conflicting_quorum = (
+                pass_votes >= condition.required_votes
+                and fail_votes >= condition.required_votes
+            )
+            if conflicting_quorum:
+                # Sufficient contradictory evidence must never assert task
+                # completion. FAIL is deliberately stricter than UNCERTAIN so
+                # the supervisor enters its bounded recovery path.
+                verdict = Verdict.FAIL
+            elif pass_votes >= condition.required_votes:
                 verdict = Verdict.PASS
             elif fail_votes >= condition.required_votes:
                 verdict = Verdict.FAIL
             else:
                 verdict = Verdict.UNCERTAIN
+            detail = "; ".join(detail for _, detail in votes)
+            if conflicting_quorum:
+                detail = f"conflicting pass/fail quorums; fail-closed; {detail}"
             results.append(
                 ConditionResult(
                     kind=condition.kind,
@@ -141,7 +171,7 @@ class PostconditionVerifier:
                     fail_votes=fail_votes,
                     uncertain_votes=uncertain_votes,
                     required_votes=condition.required_votes,
-                    detail="; ".join(detail for _, detail in votes),
+                    detail=detail,
                 )
             )
         if all(item.verdict is Verdict.PASS for item in results):

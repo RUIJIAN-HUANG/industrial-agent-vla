@@ -225,15 +225,24 @@ sequenceDiagram
 `ObservationGateway` 会递归扫描所有键，大小写归一化后拒绝：
 
 `gt`、`ground_truth`、`groundtruth`、`label(s)`、`annotation(s)`、
-`oracle`、`privileged_state` 及其复合键（如 `sim_gt_mask`、
-`ground_truth_pose`），并拒绝 `target_pose`、`grasp_point`、`waypoint`
-等越权低层目标几何。
+`oracle`、`truth`、`privileged_state` 及其 snake_case、camelCase、PascalCase、
+连字符或空格复合变体（如 `sim_gt_mask`、`groundTruthPose`），并拒绝
+`target_pose`、`targetX`、`targetMatrix`、`desiredPose`、`actualPose`、
+`grasp_point`、`waypoint` 等越权低层目标几何。进入 target/desired/goal/
+grasp/actual 等引用容器后，其中任何数值标量、向量或矩阵都会被拒绝，避免用
+`value`、`data` 等无语义字段藏入目标坐标；常见复数和数字后缀
+（`targetsPose`、`target1Pose`、`waypoints2`）同样处理。字符串对象 ID/状态
+不受影响。该 fail-closed 边界也会拒绝引用容器中的 `target_count` 等高层
+数值；此类数据必须改放到双方冻结且不处于引用上下文的传感字段。
 
 发现 GT 字段时整个在线帧以 `OBS_1102_GT_FORBIDDEN` 拒绝；不会静默删除后
-继续决策。离线评测、标注和指标计算必须在 F 的独立进程/目录完成，禁止把
-GT 合并进在线 Observation。`robot` 和 `safety` 是必需字段，三项安全状态
-缺失或类型错误均 fail-closed。每个 run 内 `observation_id` 必须唯一，时间戳
-不得倒退。`mock.py` 的完成规则是仿真内部状态，Agent 只看到模拟传感器结果。
+继续决策。首次动作前拒帧可直接失败且不得产生运动；一旦本次 run 已执行过
+任一动作，后续控制、前置检查、循环或核验阶段遇到非法/含 GT 帧，必须调用
+`safe_stop()` 并进入 `SAFE_STOPPED`，禁止重试或切换执行器。离线评测、标注
+和指标计算必须在 F 的独立进程/目录完成，禁止把 GT 合并进在线 Observation。
+`robot` 和 `safety` 是必需字段，三项安全状态缺失或类型错误均 fail-closed。
+每个 run 内 `observation_id` 必须唯一，时间戳不得倒退。`mock.py` 的完成规则
+是仿真内部状态，Agent 只看到模拟传感器结果。
 
 ## 9. 统一 7 维物理动作合同
 
@@ -282,11 +291,14 @@ GT 合并进在线 Observation。`robot` 和 `safety` 是必需字段，三项�
 | `object_detected` | `object_id` | 目标被高置信检测 |
 | `object_in_zone` | `object_id`, `zone_id` | 目标在语义区域内 |
 
-每帧先检查 `quality.confidence >= min_confidence`。字段缺失、类型错误或低
-置信度计为 `UNCERTAIN`，不是成功。默认收集 3 帧、每个条件需要 2 票：
+每帧先检查 `quality.confidence >= min_confidence`。字段缺失、类型错误、低
+置信度（含帧质量与目标检测置信度）或 `numeric_range` 输入为
+布尔/NaN/Inf 等非有限数时计为 `UNCERTAIN`，不是成功。默认收集 3 帧、
+每个条件需要 2 票：
 
-- PASS 票达到 `required_votes`：该条件 PASS；
-- FAIL 票达到 `required_votes`：该条件 FAIL；
+- PASS 票达到 `required_votes` 且 FAIL 票未达阈值：该条件 PASS；
+- FAIL 票达到 `required_votes`：该条件 FAIL；PASS/FAIL 同时达到阈值时也
+  按 FAIL 处理；
 - 其余：UNCERTAIN；
 - 所有条件 PASS 才能推进子任务。
 - 帧 ID 必须互不相同且时间不得倒退；重复同一帧不能重复投票。
@@ -365,6 +377,10 @@ python -m unittest discover -s tests -v
 执行器名称、动作合同、checkpoint SHA 与 norm stats SHA。其机器约束见
 `schemas/agent-config.schema.json`。代码会拒绝未固定摘要、执行器身份漂移、打开
 回切、增加切换次数或关闭恢复清队列等破坏冻结不变量的配置。
+
+配置中的 `enabled` 是单/双执行器拓扑的唯一开关：所有启用项必须被工厂构建并
+传入 Agent，集合缺失、多传或全部禁用都会在启动阶段失败。G4 若降级为单主模型，
+必须显式关闭另一项并保存该配置作为实验依据。
 
 Mock 的预期结果：
 

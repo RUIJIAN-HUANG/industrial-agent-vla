@@ -701,6 +701,11 @@ def build_executors_from_config(
         raw = raw_executors.get(name)
         if not isinstance(raw, Mapping):
             raise ValueError(f"config.executors.{name} must be an object")
+        enabled = raw.get("enabled")
+        if not isinstance(enabled, bool):
+            raise ValueError(f"config.executors.{name}.enabled must be a boolean")
+        if not enabled:
+            continue
 
         base_url = raw.get("base_url")
         if not isinstance(base_url, str) or not base_url.startswith(
@@ -726,6 +731,8 @@ def build_executors_from_config(
                 norm_stats_sha=artifact_values["norm_stats_sha"],
             )
         )
+    if not built:
+        raise ValueError("at least one executor must be explicitly enabled")
     return tuple(built)
 
 

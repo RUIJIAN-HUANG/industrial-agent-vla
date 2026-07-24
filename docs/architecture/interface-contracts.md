@@ -664,11 +664,18 @@ B 必须在每帧提供：
 ### GT 隔离
 
 B/C 可以在仿真内部保留 GT，用于 F 离线评测，但发给 Agent 的在线响应禁止
-出现以下任意层级键或复合变体：`gt`、`*_gt_*`、`ground_truth*`、
-`label(s)`、`annotation(s)`、`oracle*`、`privileged_state`；也禁止
-`target_pose`、`grasp_point`、`waypoint` 等越权目标几何。Agent 会以
-`OBS_1102_GT_FORBIDDEN` 拒绝整个帧。`robot`、完整 `safety`、
-run 内唯一 `observation_id` 和不倒退时间戳均为强制项。
+出现以下任意层级键或 snake_case/camelCase/PascalCase/连字符/空格复合变体：
+`gt`、`*_gt_*`、`ground_truth*`、`truth*`、`label(s)`、`annotation(s)`、`oracle*`、
+`privileged_state`；也禁止 `target_pose`、`desiredPose`、`actualPose`、
+`grasp_point`、`targetX`、`targetMatrix`、`waypoint` 等越权目标几何。
+target/desired/goal/grasp/actual 等引用容器内的任意数值标量、向量或矩阵也
+一律禁止，不能用 `value`/`data` 等无语义键绕过。Agent 会以
+`OBS_1102_GT_FORBIDDEN` 拒绝整个帧。常见复数和数字后缀同样归一化处理；
+该 fail-closed 策略也会拒绝引用容器内的计数等高层数值，需将其迁移到双方
+冻结、且不处于引用上下文的传感字段。
+首次动作前拒帧不得产生运动；一旦 run 已执行过动作，后续任意阶段拒帧必须
+调用 `safe_stop()` 并进入 `SAFE_STOPPED`，不得重试或切换执行器。`robot`、
+完整 `safety`、run 内唯一 `observation_id` 和不倒退时间戳均为强制项。
 
 ## 11. 幂等、重试、超时与截止时间
 
@@ -795,6 +802,8 @@ AND executor name exact match
 `base_url` 并构建对应 transport；`IndustrialAgent.from_config(...)` 随后对实际
 descriptor 的 executor name、动作合同、checkpoint SHA 和 norm stats SHA 做精确
 启动校验。禁止在 transport 内静默改写配置 URL，也禁止用服务响应覆盖期望摘要。
+只有 `enabled: true` 的服务会被构建；传入 Agent 的执行器名称集合必须与所有
+启用项完全一致并至少包含一项。
 
 ### 14.3 变更流程
 
@@ -901,7 +910,10 @@ Agent 事件 Schema 见 `schemas/event.schema.json`。跨服务排障以 `trace_
 | 动作轴超限但工作空间内 | 限幅并记录 |
 | 限幅后仍越工作空间 | ACT_1203，整块不执行 |
 | observation 含嵌套 ground_truth | OBS_1102 |
+| observation 含 groundTruth/targetPose/targetX/target.value 变体 | OBS_1102 |
 | 3 帧中 2 PASS | PASS |
+| PASS 与 FAIL 同时达到投票阈值 | FAIL（fail-closed） |
+| 帧/目标置信度或 numeric_range 值为布尔/NaN/Inf | UNCERTAIN，不得 PASS |
 | 仅 1 PASS，其余低置信 | UNCERTAIN |
 | cancel 先于响应 | 旧 chunk 丢弃 |
 | 2-step chunk，第 1 步改变场景 | 第 2 步前必须用新 observation_id 再 infer |
@@ -910,4 +922,5 @@ Agent 事件 Schema 见 `schemas/event.schema.json`。跨服务排障以 `trace_
 | 已满足 repeat-until 条件 | 零动作完成并推进 |
 | 队列满 | 429 + retry_after_ms |
 | 动作后系统故障 | 立即 SAFE_STOPPED，不核验 |
+| 动作后控制/循环/核验 observation 非法或含 GT | safe_stop + SAFE_STOPPED |
 | 子任务 2 首次失败 | 只重试子任务 2，子任务 1 不重跑 |

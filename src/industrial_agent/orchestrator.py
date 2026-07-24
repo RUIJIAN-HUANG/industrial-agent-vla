@@ -186,6 +186,23 @@ class IndustrialAgent:
         raw_executors = config.get("executors")
         if not isinstance(raw_executors, Mapping):
             raise ValueError("executors config must be an object")
+        required_executor_names = {"openvla_oft", "pi05"}
+        if set(raw_executors) != required_executor_names:
+            raise ValueError(
+                "config.executors must declare exactly "
+                f"{sorted(required_executor_names)}"
+            )
+        enabled_names: set[str] = set()
+        for name, raw in raw_executors.items():
+            if not isinstance(raw, Mapping):
+                raise ValueError(f"config.executors.{name} must be an object")
+            enabled = raw.get("enabled")
+            if not isinstance(enabled, bool):
+                raise ValueError(f"config.executors.{name}.enabled must be a boolean")
+            if enabled:
+                enabled_names.add(name)
+        if not enabled_names:
+            raise ValueError("at least one executor must be explicitly enabled")
         provided_names: set[str] = set()
         for executor in executors:
             descriptor = executor.descriptor
@@ -223,6 +240,13 @@ class IndustrialAgent:
                         f"executor {name!r} {field} mismatch: "
                         f"expected {expected_value!r}, got {actual_value!r}"
                     )
+        if provided_names != enabled_names:
+            missing = sorted(enabled_names - provided_names)
+            unexpected = sorted(provided_names - enabled_names)
+            raise ValueError(
+                "enabled executor set mismatch: "
+                f"missing={missing}, unexpected={unexpected}"
+            )
 
         return cls(
             executors,
@@ -476,13 +500,31 @@ class IndustrialAgent:
         subtask_iterations = 0
         decisions_in_strategy_attempt = 0
         last_observation: Observation | None = None
+        action_has_executed = False
+
+        def reject_observation(
+            exc: AgentError,
+            phase: str,
+        ) -> RunResult:
+            if action_has_executed and exc.code in {
+                FailureCode.OBSERVATION_INVALID,
+                FailureCode.OBSERVATION_GT_FORBIDDEN,
+            }:
+                return self._safe_stop(
+                    environment,
+                    exc.code,
+                    f"unsafe online observation {phase} after action: {exc}",
+                    verification,
+                    event_start,
+                )
+            return self._fail(exc.code, str(exc), verification, event_start)
 
         while True:
             try:
                 last_observation = self.gateway.ingest_online(environment.observe())
             except AgentError as exc:
                 subtask.status = SubtaskStatus.FAILED
-                return self._fail(exc.code, str(exc), verification, event_start)
+                return reject_observation(exc, "during control loop")
             except Exception as exc:
                 subtask.status = SubtaskStatus.FAILED
                 return self._safe_stop(
@@ -516,7 +558,7 @@ class IndustrialAgent:
                         precondition_frames.append(frame)
                 except AgentError as exc:
                     subtask.status = SubtaskStatus.FAILED
-                    return self._fail(exc.code, str(exc), verification, event_start)
+                    return reject_observation(exc, "during precondition check")
                 except Exception as exc:
                     subtask.status = SubtaskStatus.FAILED
                     return self._safe_stop(
@@ -571,7 +613,7 @@ class IndustrialAgent:
                         precheck_frames.append(frame)
                 except AgentError as exc:
                     subtask.status = SubtaskStatus.FAILED
-                    return self._fail(exc.code, str(exc), verification, event_start)
+                    return reject_observation(exc, "during repeat precheck")
                 except Exception as exc:
                     subtask.status = SubtaskStatus.FAILED
                     return self._safe_stop(
@@ -763,9 +805,9 @@ class IndustrialAgent:
             try:
                 while self._queue:
                     action = self._queue.popleft()
-                    last_observation = self.gateway.ingest_online(
-                        environment.step(action)
-                    )
+                    raw_observation = environment.step(action)
+                    action_has_executed = True
+                    last_observation = self.gateway.ingest_online(raw_observation)
                     self._memory.last_observation_id = last_observation.observation_id
                     stopped = self._check_system_fault(
                         last_observation, environment, verification, event_start
@@ -830,7 +872,7 @@ class IndustrialAgent:
                     frames.append(frame)
             except AgentError as exc:
                 subtask.status = SubtaskStatus.FAILED
-                return self._fail(exc.code, str(exc), verification, event_start)
+                return reject_observation(exc, "during verification")
             except Exception as exc:
                 subtask.status = SubtaskStatus.FAILED
                 return self._safe_stop(

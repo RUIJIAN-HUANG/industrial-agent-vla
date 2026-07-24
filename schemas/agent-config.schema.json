@@ -167,11 +167,15 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "enabled",
         "base_url",
         "checkpoint_sha",
         "norm_stats_sha"
       ],
       "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
         "base_url": {
           "type": "string",
           "pattern": "^https?://"

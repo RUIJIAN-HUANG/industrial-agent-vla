@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from copy import deepcopy
 from typing import Any, Mapping
 
@@ -22,30 +23,107 @@ ONLINE_TOP_LEVEL_ALLOWLIST = frozenset(
     }
 )
 
-# Compared case-insensitively and after replacing '-' with '_'.
 GT_TOKENS = frozenset(
     {
         "gt",
-        "ground_truth",
         "groundtruth",
         "label",
         "labels",
         "annotation",
         "annotations",
         "oracle",
+        "privileged",
         "privileged_state",
+        "truth",
+    }
+)
+
+PRIVILEGED_REFERENCE_TOKENS = frozenset(
+    {
+        "actual",
+        "actuals",
+        "desired",
+        "desireds",
+        "destination",
+        "destinations",
+        "goal",
+        "goals",
+        "grasp",
+        "grasps",
+        "object",
+        "real",
+        "reals",
+        "reference",
+        "references",
+        "target",
+        "targets",
+        "true",
+        "waypoint",
+        "waypoints",
     }
 )
 
 PRIVILEGED_GEOMETRY_TOKENS = frozenset(
     {
-        "target_coordinate",
-        "target_coordinates",
-        "target_pose",
-        "target_position",
-        "grasp_point",
-        "grasp_pose",
+        "coord",
+        "coordinate",
+        "coordinates",
+        "coords",
+        "euler",
+        "eulers",
+        "matrix",
+        "matrices",
+        "orientation",
+        "orientations",
+        "location",
+        "locations",
+        "point",
+        "points",
+        "pos",
+        "pose",
+        "poses",
+        "position",
+        "positions",
+        "quat",
+        "quaternion",
+        "quaternions",
+        "rotation",
+        "rotations",
+        "rpy",
+        "se3",
+        "tf",
+        "transform",
+        "transforms",
+        "translation",
+        "translations",
+        "xyz",
+        "xyzw",
+    }
+)
+
+PRIVILEGED_AXIS_TOKENS = frozenset(
+    {
+        "pitch",
+        "qw",
+        "qx",
+        "qy",
+        "qz",
+        "rx",
+        "ry",
+        "rz",
+        "roll",
+        "theta",
+        "x",
+        "y",
+        "yaw",
+        "z",
+    }
+)
+
+ALWAYS_PRIVILEGED_TOKENS = frozenset(
+    {
         "trajectory",
+        "trajectories",
         "waypoint",
         "waypoints",
     }
@@ -62,33 +140,93 @@ REQUIRED_TOP_LEVEL_FIELDS = frozenset(
 )
 
 
-def _scan_for_gt(value: Any, path: str = "$") -> str | None:
+def _normalized_key_tokens(key: object) -> tuple[str, ...]:
+    """Normalize common field-name styles into lower-case semantic tokens."""
+
+    raw = str(key).strip()
+    raw = re.sub(r"(?<=[A-Z])(?=[A-Z][a-z])", " ", raw)
+    raw = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", raw)
+    raw = re.sub(r"[\W_]+", " ", raw, flags=re.UNICODE)
+    tokens: list[str] = []
+    for part in raw.split():
+        normalized = re.sub(r"\d+$", "", part.casefold())
+        if normalized:
+            tokens.append(normalized)
+    return tuple(tokens)
+
+
+def _contains_gt_marker(tokens: tuple[str, ...]) -> bool:
+    token_set = frozenset(tokens)
+    compact = "".join(tokens)
+    has_ground_truth_pair = any(
+        first == "ground" and second == "truth"
+        for first, second in zip(tokens, tokens[1:])
+    )
+    return (
+        bool(token_set.intersection(GT_TOKENS))
+        or has_ground_truth_pair
+        or "groundtruth" in compact
+    )
+
+
+def _contains_numeric_payload(value: Any) -> bool:
+    """Detect scalars, vectors, or matrices that can encode privileged geometry."""
+
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, (int, float)):
+        return True
+    if isinstance(value, Mapping):
+        return any(_contains_numeric_payload(child) for child in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_contains_numeric_payload(child) for child in value)
+    return False
+
+
+def _scan_for_gt(
+    value: Any,
+    path: str = "$",
+    *,
+    privileged_reference_context: bool = False,
+) -> str | None:
     if isinstance(value, Mapping):
         for key, child in value.items():
-            normalized = str(key).lower().replace("-", "_")
-            parts = frozenset(part for part in normalized.split("_") if part)
+            child_path = f"{path}.{key}"
+            tokens = _normalized_key_tokens(key)
+            token_set = frozenset(tokens)
+            has_reference = bool(token_set.intersection(PRIVILEGED_REFERENCE_TOKENS))
+            has_geometry = bool(token_set.intersection(PRIVILEGED_GEOMETRY_TOKENS))
+            has_axis = bool(token_set.intersection(PRIVILEGED_AXIS_TOKENS))
+
+            if _contains_gt_marker(tokens):
+                return child_path
+            if token_set.intersection(ALWAYS_PRIVILEGED_TOKENS):
+                return child_path
+            if has_reference and (has_geometry or has_axis):
+                return child_path
+            if privileged_reference_context and (has_geometry or has_axis):
+                return child_path
             if (
-                normalized in GT_TOKENS
-                or "ground_truth" in normalized
-                or "groundtruth" in normalized
-                or normalized == "gt"
-                or normalized.startswith("gt_")
-                or normalized.endswith("_gt")
-                or "_gt_" in normalized
-                or bool(
-                    parts.intersection(
-                        {"label", "labels", "annotation", "annotations", "oracle"}
-                    )
-                )
-                or normalized in PRIVILEGED_GEOMETRY_TOKENS
-            ):
-                return f"{path}.{key}"
-            found = _scan_for_gt(child, f"{path}.{key}")
+                has_reference or privileged_reference_context
+            ) and _contains_numeric_payload(child):
+                return child_path
+
+            found = _scan_for_gt(
+                child,
+                child_path,
+                privileged_reference_context=(
+                    privileged_reference_context or has_reference
+                ),
+            )
             if found:
                 return found
     elif isinstance(value, (list, tuple)):
         for index, child in enumerate(value):
-            found = _scan_for_gt(child, f"{path}[{index}]")
+            found = _scan_for_gt(
+                child,
+                f"{path}[{index}]",
+                privileged_reference_context=privileged_reference_context,
+            )
             if found:
                 return found
     return None

@@ -10,6 +10,7 @@
     "status",
     "checkpoint_sha",
     "norm_stats_sha",
+    "supported_task_types",
     "supported_action_contracts"
   ],
   "properties": {

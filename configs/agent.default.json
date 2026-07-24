@@ -18,11 +18,13 @@
   },
   "executors": {
     "openvla_oft": {
+      "enabled": true,
       "base_url": "http://127.0.0.1:8101",
       "checkpoint_sha": "REPLACE_WITH_PINNED_SHA",
       "norm_stats_sha": "REPLACE_WITH_PINNED_SHA"
     },
     "pi05": {
+      "enabled": true,
       "base_url": "http://127.0.0.1:8102",
       "checkpoint_sha": "REPLACE_WITH_PINNED_SHA",
       "norm_stats_sha": "REPLACE_WITH_PINNED_SHA"

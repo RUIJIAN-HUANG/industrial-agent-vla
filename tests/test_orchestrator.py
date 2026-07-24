@@ -100,6 +100,37 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(result.switch_count, 0)
         self.assertTrue(simulator.safe_stop_called)
 
+    def test_gt_leak_in_verification_frame_safe_stops(self) -> None:
+        class VerificationLeakySimulator(MockSimulator):
+            def __init__(self) -> None:
+                super().__init__("success")
+                self.action_executed = False
+
+            def step(self, action: ActionStep) -> dict[str, object]:
+                observation = super().step(action)
+                self.action_executed = True
+                return observation
+
+            def observe(self) -> dict[str, object]:
+                observation = super().observe()
+                if self.action_executed:
+                    observation["task"] = {
+                        "status": "done",
+                        "groundTruthPose": [0, 0, 0],
+                    }
+                return observation
+
+        agent, openvla, pi05 = self.make_agent()
+        simulator = VerificationLeakySimulator()
+        result = agent.run(demo_task("verification-gt-leak"), simulator)
+        self.assertFalse(result.success)
+        self.assertEqual(result.state, AgentState.SAFE_STOPPED)
+        self.assertEqual(result.failure_code, FailureCode.OBSERVATION_GT_FORBIDDEN)
+        self.assertEqual(openvla.plan_calls, 1)
+        self.assertEqual(pi05.plan_calls, 0)
+        self.assertEqual(result.switch_count, 0)
+        self.assertTrue(simulator.safe_stop_called)
+
     def test_multi_step_chunk_reinfers_before_second_action(self) -> None:
         class RecedingHorizonExecutor:
             def __init__(self) -> None:

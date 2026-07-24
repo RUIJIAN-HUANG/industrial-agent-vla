@@ -20,6 +20,8 @@ class ConfigTests(unittest.TestCase):
 
     def _config_for(self, executor: MockExecutor) -> dict:
         config = deepcopy(self.config)
+        for name, raw in config["executors"].items():
+            raw["enabled"] = name == executor.descriptor.name
         raw = config["executors"][executor.descriptor.name]
         raw["checkpoint_sha"] = executor.descriptor.checkpoint_sha
         raw["norm_stats_sha"] = executor.descriptor.norm_stats_sha
@@ -83,6 +85,21 @@ class ConfigTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "action_contract_version mismatch"):
             IndustrialAgent.from_config([executor], self.config)
+
+    def test_config_requires_exact_enabled_executor_set(self) -> None:
+        with self.assertRaisesRegex(ValueError, "enabled executor set mismatch"):
+            IndustrialAgent.from_config([], self.config)
+
+        config = deepcopy(self.config)
+        for raw in config["executors"].values():
+            raw["enabled"] = False
+        with self.assertRaisesRegex(ValueError, "at least one executor"):
+            IndustrialAgent.from_config([], config)
+
+        malformed = deepcopy(self.config)
+        del malformed["executors"]["pi05"]
+        with self.assertRaisesRegex(ValueError, "declare exactly"):
+            IndustrialAgent.from_config([], malformed)
 
 
 if __name__ == "__main__":
