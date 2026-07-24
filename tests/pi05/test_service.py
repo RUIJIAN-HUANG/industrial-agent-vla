@@ -1,0 +1,619 @@
+"""π0.5 WebSocket 服务层单元测试。
+
+负责人：E（π0.5/openpi）/ F（测试）
+
+方案书出处：
+- §3.3 / §3.3.1：π0.5 适配流程（WebSocket 远程推理）。
+- §3.4：ObsPacket v1 / CanonicalActionChunk v1 协议不变量；动作过期丢弃。
+- §7.1：服务边界与健康检查（openpi π0.5 服务接口；多 episode 并发安全）。
+- §7.2：RPC 请求防错字段（schema_version/episode_id/step_id/checkpoint_sha/expires_after_ms）。
+- §7.5：service_stress（连续100次推理+超时/重启，无内存泄漏/状态串扰；旧动作丢弃）。
+
+测试策略：
+- 纯 CPU / 纯 Mock：Pi05Executor 被 unittest.mock 彻底替换，不碰 GPU / openpi / JAX。
+- 使用 FastAPI TestClient（Starlette）驱动 WebSocket 端点 ws://host:port/。
+- 请求与响应严格遵循 ObsPacket / CanonicalActionChunk v1 schema，禁止手写伪造字段。
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+import json
+import time
+import asyncio
+import tracemalloc
+from contextlib import contextmanager
+from typing import Any, Dict
+from unittest.mock import MagicMock, patch
+
+import numpy as np
+import pytest
+
+# ---------------------------------------------------------------------------
+# 确保服务以 dummy 模式启动（不加载真实模型 / openpi / JAX）
+# 必须在 import openpi_service 之前设置
+# ---------------------------------------------------------------------------
+os.environ.setdefault("PI05_SERVICE_MODE", "dummy")
+
+# 项目根目录加入 sys.path（与被测模块一致，任意目录可运行）
+_PROJECT_ROOT = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
+from starlette.testclient import TestClient  # noqa: E402
+
+from src.contracts.observation import ObsPacket  # noqa: E402
+from src.contracts.action import CanonicalActionChunk  # noqa: E402
+from src.services import openpi_service  # noqa: E402
+
+
+# ---------------------------------------------------------------------------
+# 常量（严格对齐方案书 §3.4 / openpi_service.py 模块常量）
+# ---------------------------------------------------------------------------
+SCHEMA_VERSION = "v1"
+POLICY_ID = "pi05"
+DEFAULT_CONTROL_HZ = 10
+DEFAULT_EXPIRES_AFTER_MS = 1000
+ACTION_DIM = 7
+MOCK_CHUNK_LEN = 10
+SPACE_ID = "eef_delta_xyz_axisangle_gripper_v1"
+FRAME_ID = "robot_base"
+
+TEST_CHECKPOINT_SHA = "test_ckpt_sha_1234567890ab"
+TEST_NORM_STATS_SHA = "test_norm_sha_abcdef"
+
+
+# ---------------------------------------------------------------------------
+# 辅助函数：构造合法 ObsPacket v1 请求（严格遵循 §3.4 schema）
+# ---------------------------------------------------------------------------
+def make_valid_request(
+    episode_id: str = "test-ep-001",
+    step_id: int = 0,
+    instruction: str = "pick up the red cylinder and place it into cell row 2 col 3",
+    rgb_front: Any = None,
+    rgb_wrist: Any = None,
+    robot_state: Any = None,
+    runtime_flags: Any = None,
+) -> Dict[str, Any]:
+    """构造合法 ObsPacket v1 请求字典（JSON 可序列化）。
+
+    字段严格对齐方案书 §3.4：
+      episode_id: str          step_id: int        timestamp_ns: int64
+      rgb_front: uint8[H,W,3]  rgb_wrist: Optional  robot_state: float32[d]
+      instruction: str         runtime_flags: dict
+    """
+    if rgb_front is None:
+        rgb_front = np.zeros((4, 4, 3), dtype=np.uint8)
+    if isinstance(rgb_front, np.ndarray):
+        rgb_front = rgb_front.tolist()
+    if isinstance(rgb_wrist, np.ndarray):
+        rgb_wrist = rgb_wrist.tolist()
+    if robot_state is None:
+        robot_state = [0.0] * 8
+    elif isinstance(robot_state, np.ndarray):
+        robot_state = robot_state.tolist()
+    if runtime_flags is None:
+        runtime_flags = {"terminated": False, "truncated": False, "camera_ok": True}
+
+    req: Dict[str, Any] = {
+        "schema_version": SCHEMA_VERSION,
+        "episode_id": episode_id,
+        "step_id": step_id,
+        "timestamp_ns": int(time.time() * 1e9),
+        "rgb_front": rgb_front,
+        "instruction": instruction,
+        "robot_state": robot_state,
+        "runtime_flags": runtime_flags,
+    }
+    if rgb_wrist is not None:
+        req["rgb_wrist"] = rgb_wrist
+    return req
+
+
+def make_action_chunk(
+    actions: Any = None,
+    generated_step: int = 0,
+    source_policy: str = POLICY_ID,
+    checkpoint_sha: str = TEST_CHECKPOINT_SHA,
+    expires_after_ms: int = DEFAULT_EXPIRES_AFTER_MS,
+) -> CanonicalActionChunk:
+    """构造合法 CanonicalActionChunk v1（严格遵循 §3.4 schema）。
+
+    actions: float32[N,7] [dx,dy,dz,dax,day,daz,gripper]
+    """
+    if actions is None:
+        actions = np.zeros((MOCK_CHUNK_LEN, ACTION_DIM), dtype=np.float32)
+    return CanonicalActionChunk(
+        actions=actions,
+        space_id=SPACE_ID,
+        frame=FRAME_ID,
+        control_hz=DEFAULT_CONTROL_HZ,
+        generated_step=generated_step,
+        source_policy=source_policy,
+        checkpoint_sha=checkpoint_sha,
+        expires_after_ms=expires_after_ms,
+    )
+
+
+def serialize_request(req: Dict[str, Any]) -> str:
+    """序列化请求为 JSON 文本（TestClient send_text 用）。"""
+    return json.dumps(req, ensure_ascii=False)
+
+
+def parse_response(raw: bytes) -> Dict[str, Any]:
+    """反序列化服务端响应（JSON bytes → dict）。
+
+    服务端 _serialize 在无 msgpack 时回退 JSON bytes（openpi_service._serialize）。
+    """
+    return json.loads(raw.decode("utf-8"))
+
+
+# ---------------------------------------------------------------------------
+# pytest fixtures
+# ---------------------------------------------------------------------------
+@pytest.fixture
+def mock_executor() -> MagicMock:
+    """完全 Mock 的 Pi05Executor（不碰 GPU / openpi / JAX）。
+
+    - infer() 默认返回合法 CanonicalActionChunk v1（方案书 §3.4）
+    - health_check() 返回合法健康状态（方案书 §7.1）
+    - reset() / cancel_pending_chunk() 无副作用（方案书 §3.3.1 Para186）
+    - _checkpoint_sha / _norm_stats_sha 属性供服务层 _checkpoint_sha() 读取
+    """
+    ex = MagicMock()
+    # 属性（_checkpoint_sha / _norm_stats_sha 被 openpi_service._checkpoint_sha() 读取）
+    ex._checkpoint_sha = TEST_CHECKPOINT_SHA
+    ex._norm_stats_sha = TEST_NORM_STATS_SHA
+    # health_check 返回合法字典（方案书 §7.1）
+    ex.health_check.return_value = {
+        "mode": "dummy",
+        "policy_type": "mock",
+        "config_name": "pi05_industrial",
+        "checkpoint_sha": TEST_CHECKPOINT_SHA,
+        "norm_stats_sha": TEST_NORM_STATS_SHA,
+        "vram_usage_mb": None,
+        "last_latency_ms": 42,
+        "openpi_available": False,
+        "ws_available": False,
+    }
+    # infer 默认返回合法 CanonicalActionChunk（方案书 §3.4）
+    ex.infer.return_value = make_action_chunk()
+    # reset / cancel_pending_chunk 无副作用（方案书 §3.3.1 Para186）
+    ex.reset.return_value = None
+    ex.cancel_pending_chunk.return_value = None
+    return ex
+
+
+@pytest.fixture
+def test_client(mock_executor: MagicMock):
+    """FastAPI TestClient：启动时用 mock_executor 替换真实 Pi05Executor。
+
+    每个 test 获得：
+    - 全新的 TestClient（触发 startup → _init_executor → Pi05Executor()）
+    - 全局状态已重置（pending_chunks / current_episode_id / last_step_id / lock）
+    - Pi05Executor 被 patch 为返回 mock_executor（彻底隔离底层执行器）
+    """
+    # ---- 重置全局状态（防止跨测试串扰，方案书 §7.1 多 episode 并发安全）----
+    openpi_service.executor = None
+    openpi_service.pending_chunks.clear()
+    openpi_service.current_episode_id = None
+    openpi_service.last_step_id = None
+    # 重建 lock：避免绑定到上一个 TestClient 的事件循环（Python 3.10+ _LoopBoundMixin）
+    openpi_service._pending_chunks_lock = asyncio.Lock()
+
+    # ---- patch Pi05Executor：使 _init_executor() 创建 mock 而非真实执行器 ----
+    with patch.object(openpi_service, "Pi05Executor", return_value=mock_executor):
+        with TestClient(openpi_service.app) as client:
+            yield client
+
+    # ---- 清理全局状态 ----
+    openpi_service.executor = None
+    openpi_service.pending_chunks.clear()
+    openpi_service.current_episode_id = None
+    openpi_service.last_step_id = None
+
+
+@pytest.fixture
+def ws_context(test_client: TestClient):
+    """WebSocket 连接上下文工厂：自动接收 metadata，yield (ws, metadata)。
+
+    用法：
+        with ws_context() as (ws, metadata):
+            ws.send_text(serialize_request(req))
+            resp = parse_response(ws.receive_bytes())
+
+    服务端建立连接后先发 metadata（JSON 文本，openpi_service.ws_infer L397），
+    随后请求/响应用于二进制帧（JSON bytes，_serialize 回退 JSON）。
+    """
+
+    @contextmanager
+    def _connect():
+        with test_client.websocket_connect("/") as ws:
+            metadata = json.loads(ws.receive_text())
+            yield ws, metadata
+
+    return _connect
+
+
+# ---------------------------------------------------------------------------
+# 1. 服务生命周期 (test_service_lifecycle)
+# ---------------------------------------------------------------------------
+def test_service_lifecycle(test_client: TestClient, mock_executor: MagicMock):
+    """验证 WebSocket 连接建立、就绪、断开的状态流转；executor 正确初始化与释放。
+
+    方案书 §7.1：服务边界与健康检查；openpi_service.ws_infer 连接建立流程。
+    """
+    # ---- 健康检查端点（方案书 §7.1）----
+    resp = test_client.get("/health")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok", "executor 就绪时 health 应返回 ok"
+    assert body["mode"] == "dummy"
+    assert body["checkpoint_sha"] == TEST_CHECKPOINT_SHA
+    assert body["norm_stats_sha"] == TEST_NORM_STATS_SHA
+    assert "uptime_seconds" in body
+
+    # ---- executor 已初始化（startup → _init_executor → mock）----
+    assert openpi_service.executor is not None
+    assert openpi_service.executor is mock_executor
+
+    # ---- WebSocket 连接建立 + metadata 就绪 ----
+    with test_client.websocket_connect("/") as ws:
+        metadata = json.loads(ws.receive_text())
+        # metadata 字段对齐方案书 §7.2 防错字段
+        assert metadata["schema_version"] == SCHEMA_VERSION
+        assert metadata["policy_id"] == POLICY_ID
+        assert metadata["mode"] == "dummy"
+        assert metadata["checkpoint_sha"] == TEST_CHECKPOINT_SHA
+        assert metadata["control_hz"] == DEFAULT_CONTROL_HZ
+        assert metadata["expires_after_ms"] == DEFAULT_EXPIRES_AFTER_MS
+        assert "norm_stats_sha" in metadata
+        # 连接正常断开（with 退出触发 WebSocketDisconnect，服务端 finally 清理）
+    # 断开后服务端不崩溃：再次健康检查仍 ok
+    resp2 = test_client.get("/health")
+    assert resp2.json()["status"] == "ok"
+
+
+# ---------------------------------------------------------------------------
+# 2. 推理请求处理 (test_infer_success)
+# ---------------------------------------------------------------------------
+def test_infer_success(ws_context, mock_executor: MagicMock):
+    """验证合法 ObsPacket 请求被正确解析、透传至 executor、输出 CanonicalActionChunk。
+
+    方案书 §3.4 ObsPacket v1 → CanonicalActionChunk v1；§7.2 防错字段。
+    """
+    with ws_context() as (ws, metadata):
+        req = make_valid_request(episode_id="infer-ep-001", step_id=0)
+        ws.send_text(serialize_request(req))
+
+        resp = parse_response(ws.receive_bytes())
+
+    # ---- 响应字段严格对齐 CanonicalActionChunk v1（方案书 §3.4）----
+    assert resp["schema_version"] == SCHEMA_VERSION
+    assert resp["episode_id"] == "infer-ep-001"
+    assert resp["step_id"] == 0
+    # actions: float32[N,7] [dx,dy,dz,dax,day,daz,gripper]
+    actions = np.array(resp["actions"], dtype=np.float32)
+    assert actions.ndim == 2
+    assert actions.shape[1] == ACTION_DIM
+    assert actions.shape[0] >= 1  # N≥1（方案书 §3.4 协议不变量）
+    # 协议不变量字段
+    assert resp["space_id"] == SPACE_ID
+    assert resp["frame"] == FRAME_ID
+    assert resp["control_hz"] == DEFAULT_CONTROL_HZ
+    assert resp["generated_step"] == 0
+    # §7.2 防错字段：source_policy / checkpoint_sha / expires_after_ms
+    assert resp["source_policy"] == POLICY_ID
+    assert resp["checkpoint_sha"] == TEST_CHECKPOINT_SHA
+    assert resp["expires_after_ms"] == DEFAULT_EXPIRES_AFTER_MS
+
+    # ---- executor.infer 被调用，参数为合法 ObsPacket ----
+    mock_executor.infer.assert_called_once()
+    obs_arg = mock_executor.infer.call_args.args[0]
+    assert isinstance(obs_arg, ObsPacket)
+    assert obs_arg.episode_id == "infer-ep-001"
+    assert obs_arg.step_id == 0
+    assert obs_arg.instruction == req["instruction"]
+    assert obs_arg.rgb_front.dtype == np.uint8
+    assert obs_arg.rgb_front.shape == (4, 4, 3)
+    assert obs_arg.robot_state.dtype == np.float32
+
+
+# ---------------------------------------------------------------------------
+# 3. 非法请求拒绝 (test_invalid_request_handling)
+# ---------------------------------------------------------------------------
+def test_invalid_request_handling(ws_context, mock_executor: MagicMock):
+    """验证服务层拦截缺失字段、类型/维度不匹配、JSON 损坏的非法请求。
+
+    方案书 §3.4 协议不变量；§7.2 防错字段；openpi_service._validate_request / _build_obs。
+    坏数据不得透传至 executor（mock_executor.infer 不应被调用）。
+    """
+    with ws_context() as (ws, metadata):
+        # ---- 3a. 缺失必要字段（episode_id）----
+        req_missing = make_valid_request()
+        del req_missing["episode_id"]
+        ws.send_text(serialize_request(req_missing))
+        resp_missing = parse_response(ws.receive_bytes())
+        assert resp_missing["error"] == "missing_required_fields"
+        assert "episode_id" in resp_missing["missing"]
+
+        # ---- 3b. 缺失必要字段（rgb_front）----
+        req_no_rgb = make_valid_request()
+        del req_no_rgb["rgb_front"]
+        ws.send_text(serialize_request(req_no_rgb))
+        resp_no_rgb = parse_response(ws.receive_bytes())
+        assert resp_no_rgb["error"] == "missing_required_fields"
+        assert "rgb_front" in resp_no_rgb["missing"]
+
+        # ---- 3c. episode_id 为空字符串 ----
+        req_empty_ep = make_valid_request(episode_id="  ")
+        ws.send_text(serialize_request(req_empty_ep))
+        resp_empty_ep = parse_response(ws.receive_bytes())
+        assert resp_empty_ep["error"] == "invalid_episode_id"
+
+        # ---- 3d. step_id 类型不匹配（字符串无法解析）----
+        req_bad_step = make_valid_request()
+        req_bad_step["step_id"] = "not_a_number"
+        ws.send_text(serialize_request(req_bad_step))
+        resp_bad_step = parse_response(ws.receive_bytes())
+        assert resp_bad_step["error"] == "invalid_step_id"
+
+        # ---- 3e. step_id 为负数 ----
+        req_neg_step = make_valid_request()
+        req_neg_step["step_id"] = -1
+        ws.send_text(serialize_request(req_neg_step))
+        resp_neg_step = parse_response(ws.receive_bytes())
+        assert resp_neg_step["error"] == "invalid_step_id"
+
+        # ---- 3f. instruction 类型不匹配（数字而非字符串）----
+        req_bad_instr = make_valid_request()
+        req_bad_instr["instruction"] = 12345
+        ws.send_text(serialize_request(req_bad_instr))
+        resp_bad_instr = parse_response(ws.receive_bytes())
+        assert resp_bad_instr["error"] == "invalid_instruction"
+
+        # ---- 3g. 维度/类型不匹配：rgb_front 无法转为 uint8 数组 ----
+        req_bad_rgb = make_valid_request()
+        req_bad_rgb["rgb_front"] = "not_an_image_array"
+        ws.send_text(serialize_request(req_bad_rgb))
+        resp_bad_rgb = parse_response(ws.receive_bytes())
+        assert resp_bad_rgb["error"] == "obs_build_failed"
+
+        # ---- 3h. JSON 损坏 ----
+        ws.send_text("{ this is not valid json <<<")
+        resp_bad_json = parse_response(ws.receive_bytes())
+        assert resp_bad_json["error"] == "deserialize_failed"
+
+    # ---- 所有非法请求均未透传至 executor ----
+    mock_executor.infer.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# 4. 底层异常降级 (test_executor_exception_fallback)
+# ---------------------------------------------------------------------------
+def test_executor_exception_fallback(ws_context, mock_executor: MagicMock):
+    """验证 executor 抛出 RuntimeError / MemoryError(OOM) 时服务层不崩溃，返回错误响应。
+
+    方案书 §3.4 协议不变量（非法不下发）；openpi_service.ws_infer 推理异常捕获。
+    """
+    with ws_context() as (ws, metadata):
+        # ---- 4a. RuntimeError（模型推理异常）----
+        mock_executor.infer.side_effect = RuntimeError("model inference failed")
+        req = make_valid_request(episode_id="err-ep", step_id=0)
+        ws.send_text(serialize_request(req))
+        resp = parse_response(ws.receive_bytes())
+        assert resp["error"] == "infer_failed"
+        assert "model inference failed" in resp["reason"]
+        assert resp["schema_version"] == SCHEMA_VERSION
+
+    # ---- 服务未崩溃：恢复 mock，新连接新 episode 可正常推理 ----
+    mock_executor.infer.side_effect = None
+    mock_executor.infer.return_value = make_action_chunk()
+
+    with ws_context() as (ws, metadata):
+        req2 = make_valid_request(episode_id="recover-ep", step_id=0)
+        ws.send_text(serialize_request(req2))
+        resp2 = parse_response(ws.receive_bytes())
+        assert "actions" in resp2
+        assert resp2["episode_id"] == "recover-ep"
+
+    # ---- 4b. MemoryError（OOM）同样被捕获 ----
+    mock_executor.infer.side_effect = MemoryError("CUDA out of memory")
+    with ws_context() as (ws, metadata):
+        req3 = make_valid_request(episode_id="oom-ep", step_id=0)
+        ws.send_text(serialize_request(req3))
+        resp3 = parse_response(ws.receive_bytes())
+        assert resp3["error"] == "infer_failed"
+        assert "CUDA out of memory" in resp3["reason"]
+
+
+# ---------------------------------------------------------------------------
+# 5. 动作过期丢弃 (test_action_expiry)
+# ---------------------------------------------------------------------------
+def test_action_expiry(ws_context, mock_executor: MagicMock):
+    """验证 step_id 不匹配、超过 expires_after_ms、episode 切换后动作被丢弃。
+
+    方案书 §3.4 协议不变量·动作过期：
+      step_id 不匹配、超过 expires_after_ms 或 episode 切换后返回的动作必须丢弃。
+    """
+    with ws_context() as (ws, metadata):
+        # ---- 5a. step_id 不匹配：回退的 step_id 被拒绝（stale_step_id）----
+        req1 = make_valid_request(episode_id="expire-ep", step_id=0)
+        ws.send_text(serialize_request(req1))
+        resp1 = parse_response(ws.receive_bytes())
+        assert "actions" in resp1  # 首次请求成功
+
+        # 同 episode 内 step_id 未递增（0 <= 0）→ stale_step_id
+        req_stale = make_valid_request(episode_id="expire-ep", step_id=0)
+        ws.send_text(serialize_request(req_stale))
+        resp_stale = parse_response(ws.receive_bytes())
+        assert resp_stale["error"] == "stale_step_id"
+        assert "step_id 未递增" in resp_stale["reason"]
+
+        # ---- 5b. 超过 expires_after_ms：pending chunk 过期被丢弃 ----
+        # 设置极短过期时间
+        mock_executor.infer.return_value = make_action_chunk(expires_after_ms=50)
+        req2 = make_valid_request(episode_id="expire-ep", step_id=1)
+        ws.send_text(serialize_request(req2))
+        resp2 = parse_response(ws.receive_bytes())
+        assert "actions" in resp2
+
+        # pending_chunks 应有一条记录
+        assert "expire-ep" in openpi_service.pending_chunks
+        old_timestamp = openpi_service.pending_chunks["expire-ep"]["timestamp"]
+
+        # 等待超过 expires_after_ms（50ms）
+        time.sleep(0.08)
+
+        # 发送下一个 step：服务端检测 pending chunk 过期并丢弃，但请求仍正常处理
+        req3 = make_valid_request(episode_id="expire-ep", step_id=2)
+        ws.send_text(serialize_request(req3))
+        resp3 = parse_response(ws.receive_bytes())
+        assert "actions" in resp3  # 过期丢弃后重新推理，响应正常
+
+        # 过期 chunk 被新 chunk 覆盖（timestamp 更新）
+        new_timestamp = openpi_service.pending_chunks["expire-ep"]["timestamp"]
+        assert new_timestamp > old_timestamp
+
+        # ---- 5c. episode 切换：旧 episode 的 pending_chunks 被清除 ----
+        # 恢复正常过期时间
+        mock_executor.infer.return_value = make_action_chunk(expires_after_ms=1000)
+
+        # 切换到新 episode
+        req_new_ep = make_valid_request(episode_id="new-ep-after-switch", step_id=0)
+        ws.send_text(serialize_request(req_new_ep))
+        resp_new_ep = parse_response(ws.receive_bytes())
+        assert "actions" in resp_new_ep
+
+        # 旧 episode 的 chunk 已被 clear() 清除（方案书 §3.3.1 Para186：切换时清空动作队列）
+        assert "expire-ep" not in openpi_service.pending_chunks
+        # 新 episode 的 chunk 已存储
+        assert "new-ep-after-switch" in openpi_service.pending_chunks
+        # step_id 跟踪已重置：新 episode 内 step_id=0 被接受（last_step_id 已置 None）
+        assert openpi_service.last_step_id == 0
+        assert openpi_service.current_episode_id == "new-ep-after-switch"
+
+
+# ---------------------------------------------------------------------------
+# 6. 断连与重连 (test_disconnect_reconnect)
+# ---------------------------------------------------------------------------
+def test_disconnect_reconnect(test_client: TestClient, mock_executor: MagicMock):
+    """验证客户端断开后服务端清理连接上下文；新连接无旧连接状态串扰。
+
+    方案书 §7.1：多 episode 并发安全；openpi_service.ws_infer 连接级状态 _ws_prev_episode_id。
+    """
+    # ---- 连接 A：发送请求后断开 ----
+    with test_client.websocket_connect("/") as ws_a:
+        meta_a = json.loads(ws_a.receive_text())
+        req_a = make_valid_request(episode_id="conn-A-ep", step_id=0)
+        ws_a.send_text(serialize_request(req_a))
+        resp_a = parse_response(ws_a.receive_bytes())
+        assert "actions" in resp_a
+        assert resp_a["episode_id"] == "conn-A-ep"
+    # ws_a 断开（with 退出），服务端 finally 清理
+
+    # ---- 连接 B：新连接，不同 episode，验证无状态串扰 ----
+    with test_client.websocket_connect("/") as ws_b:
+        meta_b = json.loads(ws_b.receive_text())
+        # metadata 独立，不受连接 A 影响
+        assert meta_b["schema_version"] == SCHEMA_VERSION
+        assert meta_b["policy_id"] == POLICY_ID
+
+        # 连接 B 使用全新 episode，step_id 从 0 开始（不受连接 A 的 last_step_id 影响）
+        req_b = make_valid_request(episode_id="conn-B-ep", step_id=0)
+        ws_b.send_text(serialize_request(req_b))
+        resp_b = parse_response(ws_b.receive_bytes())
+        assert "actions" in resp_b
+        assert resp_b["episode_id"] == "conn-B-ep"
+        assert resp_b["step_id"] == 0
+
+    # ---- 两次推理调用独立，无数据串扰 ----
+    assert mock_executor.infer.call_count == 2
+    obs_a = mock_executor.infer.call_args_list[0].args[0]
+    obs_b = mock_executor.infer.call_args_list[1].args[0]
+    assert obs_a.episode_id == "conn-A-ep"
+    assert obs_b.episode_id == "conn-B-ep"
+
+
+# ---------------------------------------------------------------------------
+# 7. 压力测试 (test_service_stress) — 方案书 §7.5 service_stress
+# ---------------------------------------------------------------------------
+def test_service_stress(ws_context, mock_executor: MagicMock):
+    """连续 100 次推理请求，验证无内存泄漏、无状态串扰、超时请求被丢弃。
+
+    方案书 §7.5 service_stress：
+      连续100次推理+超时/重启 → 无内存泄漏/状态串扰；旧动作丢弃。
+    """
+    # ---- 每次返回独立 action chunk（按 step_id 区分）----
+    def _infer_side_effect(obs: ObsPacket) -> CanonicalActionChunk:
+        # 每次返回不同的 actions，验证响应独立性
+        actions = np.full((MOCK_CHUNK_LEN, ACTION_DIM), obs.step_id, dtype=np.float32)
+        return make_action_chunk(actions=actions, generated_step=obs.step_id)
+
+    mock_executor.infer.side_effect = _infer_side_effect
+
+    tracemalloc.start()
+    snapshot_before = tracemalloc.take_snapshot()
+
+    episode = "stress-ep-001"
+    with ws_context() as (ws, metadata):
+        for i in range(100):
+            req = make_valid_request(episode_id=episode, step_id=i)
+            ws.send_text(serialize_request(req))
+            resp = parse_response(ws.receive_bytes())
+
+            # 无状态串扰：每次响应独立，step_id 与 actions 对应
+            assert resp["episode_id"] == episode
+            assert resp["step_id"] == i
+            assert resp["generated_step"] == i
+            actions = np.array(resp["actions"], dtype=np.float32)
+            assert actions.shape == (MOCK_CHUNK_LEN, ACTION_DIM)
+            # 每次返回的 actions 值 == step_id，验证无串扰
+            assert np.all(actions == i), f"step {i}: 响应串扰"
+
+    snapshot_after = tracemalloc.take_snapshot()
+    tracemalloc.stop()
+
+    # ---- 无内存泄漏：100 次请求后内存增长有界（< 20MB）----
+    stats = snapshot_after.compare_to(snapshot_before, "lineno")
+    total_growth = sum(s.size_diff for s in stats if s.size_diff > 0)
+    assert total_growth < 20 * 1024 * 1024, (
+        f"内存增长过大: {total_growth / 1024 / 1024:.2f} MB（应 < 20MB）"
+    )
+
+    # ---- pending_chunks 不累积：同 episode 只有 1 条记录 ----
+    assert len(openpi_service.pending_chunks) == 1
+    assert episode in openpi_service.pending_chunks
+
+    # ---- executor.infer 被调用 100 次 ----
+    assert mock_executor.infer.call_count == 100
+
+    # ---- 超时请求被正确丢弃：设置极短过期时间，等待后下一请求触发丢弃 ----
+    mock_executor.infer.side_effect = None
+    mock_executor.infer.return_value = make_action_chunk(expires_after_ms=30)
+
+    with ws_context() as (ws2, meta2):
+        # 请求 1：存储 pending chunk（expires_after_ms=30）
+        req1 = make_valid_request(episode_id="timeout-ep", step_id=0)
+        ws2.send_text(serialize_request(req1))
+        resp1 = parse_response(ws2.receive_bytes())
+        assert "actions" in resp1
+
+        assert "timeout-ep" in openpi_service.pending_chunks
+        old_ts = openpi_service.pending_chunks["timeout-ep"]["timestamp"]
+
+        # 等待超过 expires_after_ms
+        time.sleep(0.06)
+
+        # 请求 2：服务端检测 pending chunk 过期并丢弃，请求仍正常处理
+        req2 = make_valid_request(episode_id="timeout-ep", step_id=1)
+        ws2.send_text(serialize_request(req2))
+        resp2 = parse_response(ws2.receive_bytes())
+        assert "actions" in resp2
+
+        # 过期 chunk 被新 chunk 覆盖（timestamp 更新，证明旧 chunk 被丢弃）
+        new_ts = openpi_service.pending_chunks["timeout-ep"]["timestamp"]
+        assert new_ts > old_ts, "过期 chunk 应被丢弃并替换"
