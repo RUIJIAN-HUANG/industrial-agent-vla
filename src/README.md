@@ -1,12 +1,10 @@
 # Source Code
 
-本目录用于存放项目所有源代码。
+当前可运行包为 `industrial_agent`，只包含轻量总 Agent 核心，不导入真实 VLA、
+Isaac/Gazebo 或机器人 SDK。模块说明、状态机和接入边界见：
 
-包括但不限于：
+- [`../docs/architecture/agent-framework.md`](../docs/architecture/agent-framework.md)
+- [`../docs/architecture/interface-contracts.md`](../docs/architecture/interface-contracts.md)
 
-- 智能体（Agent）
-- 感知模块（Perception）
-- 推理模块（Reasoning）
-- VLA模型
-- 机械臂控制
-- 公共工具函数
+D/E 的真实模型服务和 B 的环境适配应保持独立进程/独立依赖，依照统一合同
+接入，不要把 CUDA、PyTorch 与 JAX 依赖装进核心包。

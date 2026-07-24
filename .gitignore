@@ -216,3 +216,68 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Project-local secrets and machine-specific overrides
+.env.*
+!.env.example
+*.pem
+*.key
+credentials*.json
+secrets*.json
+
+# IDE and operating-system files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Runtime output, caches, and experiment trackers
+artifacts/
+outputs/
+runs/
+logs/
+wandb/
+mlruns/
+.cache/
+
+# Large datasets: keep only manifests, schemas, cards, and tiny fixtures in Git
+data/raw/
+data/processed/
+data/generated/
+data/cache/
+!data/**/README.md
+!data/**/MANIFEST*.md
+!data/**/DATA_CARD*.md
+!data/**/schema*.json
+!data/fixtures/**
+
+# Model weights and exported engines must use an external artifact store or an
+# explicitly approved Git LFS policy. Never commit them directly to normal Git.
+checkpoints/
+*.ckpt
+*.pt
+*.pth
+*.safetensors
+*.onnx
+*.engine
+*.tflite
+*.pb
+
+# Robotics/simulation recordings and generated packages
+*.bag
+*.db3
+*.mcap
+*.h5
+*.hdf5
+*.npz
+*.npy
+simulation/cache/
+simulation/generated/
+simulation/packages/
+
+# Generated media is kept out of normal Git by default. Curated documentation
+# images under docs/assets/ remain trackable.
+*.mp4
+*.mov
+*.avi
+*.mkv

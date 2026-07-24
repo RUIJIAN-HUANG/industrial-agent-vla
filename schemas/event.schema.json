@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://industrial-agent.local/schemas/event.schema.json",
+  "title": "Structured Agent Event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "event_id",
+    "sequence",
+    "timestamp_ms",
+    "run_id",
+    "task_id",
+    "event_type",
+    "state",
+    "payload"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^1\\.[0-9]+$"
+    },
+    "event_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "timestamp_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "task_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "event_type": {
+      "type": "string",
+      "minLength": 1
+    },
+    "state": {
+      "enum": [
+        "IDLE",
+        "VALIDATING_TASK",
+        "PLANNING",
+        "OBSERVING",
+        "SELECTING_EXECUTOR",
+        "EXECUTING",
+        "VERIFYING",
+        "ADVANCING_SUBTASK",
+        "REPLANNING",
+        "SWITCHING",
+        "SUCCEEDED",
+        "FAILED",
+        "SAFE_STOPPED"
+      ]
+    },
+    "payload": {
+      "type": "object"
+    }
+  }
+}

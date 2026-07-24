@@ -1,0 +1,100 @@
+name: Python quality and tests
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: python-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: Python quality and tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Verify immutable competition baselines
+        run: python scripts/verify_official_baselines.py
+
+      - name: Detect Python sources and tests
+        id: detect
+        shell: bash
+        run: |
+          if find . \
+            -path './.git' -prune -o \
+            -path './.venv' -prune -o \
+            -path './venv' -prune -o \
+            -type f -name '*.py' -print -quit | grep -q .; then
+            echo "has_python=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_python=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          if [ -d tests ] && find tests -type f -name 'test_*.py' -print -quit | grep -q .; then
+            echo "has_tests=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_tests=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install quality tools
+        if: steps.detect.outputs.has_python == 'true'
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ruff pytest jsonschema
+
+      - name: Check Python formatting
+        if: steps.detect.outputs.has_python == 'true'
+        run: python -m ruff format --check .
+
+      - name: Lint Python
+        if: steps.detect.outputs.has_python == 'true'
+        run: python -m ruff check .
+
+      - name: Install project test dependencies
+        if: steps.detect.outputs.has_tests == 'true'
+        shell: bash
+        run: |
+          if [ -f requirements-ci.txt ]; then
+            python -m pip install -r requirements-ci.txt
+          elif [ -f requirements-dev.txt ]; then
+            python -m pip install -r requirements-dev.txt
+          elif [ -f pyproject.toml ]; then
+            if ! python -m pip install -e ".[test]"; then
+              echo "::notice::The 'test' extra is unavailable; installing the base project."
+              python -m pip install -e .
+            fi
+          elif [ -f requirements.txt ]; then
+            python -m pip install -r requirements.txt
+          else
+            echo "::notice::No dependency manifest found; running tests with CI tools only."
+          fi
+
+      - name: Run unit tests
+        if: steps.detect.outputs.has_tests == 'true'
+        run: python -m pytest -q
+
+      - name: Explain empty Python skeleton
+        if: steps.detect.outputs.has_python != 'true'
+        run: |
+          echo "::notice::No Python files found yet; formatting, lint, and tests were skipped."
+
+      - name: Explain missing tests
+        if: steps.detect.outputs.has_python == 'true' && steps.detect.outputs.has_tests != 'true'
+        run: |
+          echo "::notice::Python files exist, but no tests/test_*.py files were found; pytest was skipped."

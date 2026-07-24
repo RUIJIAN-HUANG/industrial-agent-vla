@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://industrial-agent.local/schemas/executor-health.schema.json",
+  "title": "VLA Executor Health Response",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "service",
+    "status",
+    "checkpoint_sha",
+    "norm_stats_sha",
+    "supported_action_contracts"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^1\\.[0-9]+$"
+    },
+    "service": {
+      "enum": [
+        "openvla_oft",
+        "pi05"
+      ]
+    },
+    "service_version": {
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "ready",
+        "loading",
+        "degraded"
+      ]
+    },
+    "uptime_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "checkpoint_sha": {
+      "type": "string",
+      "minLength": 7
+    },
+    "norm_stats_sha": {
+      "type": "string",
+      "minLength": 7
+    },
+    "supported_task_types": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string"
+      }
+    },
+    "supported_action_contracts": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[0-9]+\\.[0-9]+$"
+      }
+    },
+    "queue": {
+      "type": "object"
+    },
+    "device": {
+      "type": "object"
+    },
+    "time_ms": {
+      "type": "integer",
+      "minimum": 0
+    }
+  }
+}
