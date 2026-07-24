@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://industrial-agent.local/schemas/action-chunk.schema.json",
+  "title": "Canonical 7-D ActionChunk",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "chunk_id",
+    "task_id",
+    "executor",
+    "action_space",
+    "frame",
+    "translation_unit",
+    "rotation_unit",
+    "gripper_unit",
+    "steps"
+  ],
+  "properties": {
+    "contract_version": {
+      "type": "string",
+      "pattern": "^1\\.[0-9]+$"
+    },
+    "chunk_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "task_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "executor": {
+      "enum": [
+        "openvla_oft",
+        "pi05"
+      ]
+    },
+    "action_space": {
+      "const": "ee_delta_pose_gripper"
+    },
+    "frame": {
+      "const": "robot_base"
+    },
+    "translation_unit": {
+      "const": "m"
+    },
+    "rotation_unit": {
+      "const": "rad"
+    },
+    "gripper_unit": {
+      "const": "normalized"
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "values",
+          "duration_ms"
+        ],
+        "properties": {
+          "values": {
+            "type": "array",
+            "minItems": 7,
+            "maxItems": 7,
+            "prefixItems": [
+              {
+                "type": "number",
+                "description": "dx, metres in robot_base"
+              },
+              {
+                "type": "number",
+                "description": "dy, metres in robot_base"
+              },
+              {
+                "type": "number",
+                "description": "dz, metres in robot_base"
+              },
+              {
+                "type": "number",
+                "description": "delta roll, radians"
+              },
+              {
+                "type": "number",
+                "description": "delta pitch, radians"
+              },
+              {
+                "type": "number",
+                "description": "delta yaw, radians"
+              },
+              {
+                "type": "number",
+                "minimum": -1,
+                "maximum": 1,
+                "description": "gripper command normalized to [-1, 1]"
+              }
+            ],
+            "items": false
+          },
+          "duration_ms": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000
+          }
+        }
+      }
+    }
+  }
+}

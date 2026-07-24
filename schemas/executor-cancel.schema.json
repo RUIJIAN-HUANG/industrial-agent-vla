@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://industrial-agent.local/schemas/executor-cancel.schema.json",
+  "title": "VLA Executor Cancel Request/Response",
+  "$defs": {
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "request_id",
+        "trace_id",
+        "episode_id",
+        "task_id",
+        "subtask_id",
+        "reason"
+      ],
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+$"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "trace_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "episode_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "task_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "subtask_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "request_id",
+        "trace_id",
+        "task_id",
+        "status",
+        "cancelled_request_ids",
+        "server_context_cleared"
+      ],
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+$"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "task_id": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "cancelled",
+            "already_completed",
+            "not_found"
+          ]
+        },
+        "cancelled_request_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "server_context_cleared": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

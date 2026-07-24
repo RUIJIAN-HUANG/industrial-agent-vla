@@ -1,0 +1,33 @@
+{
+  "config_version": "1.0",
+  "verification_frames": 3,
+  "executor_timeout_ms": 15000,
+  "recovery": {
+    "max_replans_per_subtask_strategy": 1,
+    "max_switches_per_run": 1,
+    "allow_switch_back": false,
+    "clear_action_queue_on_recovery": true,
+    "max_decisions_per_strategy_attempt": 8
+  },
+  "safety": {
+    "action_contract_version": "1.0",
+    "axis_abs_limits": [0.05, 0.05, 0.05, 0.25, 0.25, 0.25, 1.0],
+    "workspace_min_m": [-1.0, -1.0, 0.0],
+    "workspace_max_m": [1.0, 1.0, 1.5],
+    "max_chunk_steps": 32
+  },
+  "executors": {
+    "openvla_oft": {
+      "enabled": true,
+      "base_url": "http://127.0.0.1:8101",
+      "checkpoint_sha": "REPLACE_WITH_PINNED_SHA",
+      "norm_stats_sha": "REPLACE_WITH_PINNED_SHA"
+    },
+    "pi05": {
+      "enabled": true,
+      "base_url": "http://127.0.0.1:8102",
+      "checkpoint_sha": "REPLACE_WITH_PINNED_SHA",
+      "norm_stats_sha": "REPLACE_WITH_PINNED_SHA"
+    }
+  }
+}

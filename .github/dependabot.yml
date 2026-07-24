@@ -1,0 +1,18 @@
+version: 2
+updates:
+  # 核心 pyproject 当前没有第三方运行时依赖，因此先只维护 GitHub Actions。
+  # D/E/B 加入 ML/仿真依赖后，应按独立环境分别评估 pip/uv 更新，避免自动
+  # 升级破坏 CUDA、Isaac、JAX、PyTorch 或模型 checkpoint 兼容性。
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "ci(deps)"
+    labels:
+      - dependencies
+      - ci

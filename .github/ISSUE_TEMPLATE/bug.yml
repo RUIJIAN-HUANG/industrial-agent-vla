@@ -1,0 +1,151 @@
+name: Bug / 缺陷
+description: 报告可复现的问题、回归、接口异常或安全故障
+title: "[Bug] "
+labels: []
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请去除日志和截图中的 Token、密码、个人路径与敏感数据。
+        若涉及凭据泄露，先立即吊销/轮换凭据并通知 A，不要把真实密钥贴入 Issue。
+
+  - type: dropdown
+    id: reporter_role
+    attributes:
+      label: 报告角色
+      options:
+        - A — 项目管理 / 总 Agent / 集成
+        - B — 仿真 / 控制器 / 执行安全
+        - C — 场景 / 资产 / 数据
+        - D — OpenVLA-OFT
+        - E — π0.5 / openpi
+        - F — 测试 / 评测 / 复现 / 材料
+    validations:
+      required: true
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: 严重级别
+      description: P0 表示 Demo/安全/官方硬指标立即阻断；不要为了加速随意升为 P0。
+      options:
+        - P0 — 系统不可用 / 安全 / 官方硬指标阻断
+        - P1 — 里程碑或多人阻断
+        - P2 — 核心功能异常但有绕行
+        - P3 — 轻微问题 / 体验 / 技术债
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: 主要组件
+      options:
+        - Agent / 集成
+        - Simulation / Robot / Controller
+        - Scene / Asset / Data
+        - OpenVLA-OFT
+        - π0.5 / openpi
+        - Test / Metrics / Evidence
+        - CI / Build / Environment
+        - Documentation
+        - Unknown / Cross-module
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: 发生版本
+      description: 填分支、Commit SHA、模型/数据版本或 PR 编号。
+      placeholder: "main @ abc1234 / PR #..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: 环境
+      placeholder: |
+        OS:
+        Python:
+        CUDA / Driver:
+        Isaac / Robot:
+        Model / Checkpoint ID:
+        Config:
+        Seed:
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 最小复现步骤
+      description: 从干净环境开始，给出可复制命令或编号步骤。
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期结果
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际结果
+    validations:
+      required: true
+
+  - type: textarea
+    id: frequency
+    attributes:
+      label: 频率与首次出现
+      placeholder: "例如：10/10；首次出现在 abc1234，上一正常版本 def5678"
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 日志 / 截图 / 视频 / 报告
+      description: 提供最短必要证据；先去除密钥、个人路径和敏感数据。
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: 影响与临时绕行
+      placeholder: |
+        - 受影响场景 / 角色：
+        - 是否影响安全、官方指标或 Demo：
+        - 临时绕行：
+    validations:
+      required: true
+
+  - type: textarea
+    id: suspected
+    attributes:
+      label: 初步定位（可选）
+      description: 可写可疑模块或最近变更；不要把猜测当结论。
+
+  - type: checkboxes
+    id: confirmation
+    attributes:
+      label: 提交确认
+      options:
+        - label: 我已搜索现有 Issue，未发现相同问题。
+          required: true
+        - label: 我已去除证据中的密钥和敏感信息。
+          required: true
+        - label: 严重级别与实际阻塞程度相符。
+          required: true

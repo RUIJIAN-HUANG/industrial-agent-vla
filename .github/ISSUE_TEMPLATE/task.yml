@@ -1,0 +1,154 @@
+name: Task / 任务
+description: 创建可在 0.5–2 个工作日内完成、可验收的开发或项目任务
+title: "[Task] "
+labels: []
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请先确认任务不改变两份官方 PDF 的硬指标，也不擅自改变冻结架构。
+        一个 Issue 默认对应一名主负责人、一个短期分支和一个主要 PR。
+
+  - type: dropdown
+    id: role
+    attributes:
+      label: 责任角色
+      description: 选择主要负责人角色；GitHub assignee 由 A 或认领人补充。
+      options:
+        - A — 项目管理 / 总 Agent / 集成
+        - B — 仿真 / 控制器 / 执行安全
+        - C — 场景 / 资产 / 数据
+        - D — OpenVLA-OFT
+        - E — π0.5 / openpi
+        - F — 测试 / 评测 / 复现 / 材料
+    validations:
+      required: true
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: 优先级
+      description: P0 仅用于 Demo/安全/官方硬指标的立即阻断。
+      options:
+        - P0 — 立即阻断
+        - P1 — 阻断里程碑或多人
+        - P2 — 正常计划
+        - P3 — 优化 / 技术债
+    validations:
+      required: true
+
+  - type: input
+    id: milestone
+    attributes:
+      label: 目标日 / 里程碑
+      description: 使用 D1–D40 和明确日期时间，例如“D6 / 2026-07-30 18:00（Asia/Shanghai）”。
+      placeholder: "D? / YYYY-MM-DD HH:mm"
+    validations:
+      required: true
+
+  - type: textarea
+    id: objective
+    attributes:
+      label: 目标与价值
+      description: 描述完成后系统/交付物获得什么可验证能力。
+      placeholder: "为了……，需要……，使得……"
+    validations:
+      required: true
+
+  - type: textarea
+    id: basis
+    attributes:
+      label: 官方 / 冻结依据
+      description: 引用官方 PDF 文件名与页码、冻结架构节点或已批准的接口文档；没有直接依据时说明为何是必要工程任务。
+      placeholder: |
+        - 官方文件与页码：
+        - 冻结架构 / 接口：
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: 范围边界
+      placeholder: |
+        In Scope:
+        - （填写）
+        Out of Scope:
+        -
+    validations:
+      required: true
+
+  - type: textarea
+    id: deliverables
+    attributes:
+      label: 交付物
+      description: 列出代码、配置、接口文档、测试与证据的确切路径或形式。
+      placeholder: |
+        - [ ] 实现：
+        - [ ] 测试：
+        - [ ] 文档：
+        - [ ] 日志 / 截图 / 报告：
+    validations:
+      required: true
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: 依赖与阻塞
+      description: 写关联 Issue、所需接口/资产/环境、提供人和最迟需要时间；无依赖写“无”。
+      placeholder: |
+        - 依赖：
+        - 输入方：
+        - 最迟需要：
+    validations:
+      required: true
+
+  - type: textarea
+    id: dod
+    attributes:
+      label: 验收标准 / Definition of Done
+      description: 每一项必须能判断通过/不通过。
+      placeholder: |
+        - [ ] Given / When / Then：
+        - [ ] 自动测试：
+        - [ ] 联调 / 复现：
+        - [ ] 文档与证据：
+    validations:
+      required: true
+
+  - type: dropdown
+    id: estimate
+    attributes:
+      label: 工作量估算
+      options:
+        - 0.5 个工作日
+        - 1 个工作日
+        - 2 个工作日
+        - 超过 2 日 — 必须拆分并在说明中解释
+    validations:
+      required: true
+
+  - type: textarea
+    id: risk
+    attributes:
+      label: 风险与备选方案
+      description: 指出最可能的技术/进度风险、预警信号及 Plan B。
+      placeholder: |
+        - 风险：
+        - 预警信号：
+        - Plan B：
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: readiness
+    attributes:
+      label: Ready 检查
+      options:
+        - label: 我已确认该任务不改变官方硬指标。
+          required: true
+        - label: 依赖、范围和验收标准足够负责人立即开工。
+          required: true
+        - label: 任务预计可在 2 个工作日内完成；否则已拆分或解释。
+          required: true

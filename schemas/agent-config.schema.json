@@ -1,0 +1,192 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://industrial-agent.local/schemas/agent-config.schema.json",
+  "title": "Industrial Agent Core Configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "config_version",
+    "verification_frames",
+    "executor_timeout_ms",
+    "recovery",
+    "safety",
+    "executors"
+  ],
+  "properties": {
+    "config_version": {
+      "type": "string",
+      "pattern": "^1\\.[0-9]+$"
+    },
+    "verification_frames": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9
+    },
+    "executor_timeout_ms": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 300000
+    },
+    "recovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_replans_per_subtask_strategy",
+        "max_switches_per_run",
+        "allow_switch_back",
+        "clear_action_queue_on_recovery",
+        "max_decisions_per_strategy_attempt"
+      ],
+      "properties": {
+        "max_replans_per_subtask_strategy": {
+          "const": 1
+        },
+        "max_switches_per_run": {
+          "const": 1
+        },
+        "allow_switch_back": {
+          "const": false
+        },
+        "clear_action_queue_on_recovery": {
+          "const": true
+        },
+        "max_decisions_per_strategy_attempt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        }
+      }
+    },
+    "safety": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action_contract_version",
+        "axis_abs_limits",
+        "workspace_min_m",
+        "workspace_max_m",
+        "max_chunk_steps"
+      ],
+      "properties": {
+        "action_contract_version": {
+          "const": "1.0"
+        },
+        "axis_abs_limits": {
+          "type": "array",
+          "minItems": 7,
+          "maxItems": 7,
+          "prefixItems": [
+            {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 1
+            }
+          ],
+          "items": false
+        },
+        "workspace_min_m": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": {
+            "type": "number"
+          }
+        },
+        "workspace_max_m": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": {
+            "type": "number"
+          }
+        },
+        "max_chunk_steps": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32
+        }
+      }
+    },
+    "executors": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "openvla_oft",
+        "pi05"
+      ],
+      "properties": {
+        "openvla_oft": {
+          "$ref": "#/$defs/executor"
+        },
+        "pi05": {
+          "$ref": "#/$defs/executor"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "artifactDigest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-fA-F]{64}$"
+    },
+    "configuredArtifactDigest": {
+      "oneOf": [
+        {
+          "const": "REPLACE_WITH_PINNED_SHA"
+        },
+        {
+          "$ref": "#/$defs/artifactDigest"
+        }
+      ]
+    },
+    "executor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "base_url",
+        "checkpoint_sha",
+        "norm_stats_sha"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "base_url": {
+          "type": "string",
+          "pattern": "^https?://"
+        },
+        "checkpoint_sha": {
+          "$ref": "#/$defs/configuredArtifactDigest"
+        },
+        "norm_stats_sha": {
+          "$ref": "#/$defs/configuredArtifactDigest"
+        }
+      }
+    }
+  }
+}

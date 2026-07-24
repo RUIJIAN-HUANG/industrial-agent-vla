@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://industrial-agent.local/schemas/task-plan.schema.json",
+  "title": "Semantic TaskPlan",
+  "description": "Semantic-only plan. Coordinates, trajectories, poses and grasp points are intentionally not representable.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "plan_version",
+    "plan_id",
+    "episode_id",
+    "task_id",
+    "subtasks"
+  ],
+  "properties": {
+    "plan_version": {
+      "type": "string",
+      "pattern": "^1\\.[0-9]+$"
+    },
+    "plan_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "episode_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "task_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "subtasks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "subtask_id",
+          "sequence",
+          "instruction",
+          "task_type",
+          "preconditions",
+          "postconditions",
+          "depends_on",
+          "repeat_until_postcondition",
+          "max_iterations",
+          "status"
+        ],
+        "properties": {
+          "subtask_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sequence": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "instruction": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "task_type": {
+            "type": "string"
+          },
+          "preconditions": {
+            "type": "array",
+            "items": {
+              "$ref": "task.schema.json#/$defs/postcondition"
+            }
+          },
+          "postconditions": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "task.schema.json#/$defs/postcondition"
+            }
+          },
+          "depends_on": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string"
+            }
+          },
+          "assigned_executor": {
+            "enum": [
+              "openvla_oft",
+              "pi05"
+            ]
+          },
+          "repeat_until_postcondition": {
+            "type": "boolean"
+          },
+          "max_iterations": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "status": {
+            "enum": [
+              "PENDING",
+              "READY",
+              "RUNNING",
+              "VERIFIED",
+              "FAILED"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

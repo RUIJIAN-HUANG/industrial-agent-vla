@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://industrial-agent.local/schemas/task.schema.json",
+  "title": "TaskSchema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "task_id",
+    "instruction",
+    "task_type",
+    "postconditions"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^1\\.[0-9]+$"
+    },
+    "task_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "instruction": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000
+    },
+    "task_type": {
+      "enum": [
+        "pick_place",
+        "object_localization",
+        "visual_manipulation",
+        "instruction_interaction",
+        "mock_demo"
+      ]
+    },
+    "target_object": {
+      "type": "string"
+    },
+    "target_location": {
+      "type": "string"
+    },
+    "preferred_executor": {
+      "enum": [
+        "openvla_oft",
+        "pi05"
+      ]
+    },
+    "constraints": {
+      "type": "object"
+    },
+    "metadata": {
+      "type": "object"
+    },
+    "postconditions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/postcondition"
+      }
+    }
+  },
+  "$defs": {
+    "postcondition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "min_confidence",
+        "required_votes"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "field_equals",
+            "numeric_range",
+            "object_detected",
+            "object_in_zone"
+          ]
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "expected": true,
+        "minimum": {
+          "type": "number"
+        },
+        "maximum": {
+          "type": "number"
+        },
+        "object_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "zone_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "min_confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "required_votes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9
+        }
+      }
+    }
+  }
+}
