@@ -509,8 +509,9 @@ def main() -> int:
         if not check_norm_stats(config, args.config_name):
             return 1
 
-    # ---- 6. 打印训练配置摘要 ----
-    print_summary(config, args.config_name, args)
+    # ---- 6. 打印训练配置摘要（--quiet 时跳过）----
+    if not args.quiet:
+        print_summary(config, args.config_name, args)
 
     # ---- 7. 调用官方训练逻辑（Python 内部 import，严禁 subprocess）----
     if not pi05_config.OPENPI_AVAILABLE:
