@@ -43,7 +43,8 @@ from __future__ import annotations
 import os as _os
 
 # 默认 0.9（方案书 §3.3 + Dockerfile.pi05 已设 0.9）；setdefault 允许外部环境变量覆盖
-_os.environ.setdefault("XLA_PYTHON_CLIENT_MEM_FRACTION", "0.9")
+_DEFAULT_MEM_FRACTION = "0.9"
+_os.environ.setdefault("XLA_PYTHON_CLIENT_MEM_FRACTION", _DEFAULT_MEM_FRACTION)
 
 # 提前探测 --quiet，避免 train_config 在 import 时打印摘要（train_config 读 PI05_QUIET）
 # 注意：必须先 import sys 才能访问 argv；此处只做字符串探测，不解析 argparse。
@@ -107,7 +108,7 @@ logger.setLevel(logging.INFO)
 # ===========================================================================
 DEFAULT_CONFIG_NAME: str = "pi05_industrial"
 DEFAULT_MOCK_EXP_NAME: str = "mock_experiment"
-DEFAULT_MEM_FRACTION: str = "0.9"
+DEFAULT_MEM_FRACTION: str = _DEFAULT_MEM_FRACTION  # S2：统一引用 L45 常量，避免重复定义
 # norm stats 文件名（与 openpi/shared/normalize.py save() 一致）
 NORM_STATS_FILENAME: str = "norm_stats.json"
 
@@ -155,7 +156,8 @@ def get_assets_dirs(config: Any, config_name: str) -> pathlib.Path:
         return pathlib.Path(assets_base).resolve() / config_name
     ad = getattr(config, "assets_dirs", None)
     if ad is not None:
-        return pathlib.Path(ad).resolve()
+        # W3 修复：使用 str() 统一处理 Path/str 两种类型，避免 Path(Path) 冗余包装
+        return pathlib.Path(str(ad)).resolve()
     # 降级（占位 config 无 assets_dirs 属性）
     return (pathlib.Path(".") / "assets" / config_name).resolve()
 
@@ -205,8 +207,10 @@ def generate_mock_norm_stats(config: Any, config_name: str) -> pathlib.Path:
 
     # 维度从 config.model 读取（红线 2：严格匹配 train_config.py 定义）
     action_dim = int(getattr(config.model, "action_dim", 7))  # 方案书 §3.4：7 维动作
-    # state 维度：Franka 7-DOF + 1 gripper = 8（convert_openpi.py DEFAULT_STATE_DIM）
-    state_dim = 8
+    # S1 修复：state 维度从 train_config 常量读取，不再硬编码
+    # Franka 7-DOF + 1 gripper = 8（convert_openpi.py DEFAULT_STATE_DIM；
+    # train_config.STATE_DIM 为唯一真相源）
+    state_dim = int(getattr(pi05_config, "STATE_DIM", 8))
 
     mock_stats = {
         "norm_stats": {
@@ -264,6 +268,7 @@ def load_openpi_train_module():
 
     # 2. 通过 openpi 包位置推断
     try:
+        # S3：此时 XLA_PYTHON_CLIENT_MEM_FRACTION 已在模块顶部（L46）设置完毕，JAX 初始化安全
         import openpi  # noqa: PLC0415
         pkg_path = pathlib.Path(openpi.__file__).resolve()
         # openpi 包结构：<repo>/src/openpi/__init__.py
@@ -309,7 +314,8 @@ def apply_overrides(config: Any, args: argparse.Namespace) -> Any:
         valid_overrides = {k: v for k, v in overrides.items() if k in valid_fields}
         skipped = {k: v for k, v in overrides.items() if k not in valid_fields}
         if skipped:
-            logger.debug("以下覆盖字段在当前 config 中不存在，已跳过: %s", list(skipped.keys()))
+            logger.warning("以下覆盖字段在当前 config 中不存在，已跳过: %s（W2 修复：升级为 WARNING 确保可见）",
+                       list(skipped.keys()))
         if not valid_overrides:
             return config
         return dataclasses.replace(config, **valid_overrides)

@@ -77,6 +77,9 @@ BASE_CHECKPOINT: str = os.environ.get(
 )
 # LoRA rank（方案书 §3.2.1；在 weight_loader / model_config 中使用）
 LORA_RANK: int = int(os.environ.get("PI05_LORA_RANK", "32"))
+# state 维度：Franka 7-DOF + 1 gripper = 8（convert_openpi.py DEFAULT_STATE_DIM；S1 修复）
+# 作为唯一真相源，供 train.py 与 compute_norm_stats.py 引用
+STATE_DIM: int = int(os.environ.get("PI05_STATE_DIM", "8"))
 
 # ----------------- 训练超参数补充（C2 修复）-----------------
 # 以下参数若 openpi 官方 TrainConfig 未直接暴露对应字段，则由 optimizer / lr_schedule 内部默认值控制；
@@ -406,5 +409,6 @@ def _print_summary() -> None:
     print("=" * 64)
 
 
-# 文件末尾打印配置摘要
-_print_summary()
+# 配置摘要不再在 import 时自动打印（W1 修复），避免与其他模块的摘要输出重复。
+# 调用方（如 train.py）在 main() 中通过自身的 print_summary() 提供完整摘要。
+# 如需单独查看 train_config 摘要，可设置 PI05_QUIET=0 并显式调用 _print_summary()。

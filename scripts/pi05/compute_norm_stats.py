@@ -35,8 +35,14 @@ CPU 兼容：--mock 用 numpy 随机数据独立运行，无 GPU / openpi / lero
     # Mock 模式（本地 CPU 验证，无需真实数据 / 无 GPU）
     python scripts/pi05/compute_norm_stats.py --mock
 
+    # Mock + 自动从 train_config 解析输出路径（C1/C2 修复）
+    python scripts/pi05/compute_norm_stats.py --mock --config-name pi05_industrial
+
     # 真实数据模式（LeRobot 数据集目录 或 canonical episode 目录 或 .npz）
     python scripts/pi05/compute_norm_stats.py --dataset-path /path/to/dataset
+
+    # 从 config 解析路径（与 train.py 提示命令对齐）
+    python scripts/pi05/compute_norm_stats.py --config-name pi05_industrial
 
     # 指定输出 + 静默（只输出结果与 SHA256）
     python scripts/pi05/compute_norm_stats.py --dataset-path /path/to/ds \\
@@ -51,6 +57,7 @@ import importlib.util
 import io
 import json
 import logging
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -103,23 +110,37 @@ except Exception:
 # action_dim 源：configs/pi05/train_config.py -> Pi0Config(action_dim=7)
 # 默认 7；真正值在 main() 中由 _load_action_dim_from_train_config() 覆写
 # （延迟到 main() 是为了在 --quiet 模式下先调整日志级别，避免泄漏进度信息）。
+# C1 修复：state_dim 不再硬编码，统一从 train_config.STATE_DIM 读取。
 ACTION_DIM: int = 7
 
 NORM_STATS_KEYS: Tuple[str, ...] = ("state", "actions")  # 官方 compute_norm_stats.py 键
-DEFAULT_STATE_DIM: int = 8  # 源：convert_openpi.py DEFAULT_STATE_DIM（Franka 7-DOF+gripper）
+NORM_STATS_FILENAME: str = "norm_stats.json"             # 与 openpi/shared/normalize.py 及 train.py 一致
 EPS: float = 1e-6           # 数值安全：std 下限（方案书要求防除零）
 MOCK_SEED: int = 42         # mock 固定种子，保证 SHA256 可复现
 
 
-def _load_action_dim_from_train_config() -> int:
-    """从 configs/pi05/train_config.py 读取 Pi0Config.action_dim（红线：维度严格按 train_config）。
+_TRAIN_CONFIG_MODULE: Any = None
+"""train_config.py 的单次加载缓存（S3/W1 修复：避免重复 importlib 加载与双份日志）。"""
 
-    动态加载文件，避免 openpi 不可用时 import 失败；加载期间抑制其自带的摘要打印。
+
+def _load_train_config_module() -> Any:
+    """加载 configs/pi05/train_config.py 并返回模块对象（全局缓存，单次加载）。
+
+    C1/C3/S3/W1 修复：集中管理真相源读取，StateDim / ActionDim / DatasetRepoId
+    均从此模块统一获取，避免硬编码与重复 importlib 加载。
+
+    加载期间抑制其自带的 _print_summary() / openpi 不可用提示输出。
     """
+    global _TRAIN_CONFIG_MODULE
+    if _TRAIN_CONFIG_MODULE is not None:
+        return _TRAIN_CONFIG_MODULE
+
     cfg_path = Path(__file__).resolve().parents[2] / "configs" / "pi05" / "train_config.py"
     if not cfg_path.exists():
-        logger.warning("未找到 %s，action_dim 回退到 7", cfg_path)
-        return 7
+        logger.warning("未找到 %s，将使用内置回退值", cfg_path)
+        _TRAIN_CONFIG_MODULE = None
+        return None
+
     buf = io.StringIO()
     try:
         spec = importlib.util.spec_from_file_location("_pi05_train_config_readonly", cfg_path)
@@ -128,20 +149,93 @@ def _load_action_dim_from_train_config() -> int:
         # 必须先注册到 sys.modules，否则 train_config.py 内的 @dataclass 装饰器
         # 在解析字段类型时会调用 sys.modules.get(cls.__module__).__dict__ 而失败。
         sys.modules[spec.name] = mod
-        # 抑制 train_config 导入时的 _print_summary / openpi 不可用提示
         with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
             spec.loader.exec_module(mod)
+        _TRAIN_CONFIG_MODULE = mod
+        logger.info("已加载 train_config.py（缓存生效）")
+        return mod
+    except Exception as e:
+        logger.warning("读取 train_config.py 失败: %s", e)
+        _TRAIN_CONFIG_MODULE = None
+        return None
+    # 注意：不清理 sys.modules 中的注册，因为 _TRAIN_CONFIG_MODULE 已缓存；
+    # 调用方（_resolve_output_path_from_config / _load_action_dim）共用同一模块。
+
+
+def _load_action_dim_from_train_config() -> int:
+    """从缓存 train_config 模块读取 Pi0Config.action_dim（红线：维度严格按 train_config）。"""
+    mod = _load_train_config_module()
+    if mod is None:
+        logger.warning("train_config 不可用，action_dim 回退到 7")
+        return 7
+    try:
         cfg = getattr(mod, "PI05_INDUSTRIAL_CONFIG", None)
         if cfg is not None and getattr(cfg, "model", None) is not None:
             dim = int(getattr(cfg.model, "action_dim", 7))
             logger.info("从 train_config.py 读取 action_dim=%d", dim)
             return dim
     except Exception as e:
-        logger.warning("读取 train_config.py 失败，action_dim 回退到 7: %s", e)
-    finally:
-        # 清理临时模块注册，避免污染调用方 sys.modules
-        sys.modules.pop("_pi05_train_config_readonly", None)
+        logger.warning("读取 action_dim 失败，回退到 7: %s", e)
     return 7
+
+
+def _load_state_dim_from_train_config() -> int:
+    """从缓存 train_config 模块读取 STATE_DIM（C1 修复：唯一真相源）。
+
+    train_config.STATE_DIM 为 state 维度唯一定义，默认 8（Franka 7-DOF+gripper）。
+    """
+    mod = _load_train_config_module()
+    if mod is None:
+        return 8
+    try:
+        return int(getattr(mod, "STATE_DIM", 8))
+    except Exception:
+        return 8
+
+
+def _resolve_output_path_from_config(config_name: str) -> Path:
+    """从 train_config.py 解析 norm_stats 默认输出路径（C1/C2/C3 修复）。
+
+    与 train.py 的 get_norm_stats_path() 保持一致：
+      <assets_dirs> / <repo_id> / norm_stats.json
+
+    优先级：
+      1. PI05_ASSETS_DIR 环境变量 → <assets>/<config_name>/<repo_id>/norm_stats.json
+      2. config.assets_dirs 属性（openpi 官方 TrainConfig property）
+      3. 降级 ./assets/<config_name>/<repo_id>/norm_stats.json
+
+    openpi 不可用时，通过 train_config 的 fallback dataclass 解析 repo_id，
+    与 train.py 降级逻辑一致。
+    """
+    mod = _load_train_config_module()
+    if mod is None:
+        logger.warning("train_config 不可用，回退到 ./norm_stats.json")
+        return Path("./norm_stats.json")
+
+    cfg = getattr(mod, "PI05_INDUSTRIAL_CONFIG", None)
+    if cfg is None:
+        logger.warning("PI05_INDUSTRIAL_CONFIG 为 None，回退到 ./norm_stats.json")
+        return Path("./norm_stats.json")
+
+    # 1. PI05_ASSETS_DIR 环境变量（与 train.py get_assets_dirs() 对齐）
+    assets_base = os.environ.get("PI05_ASSETS_DIR")
+    if assets_base:
+        assets_dirs = Path(assets_base).resolve() / config_name
+    else:
+        # 2. config.assets_dirs 属性（openpi 官方 TrainConfig property）
+        ad = getattr(cfg, "assets_dirs", None)
+        if ad is not None:
+            assets_dirs = Path(str(ad)).resolve()
+        else:
+            # 3. 降级默认
+            assets_dirs = Path(".").resolve() / "assets" / config_name
+
+    # repo_id 从 config.data 读取（与 train.py get_norm_stats_path() 对齐）
+    # C3 修复：回退值引用 train_config.DATASET_REPO_ID 常量，消除硬编码
+    repo_id = getattr(cfg.data, "repo_id", None)
+    if not repo_id:
+        repo_id = getattr(mod, "DATASET_REPO_ID", "industrial_team/industrial_dataset") or "industrial_team/industrial_dataset"
+    return (assets_dirs / repo_id / NORM_STATS_FILENAME).resolve()
 
 
 # ---------------------------------------------------------------------------
@@ -272,11 +366,78 @@ def save_norm_stats(output_path: Path, norm_stats: Dict[str, NormStats]) -> None
     output_path.write_text(serialize_norm_stats(norm_stats), encoding="utf-8")
 
 
+def _verify_output_norm_stats(output_path: Path, expected_state_dim: int, expected_action_dim: int) -> bool:
+    """输出后 QA 校验（C2 修复）：重新加载 JSON 检查完整性。
+
+    检查项：
+      - JSON 可解析且顶层结构正确
+      - state/actions 两键均存在
+      - 每个键含 mean/std/q01/q99 四字段
+      - 所有数值无 NaN/Inf
+      - 所有 std > 0
+      - state/actions 维度与期望值匹配
+
+    Returns:
+        True 表示校验通过；False 表示发现异常。
+    """
+    try:
+        raw = json.loads(output_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        logger.error("❌ 输出后 QA：无法解析 JSON: %s", e)
+        return False
+
+    ns = raw.get("norm_stats")
+    if ns is None:
+        logger.error("❌ 输出后 QA：缺少顶层 'norm_stats' 键")
+        return False
+
+    all_ok = True
+    for key, expected_dim in (("state", expected_state_dim), ("actions", expected_action_dim)):
+        entry = ns.get(key)
+        if entry is None:
+            logger.error("❌ 输出后 QA：缺少键 '%s'", key)
+            all_ok = False
+            continue
+
+        for field in ("mean", "std", "q01", "q99"):
+            arr = entry.get(field)
+            if arr is None:
+                logger.error("❌ 输出后 QA：[%s] 缺少 '%s' 字段", key, field)
+                all_ok = False
+                continue
+            arr = np.asarray(arr, dtype=np.float64)
+            if np.any(np.isnan(arr)):
+                logger.error("❌ 输出后 QA：[%s].%s 含 NaN", key, field)
+                all_ok = False
+            if np.any(np.isinf(arr)):
+                logger.error("❌ 输出后 QA：[%s].%s 含 Inf", key, field)
+                all_ok = False
+
+        # 维度匹配
+        mean_arr = np.asarray(entry["mean"], dtype=np.float64)
+        if mean_arr.shape[0] != expected_dim:
+            logger.error("❌ 输出后 QA：[%s] 维度 %d != 期望 %d", key, mean_arr.shape[0], expected_dim)
+            all_ok = False
+
+        # std > 0
+        std_arr = np.asarray(entry["std"], dtype=np.float64)
+        if np.any(std_arr <= 0):
+            logger.error("❌ 输出后 QA：[%s].std 存在 ≤0 的值: %s", key, std_arr.tolist())
+            all_ok = False
+
+    if all_ok:
+        logger.info("✅ 输出后 QA 通过：无 NaN/Inf、std>0、维度匹配（state=%d, actions=%d）",
+                    expected_state_dim, expected_action_dim)
+    else:
+        logger.error("❌ 输出后 QA 未通过，请检查输出文件: %s", output_path)
+    return all_ok
+
+
 # ---------------------------------------------------------------------------
 # SHA256 校验和（供 model_manifest.yaml，方案书 §8.5 / §7.2）
 # ---------------------------------------------------------------------------
 def compute_sha256(path: Path) -> str:
-    """计算文件 bytes 的 SHA256（64 位十六进制）。"""
+    """计算文件 bytes 的 SHA256（256位/64字符十六进制）。"""
     h = hashlib.sha256()
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(1 << 20), b""):
@@ -287,8 +448,11 @@ def compute_sha256(path: Path) -> str:
 # ---------------------------------------------------------------------------
 # Mock 数据生成（CPU 兼容验证，固定种子保证 SHA256 可复现）
 # ---------------------------------------------------------------------------
-def generate_mock_data() -> Dict[str, np.ndarray]:
+def generate_mock_data(state_dim: int, action_dim: int) -> Dict[str, np.ndarray]:
     """生成合成随机数据，模拟 Franka 7-DOF+gripper 状态与 7 维动作。
+
+    W3 修复：state_dim 与 action_dim 改为显式参数，消除对全局变量 ACTION_DIM
+    的隐式时序依赖；调用方（main()）负责从 train_config 读取后传入。
 
     构造要点（方案书 §3.3.1：检查每维分布与夹爪双峰）：
       - state[:, :7]  关节角 ~ Uniform(-pi, pi)
@@ -298,23 +462,33 @@ def generate_mock_data() -> Dict[str, np.ndarray]:
       - 附带 mask：1000 有效帧 + 100 padding 零帧，验证掩码过滤逻辑
 
     Returns:
-        {"state": [N_total, 8], "actions": [N_total, 7], "mask": [N_total]}
+        {"state": [N_total, state_dim], "actions": [N_total, action_dim], "mask": [N_total]}
     """
     rng = np.random.default_rng(MOCK_SEED)
     n_valid = 1000
     n_pad = 100
 
-    state_valid = np.zeros((n_valid, DEFAULT_STATE_DIM), dtype=np.float64)
-    state_valid[:, :7] = rng.uniform(-np.pi, np.pi, size=(n_valid, 7))
-    state_valid[:, 7] = rng.integers(0, 2, size=n_valid).astype(np.float64)
+    # state 维度：前 7 维关节角 Uniform(-pi, pi)，余下为夹爪/额外维度
+    state_valid = np.zeros((n_valid, state_dim), dtype=np.float64)
+    state_valid[:, :7] = rng.uniform(-np.pi, np.pi, size=(n_valid, min(7, state_dim)))
+    if state_dim > 7:
+        # 夹爪位（若 state_dim>7，惯例最后一维为夹爪 binary）
+        state_valid[:, 7] = rng.integers(0, 2, size=n_valid).astype(np.float64)
+        # 额外维度（如有）置零
+        if state_dim > 8:
+            state_valid[:, 8:] = 0.0
 
-    actions_valid = np.zeros((n_valid, ACTION_DIM), dtype=np.float64)
-    actions_valid[:, :6] = rng.normal(0.0, 0.05, size=(n_valid, 6))
-    actions_valid[:, 6] = rng.integers(0, 2, size=n_valid).astype(np.float64)
+    # actions 维度：前 6 维末端增量 Normal(0, 0.05)，最后一维夹爪 Bernoulli
+    actions_valid = np.zeros((n_valid, action_dim), dtype=np.float64)
+    if action_dim >= 6:
+        actions_valid[:, :6] = rng.normal(0.0, 0.05, size=(n_valid, min(6, action_dim)))
+    # 夹爪指令位（惯例最后一维）
+    if action_dim >= 1:
+        actions_valid[:, min(6, action_dim - 1)] = rng.integers(0, 2, size=n_valid).astype(np.float64)
 
     # padding 帧（全零，用 mask 标记为无效）
-    state_pad = np.zeros((n_pad, DEFAULT_STATE_DIM), dtype=np.float64)
-    actions_pad = np.zeros((n_pad, ACTION_DIM), dtype=np.float64)
+    state_pad = np.zeros((n_pad, state_dim), dtype=np.float64)
+    actions_pad = np.zeros((n_pad, action_dim), dtype=np.float64)
 
     state = np.concatenate([state_valid, state_pad], axis=0)
     actions = np.concatenate([actions_valid, actions_pad], axis=0)
@@ -415,6 +589,9 @@ def _load_from_canonical_dir(path: Path) -> Optional[Dict[str, np.ndarray]]:
     """从 canonical episode 目录读取（每个子目录含 steps.parquet / steps.hdf5）。
 
     与 convert_openpi.py 的 load_steps 字段名一致：robot_state / action。
+
+    W4 修复：补充 mask/pad_mask 字段提取，防止 canonical 格式中的 padding
+    帧污染统计量计算。
     """
     episode_dirs = [p for p in sorted(path.iterdir())
                     if p.is_dir() and (p / "meta.json").exists()]
@@ -423,6 +600,7 @@ def _load_from_canonical_dir(path: Path) -> Optional[Dict[str, np.ndarray]]:
 
     states: List[np.ndarray] = []
     actions: List[np.ndarray] = []
+    masks: List[np.ndarray] = []
 
     for ep_dir in episode_dirs:
         steps = _load_canonical_steps(ep_dir)
@@ -430,17 +608,28 @@ def _load_from_canonical_dir(path: Path) -> Optional[Dict[str, np.ndarray]]:
             continue
         states.append(np.asarray(steps["robot_state"], dtype=np.float64))
         actions.append(np.asarray(steps["action"], dtype=np.float64))
+        # W4：提取 mask 字段（若存在）
+        if "mask" in steps:
+            masks.append(np.asarray(steps["mask"], dtype=bool))
+        elif "pad_mask" in steps:
+            masks.append(np.asarray(steps["pad_mask"], dtype=bool))
 
     if not states:
         return None
-    return {
+    result: Dict[str, np.ndarray] = {
         "state": np.concatenate(states, axis=0),
         "actions": np.concatenate(actions, axis=0),
     }
+    if masks and sum(m.shape[0] for m in masks) == result["state"].shape[0]:
+        result["mask"] = np.concatenate(masks, axis=0)
+        logger.info("canonical 数据已提取 mask（%d 帧中有效掩码）", result["mask"].sum())
+    return result
 
 
 def _load_canonical_steps(episode_dir: Path) -> Optional[Dict[str, np.ndarray]]:
-    """读取单个 canonical episode 的 steps（复用 convert_openpi.py 字段名）。"""
+    """读取单个 canonical episode 的 steps（复用 convert_openpi.py 字段名）。
+
+    W4 修复：同时提取 mask/pad_mask 字段供 _load_from_canonical_dir 使用。"""
     parquet_path = episode_dir / "steps.parquet"
     hdf5_path = episode_dir / "steps.hdf5"
 
@@ -451,7 +640,12 @@ def _load_canonical_steps(episode_dir: Path) -> Optional[Dict[str, np.ndarray]]:
             action = _stack_object_array(df["action"]) if "action" in df else None
             if robot_state is None or action is None:
                 return None
-            return {"robot_state": robot_state, "action": action}
+            result: Dict[str, np.ndarray] = {"robot_state": robot_state, "action": action}
+            # W4：提取 mask/pad_mask
+            mask_col = _pick_column(df.columns, _MASK_CANDIDATES)
+            if mask_col is not None:
+                result["mask"] = np.asarray(df[mask_col].tolist(), dtype=bool)
+            return result
         except Exception as e:
             logger.warning("canonical parquet 解析失败 %s: %s", parquet_path, e)
             return None
@@ -461,10 +655,16 @@ def _load_canonical_steps(episode_dir: Path) -> Optional[Dict[str, np.ndarray]]:
             with h5py.File(hdf5_path, "r") as f:
                 if "robot_state" not in f or "action" not in f:
                     return None
-                return {
+                result = {
                     "robot_state": np.asarray(f["robot_state"], dtype=np.float64),
                     "action": np.asarray(f["action"], dtype=np.float64),
                 }
+                # W4：提取 mask/pad_mask
+                for m_key in _MASK_CANDIDATES:
+                    if m_key in f:
+                        result["mask"] = np.asarray(f[m_key], dtype=bool)
+                        break
+                return result
         except Exception as e:
             logger.warning("canonical hdf5 解析失败 %s: %s", hdf5_path, e)
             return None
@@ -535,7 +735,11 @@ def load_dataset(path: Path) -> Dict[str, np.ndarray]:
 # 维度校验（红线：维度严格按 train_config.py）
 # ---------------------------------------------------------------------------
 def validate_dimensions(data: Dict[str, np.ndarray]) -> None:
-    """校验 actions 末维 == ACTION_DIM（train_config.py）。state 维度由数据决定。"""
+    """校验 actions 末维 == ACTION_DIM（train_config.py）。state 维度合理性检查。
+
+    S2 修复：补充 state 维度合理性校验（仅 WARNING，不崩溃），防止异常维度数据
+    在无人察觉的情况下生成 norm_stats。
+    """
     actions = np.asarray(data["actions"])
     if actions.ndim < 2:
         actions = actions.reshape(-1, 1)
@@ -546,8 +750,18 @@ def validate_dimensions(data: Dict[str, np.ndarray]) -> None:
     state = np.asarray(data["state"])
     if state.ndim < 2:
         state = state.reshape(-1, 1)
+    state_dim = state.shape[1]
+    # S2：state 维度合理性检查（常见机器人 7-32 维；过小/过大警告但不崩溃）
+    _expected_state_dim = _load_state_dim_from_train_config()
+    if state_dim != _expected_state_dim:
+        logger.warning(
+            "⚠️  state 维度 %d 与 train_config.STATE_DIM=%d 不一致，请确认数据来源正确",
+            state_dim, _expected_state_dim,
+        )
+    elif state_dim < 7 or state_dim > 32:
+        logger.warning("⚠️  state 维度 %d 超出常见范围 [7, 32]，请核查", state_dim)
     logger.info("维度校验通过：state[D=%d] actions[D=%d]（action_dim 源 train_config.py）",
-                state.shape[1], actions.shape[1])
+                state_dim, actions.shape[1])
 
 
 # ---------------------------------------------------------------------------
@@ -590,8 +804,13 @@ def parse_args() -> argparse.Namespace:
              "启用 --mock 时可选；未启用 --mock 时必填。",
     )
     parser.add_argument(
-        "--output-path", default="./norm_stats.json",
-        help="输出 JSON 路径（openpi NormStats 标准格式）。",
+        "--config-name", default="pi05_industrial",
+        help="配置名称（C1/C2 修复：用于解析 norm_stats 默认输出路径，"
+             "需 train_config.py 中已定义。默认 pi05_industrial）。",
+    )
+    parser.add_argument(
+        "--output-path", default=None,
+        help="输出 JSON 路径。未指定时从 train_config 按 --config-name 自动解析。",
     )
     parser.add_argument(
         "--mock", action="store_true",
@@ -619,15 +838,25 @@ def main() -> int:
     if args.quiet:
         logger.setLevel(logging.WARNING)
 
-    # ---- 0. 从 train_config.py 读取 action_dim（红线：维度严格按 train_config）----
+    # ---- 0a. 解析输出路径（C1/C2 修复：从 train_config 自动推导）----
+    if args.output_path is None:
+        args.output_path = str(_resolve_output_path_from_config(args.config_name))
+        logger.info("从 config 解析输出路径: %s", args.output_path)
+
+    # ---- 0b. 从 train_config.py 读取维度（红线：维度严格按 train_config）----
     # 延迟到此处（日志级别已按 --quiet 调整），避免静默模式泄漏进度信息。
+    # C1/W3 修复：state_dim 也从 train_config 读取，不再硬编码。
     global ACTION_DIM
     ACTION_DIM = _load_action_dim_from_train_config()
+    _state_dim = _load_state_dim_from_train_config()
+    logger.info("真相源维度：action_dim=%d state_dim=%d（源 train_config.py）", ACTION_DIM, _state_dim)
 
     # ---- 1. 加载数据 ----
-    if args.mock:
+    is_mock = bool(args.mock)
+    if is_mock:
         logger.info("【Mock 模式】使用 numpy 合成随机数据（CPU 兼容验证）")
-        data = generate_mock_data()
+        # W3 修复：state_dim、action_dim 作为显式参数传入，消除隐式时序依赖
+        data = generate_mock_data(state_dim=_state_dim, action_dim=ACTION_DIM)
     else:
         assert args.dataset_path is not None  # parse_args 已保证
         data = load_dataset(Path(args.dataset_path))
@@ -663,6 +892,14 @@ def main() -> int:
     save_norm_stats(output_path, norm_stats)
     logger.info("已保存 norm_stats JSON: %s", output_path)
 
+    # ---- 4a. 输出后 QA 校验（C2 修复：检测 NaN/Inf/std>0/维度匹配）----
+    # 从实际数据推断 state 维度用于校验
+    _actual_state_dim = stats_by_key["state"]["mean"].shape[0]
+    _actual_action_dim = stats_by_key["actions"]["mean"].shape[0]
+    if not _verify_output_norm_stats(output_path, _actual_state_dim, _actual_action_dim):
+        logger.critical("输出后 QA 未通过，返回值非零，请检查输出文件！")
+        return 1
+
     # ---- 5. SHA256 校验和（供 model_manifest.yaml，方案书 §8.5 / §7.2）----
     sha256_full = compute_sha256(output_path)
     sha256_short = sha256_full[:16]  # 与 src/executors/pi05.py 的 _norm_stats_sha 截断一致
@@ -675,13 +912,26 @@ def main() -> int:
         print(f"输出文件: {output_path}")
         print(f"统计键: {list(stats_by_key.keys())}")
 
+    # ---- 6a. Mock 模式标注（W2 修复）----
+    if is_mock:
+        mock_banner = (
+            "\n"
+            "  +==============================================================+\n"
+            "  |  [MOCK] Mock 模式生成 -- 仅供算子校验，不得用于正式训练    |\n"
+            "  +==============================================================+"
+        )
+
     print()
     print("=" * 72)
     print("归一化统计量计算完成")
+    if is_mock:
+        print(mock_banner)
     print("=" * 72)
     print(f"output_path      = {output_path}")
     print(f"sha256 (full)    = {sha256_full}")
     print(f"sha256 (前16位)  = {sha256_short}  (与 pi05.py norm_stats_sha 截断一致)")
+    if is_mock:
+        print("[MOCK] 注意：此文件为 Mock 模式生成，仅供算子校验，不得用于正式训练。")
     print("=" * 72)
     print("下一步：将该 SHA256 写入 model_manifest.yaml（方案书 §8.5）；")
     print("       训练时设置 PI05_NORM_STATS_PATH 指向此文件（src/executors/pi05.py 追溯）。")
