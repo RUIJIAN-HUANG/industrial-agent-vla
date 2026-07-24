@@ -11,8 +11,7 @@
 校验示例：
 
 ```powershell
-Get-FileHash docs/official/XH-202607_competition_spec.pdf -Algorithm SHA256
-Get-FileHash docs/official/XH-202607_official_QA.pdf -Algorithm SHA256
+python scripts/verify_official_baselines.py
 ```
 
 若校验值不一致，立即停止需求变更和正式实验，由项目负责人 A 恢复基线。

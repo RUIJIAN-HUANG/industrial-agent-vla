@@ -13,6 +13,7 @@ from .contracts import (
     TaskPlan,
     TaskSchema,
 )
+from .executor import build_executors_from_config
 from .fsm import AgentState
 from .orchestrator import IndustrialAgent, RunResult
 
@@ -31,4 +32,5 @@ __all__ = [
     "SubtaskStatus",
     "TaskPlan",
     "TaskSchema",
+    "build_executors_from_config",
 ]

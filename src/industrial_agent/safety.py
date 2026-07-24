@@ -105,8 +105,7 @@ class ActionSafetyValidator:
             return SafetyDecision(
                 False,
                 FailureCode.ACTION_CONTRACT_INVALID,
-                f"chunk has {len(chunk.steps)} steps; maximum is "
-                f"{self.policy.max_chunk_steps}",
+                f"chunk has {len(chunk.steps)} steps; maximum is {self.policy.max_chunk_steps}",
             )
         robot = observation.data.get("robot", {})
         if not isinstance(robot, Mapping):

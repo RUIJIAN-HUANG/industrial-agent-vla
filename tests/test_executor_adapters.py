@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
 import unittest
+from copy import deepcopy
+from pathlib import Path
 from typing import Any, Mapping
 
 from industrial_agent.contracts import Postcondition, TaskSchema
@@ -9,10 +12,16 @@ from industrial_agent.executor import (
     ExecutionContext,
     OpenVLAOFTAdapter,
     Pi05Adapter,
+    build_executors_from_config,
 )
 from industrial_agent.observation import ObservationGateway
 
 from tests.test_contracts_and_observation import raw_observation
+
+CHECKPOINT_SHA = f"sha256:{'1' * 64}"
+NORM_STATS_SHA = f"sha256:{'2' * 64}"
+OTHER_CHECKPOINT_SHA = f"sha256:{'3' * 64}"
+OTHER_NORM_STATS_SHA = f"sha256:{'4' * 64}"
 
 
 class EchoTransport:
@@ -20,8 +29,8 @@ class EchoTransport:
         self,
         *,
         service: str = "openvla_oft",
-        checkpoint_sha: str = "checkpoint-1",
-        norm_stats_sha: str = "norm-1",
+        checkpoint_sha: str = CHECKPOINT_SHA,
+        norm_stats_sha: str = NORM_STATS_SHA,
         corrupt_trace: bool = False,
         health_overrides: Mapping[str, Any] | None = None,
         chunk_overrides: Mapping[str, Any] | None = None,
@@ -156,7 +165,7 @@ class ExecutorAdapterTests(unittest.TestCase):
     def test_openvla_request_and_canonical_response(self) -> None:
         transport = EchoTransport()
         adapter = OpenVLAOFTAdapter(
-            transport, checkpoint_sha="checkpoint-1", norm_stats_sha="norm-1"
+            transport, checkpoint_sha=CHECKPOINT_SHA, norm_stats_sha=NORM_STATS_SHA
         )
         result = adapter.plan(task(), self.observation, self.context)
         self.assertEqual(result.chunk_id, "canonical-chunk")
@@ -172,7 +181,7 @@ class ExecutorAdapterTests(unittest.TestCase):
     def test_cancel_reuses_run_and_subtask_correlation(self) -> None:
         transport = EchoTransport()
         adapter = OpenVLAOFTAdapter(
-            transport, checkpoint_sha="checkpoint-1", norm_stats_sha="norm-1"
+            transport, checkpoint_sha=CHECKPOINT_SHA, norm_stats_sha=NORM_STATS_SHA
         )
         active_task = task()
         adapter.plan(active_task, self.observation, self.context)
@@ -186,11 +195,13 @@ class ExecutorAdapterTests(unittest.TestCase):
     def test_pi05_request_contains_prompt_and_observation(self) -> None:
         transport = EchoTransport(
             service="pi05",
-            checkpoint_sha="checkpoint-2",
-            norm_stats_sha="norm-2",
+            checkpoint_sha=OTHER_CHECKPOINT_SHA,
+            norm_stats_sha=OTHER_NORM_STATS_SHA,
         )
         adapter = Pi05Adapter(
-            transport, checkpoint_sha="checkpoint-2", norm_stats_sha="norm-2"
+            transport,
+            checkpoint_sha=OTHER_CHECKPOINT_SHA,
+            norm_stats_sha=OTHER_NORM_STATS_SHA,
         )
         result = adapter.plan(task(), self.observation, self.context)
         self.assertEqual(len(result.steps), 1)
@@ -203,8 +214,8 @@ class ExecutorAdapterTests(unittest.TestCase):
     def test_response_correlation_mismatch_is_rejected(self) -> None:
         adapter = OpenVLAOFTAdapter(
             EchoTransport(corrupt_trace=True),
-            checkpoint_sha="checkpoint-1",
-            norm_stats_sha="norm-1",
+            checkpoint_sha=CHECKPOINT_SHA,
+            norm_stats_sha=NORM_STATS_SHA,
         )
         with self.assertRaises(ExecutorError) as caught:
             adapter.plan(task(), self.observation, self.context)
@@ -226,8 +237,8 @@ class ExecutorAdapterTests(unittest.TestCase):
             with self.subTest(adapter=service, field="valid"):
                 adapter = adapter_type(
                     EchoTransport(service=service),
-                    checkpoint_sha="checkpoint-1",
-                    norm_stats_sha="norm-1",
+                    checkpoint_sha=CHECKPOINT_SHA,
+                    norm_stats_sha=NORM_STATS_SHA,
                 )
                 self.assertTrue(adapter.health())
             for field, value in bad_health:
@@ -237,8 +248,8 @@ class ExecutorAdapterTests(unittest.TestCase):
                             service=service,
                             health_overrides={field: value},
                         ),
-                        checkpoint_sha="checkpoint-1",
-                        norm_stats_sha="norm-1",
+                        checkpoint_sha=CHECKPOINT_SHA,
+                        norm_stats_sha=NORM_STATS_SHA,
                     )
                     self.assertFalse(adapter.health())
 
@@ -265,8 +276,8 @@ class ExecutorAdapterTests(unittest.TestCase):
                             service=service,
                             chunk_overrides={field: value},
                         ),
-                        checkpoint_sha="checkpoint-1",
-                        norm_stats_sha="norm-1",
+                        checkpoint_sha=CHECKPOINT_SHA,
+                        norm_stats_sha=NORM_STATS_SHA,
                     )
                     with self.assertRaises(ExecutorError) as caught:
                         adapter.plan(task(), self.observation, self.context)
@@ -292,8 +303,8 @@ class ExecutorAdapterTests(unittest.TestCase):
                             response_status=status,
                             error_code=code.value,
                         ),
-                        checkpoint_sha="checkpoint-1",
-                        norm_stats_sha="norm-1",
+                        checkpoint_sha=CHECKPOINT_SHA,
+                        norm_stats_sha=NORM_STATS_SHA,
                     )
                     with self.assertRaises(ExecutorError) as caught:
                         adapter.plan(task(), self.observation, self.context)
@@ -312,12 +323,87 @@ class ExecutorAdapterTests(unittest.TestCase):
                     ]
                 }
             ),
-            checkpoint_sha="checkpoint-1",
-            norm_stats_sha="norm-1",
+            checkpoint_sha=CHECKPOINT_SHA,
+            norm_stats_sha=NORM_STATS_SHA,
         )
         with self.assertRaises(ExecutorError) as caught:
             adapter.plan(task(), self.observation, self.context)
         self.assertEqual(caught.exception.code, FailureCode.EXECUTOR_BAD_RESPONSE)
+
+    def test_executor_factory_consumes_configured_urls_and_artifact_ids(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        config = json.loads(
+            (root / "configs" / "agent.default.json").read_text(encoding="utf-8")
+        )
+        digest_pairs = {
+            "openvla_oft": (CHECKPOINT_SHA, NORM_STATS_SHA),
+            "pi05": (OTHER_CHECKPOINT_SHA, OTHER_NORM_STATS_SHA),
+        }
+        for name, raw in config["executors"].items():
+            raw["checkpoint_sha"], raw["norm_stats_sha"] = digest_pairs[name]
+
+        calls: list[tuple[str, str]] = []
+
+        def factory(name: str, base_url: str) -> EchoTransport:
+            calls.append((name, base_url))
+            raw = config["executors"][name]
+            return EchoTransport(
+                service=name,
+                checkpoint_sha=raw["checkpoint_sha"],
+                norm_stats_sha=raw["norm_stats_sha"],
+            )
+
+        executors = build_executors_from_config(config, factory)
+        self.assertEqual(
+            calls,
+            [
+                ("openvla_oft", "http://127.0.0.1:8101"),
+                ("pi05", "http://127.0.0.1:8102"),
+            ],
+        )
+        self.assertEqual(
+            [item.descriptor.name for item in executors],
+            ["openvla_oft", "pi05"],
+        )
+
+    def test_executor_factory_rejects_unpinned_artifacts(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        config = json.loads(
+            (root / "configs" / "agent.default.json").read_text(encoding="utf-8")
+        )
+        config = deepcopy(config)
+        with self.assertRaisesRegex(ValueError, "64 hexadecimal"):
+            build_executors_from_config(
+                config,
+                lambda name, base_url: EchoTransport(service=name),
+            )
+
+    def test_adapters_and_factory_reject_mutable_artifact_aliases(self) -> None:
+        with self.assertRaisesRegex(ValueError, "64 hexadecimal"):
+            OpenVLAOFTAdapter(
+                EchoTransport(),
+                checkpoint_sha="latest00",
+                norm_stats_sha=NORM_STATS_SHA,
+            )
+        with self.assertRaisesRegex(ValueError, "64 hexadecimal"):
+            OpenVLAOFTAdapter(
+                EchoTransport(),
+                checkpoint_sha="REPLACE_WITH_PINNED_SHA",
+                norm_stats_sha=NORM_STATS_SHA,
+                task_types=frozenset({"mock_demo"}),
+            )
+
+        root = Path(__file__).resolve().parents[1]
+        config = json.loads(
+            (root / "configs" / "agent.default.json").read_text(encoding="utf-8")
+        )
+        config["executors"]["openvla_oft"]["checkpoint_sha"] = "latest00"
+        config["executors"]["openvla_oft"]["norm_stats_sha"] = "version1"
+        with self.assertRaisesRegex(ValueError, "64 hexadecimal"):
+            build_executors_from_config(
+                config,
+                lambda name, base_url: EchoTransport(service=name),
+            )
 
 
 if __name__ == "__main__":

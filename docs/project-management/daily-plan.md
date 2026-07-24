@@ -94,6 +94,7 @@
 
 ```powershell
 python scripts/verify_official_baselines.py
+python scripts/verify_project_frozen_inputs.py
 python -m ruff format --check .
 python -m ruff check .
 python -m pytest -q

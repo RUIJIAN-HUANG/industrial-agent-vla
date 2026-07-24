@@ -39,11 +39,11 @@
     },
     "checkpoint_sha": {
       "type": "string",
-      "minLength": 7
+      "pattern": "^sha256:[0-9a-fA-F]{64}$"
     },
     "norm_stats_sha": {
       "type": "string",
-      "minLength": 7
+      "pattern": "^sha256:[0-9a-fA-F]{64}$"
     },
     "supported_task_types": {
       "type": "array",

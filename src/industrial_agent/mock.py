@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from time import time_ns
 from typing import Literal
@@ -21,12 +22,14 @@ MockScenario = Literal["success", "recovery", "switch", "system_fault"]
 
 class MockExecutor:
     def __init__(self, name: str, dx_m: float):
+        checkpoint_sha = hashlib.sha256(f"{name}:checkpoint".encode()).hexdigest()
+        norm_stats_sha = hashlib.sha256(f"{name}:norm-stats".encode()).hexdigest()
         self.descriptor = ExecutorDescriptor(
             name=name,
             task_types=frozenset({"mock_demo"}),
             action_contract_version=ACTION_CONTRACT_VERSION,
-            checkpoint_sha=f"mock-{name}-checkpoint-sha",
-            norm_stats_sha=f"mock-{name}-norm-stats-sha",
+            checkpoint_sha=f"sha256:{checkpoint_sha}",
+            norm_stats_sha=f"sha256:{norm_stats_sha}",
         )
         self.dx_m = dx_m
         self.plan_calls = 0

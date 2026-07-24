@@ -78,8 +78,8 @@
 
 | Deliverable ID | 官方依据 | 必须包含 | 仓库/交付位置 | 验收 |
 |---|---|---|---|---|
-| DEL-01 | SRC-02 p3 Q9.1 | 感知、决策、执行最终推理代码与训练/微调模型；模块可独立运行并输出结果 | `src/`、`scripts/`、`models/MANIFEST.md` | 干净环境 smoke |
-| DEL-02 | SRC-02 p3 Q9.2 | 完整训练代码、预训练权重来源、工业数据/生成式数据说明 | `training/` 或对应脚本、`data/` 清单 | 小样本训练 smoke |
+| DEL-01 | SRC-02 p3 Q9.1 | 感知、决策、执行最终推理代码与训练/微调模型；模块可独立运行并输出结果 | `src/`、`services/`、`scripts/`、`models/MANIFEST.md` | 干净环境 smoke |
+| DEL-02 | SRC-02 p3 Q9.2 | 完整训练代码、预训练权重来源、工业数据/生成式数据说明 | `services/openvla_oft/`、`services/pi05/`、`data/` 清单 | 小样本训练 smoke |
 | DEL-03 | SRC-02 p3 Q9.3 | Docker/打包环境、场景与仿真 Python 必要文件 | `simulation/`、容器与版本清单 | headless 固定 seed |
 | DEL-04 | SRC-01 p4；SRC-02 p4 Q9.4 | 从自然语言输入到任务序列/执行的仿真验证视频；真机视频可附 | 外部视频清单 + `reports/evidence-index.md` | 完整播放和哈希 |
 | DEL-05 | SRC-01 p4；SRC-02 p4 Q9.5 | 总体方案、模块设计、创新、测试；重点说明开放域感知、决策、微调和 Agent | `reports/technical-report.*` | 评分项反查 |

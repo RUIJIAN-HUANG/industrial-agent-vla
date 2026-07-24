@@ -8,8 +8,8 @@
 # /src/industrial_agent/                 @<member-a>
 # /simulation/                           @<member-b>
 # /data/                                 @<member-c>
-# /src/openvla_oft/                      @<member-d>
-# /src/pi05/                             @<member-e>
+# /services/openvla_oft/                 @<member-d>
+# /services/pi05/                        @<member-e>
 # /tests/                                @<member-f>
 # /.github/                              @<member-a> @<member-f>
 # /docs/official/                        @<member-a>

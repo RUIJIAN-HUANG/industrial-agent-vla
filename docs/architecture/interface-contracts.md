@@ -196,8 +196,8 @@ JSON Schema：`schemas/executor-health.schema.json`
   "service_version": "0.1.0",
   "status": "ready",
   "uptime_ms": 183420,
-  "checkpoint_sha": "sha256:8c14...",
-  "norm_stats_sha": "sha256:a930...",
+  "checkpoint_sha": "sha256:8c148c148c148c148c148c148c148c148c148c148c148c148c148c148c148c14",
+  "norm_stats_sha": "sha256:a930a930a930a930a930a930a930a930a930a930a930a930a930a930a930a930",
   "supported_task_types": [
     "object_localization",
     "pick_place",
@@ -252,8 +252,8 @@ JSON Schema：`schemas/executor-infer.schema.json#/$defs/request`
   "observation_id": "obs-1029",
   "deadline_ms": 15000,
   "executor": "openvla_oft",
-  "checkpoint_sha": "sha256:8c14...",
-  "norm_stats_sha": "sha256:a930...",
+  "checkpoint_sha": "sha256:8c148c148c148c148c148c148c148c148c148c148c148c148c148c148c148c14",
+  "norm_stats_sha": "sha256:a930a930a930a930a930a930a930a930a930a930a930a930a930a930a930a930",
   "expected_action_contract": "1.0",
   "model_input": {}
 }
@@ -393,8 +393,8 @@ JSON Schema：`schemas/executor-infer.schema.json#/$defs/response`
   "step_id": 0,
   "observation_id": "obs-1029",
   "executor": "openvla_oft",
-  "checkpoint_sha": "sha256:8c14...",
-  "norm_stats_sha": "sha256:a930...",
+  "checkpoint_sha": "sha256:8c148c148c148c148c148c148c148c148c148c148c148c148c148c148c148c14",
+  "norm_stats_sha": "sha256:a930a930a930a930a930a930a930a930a930a930a930a930a930a930a930a930",
   "status": "ok",
   "action_chunk": {
     "contract_version": "1.0",
@@ -790,6 +790,11 @@ AND executor name exact match
 ```
 
 任意一项不满足都不能执行动作。
+
+部署时，`build_executors_from_config(config, transport_factory)` 必须消费配置中的
+`base_url` 并构建对应 transport；`IndustrialAgent.from_config(...)` 随后对实际
+descriptor 的 executor name、动作合同、checkpoint SHA 和 norm stats SHA 做精确
+启动校验。禁止在 transport 内静默改写配置 URL，也禁止用服务响应覆盖期望摘要。
 
 ### 14.3 变更流程
 

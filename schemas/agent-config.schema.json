@@ -76,20 +76,37 @@
           "minItems": 7,
           "maxItems": 7,
           "prefixItems": [
-            {},
-            {},
-            {},
-            {},
-            {},
-            {},
             {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            {
+              "type": "number",
+              "exclusiveMinimum": 0,
               "maximum": 1
             }
           ],
-          "items": {
-            "type": "number",
-            "exclusiveMinimum": 0
-          }
+          "items": false
         },
         "workspace_min_m": {
           "type": "array",
@@ -132,6 +149,20 @@
     }
   },
   "$defs": {
+    "artifactDigest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-fA-F]{64}$"
+    },
+    "configuredArtifactDigest": {
+      "oneOf": [
+        {
+          "const": "REPLACE_WITH_PINNED_SHA"
+        },
+        {
+          "$ref": "#/$defs/artifactDigest"
+        }
+      ]
+    },
     "executor": {
       "type": "object",
       "additionalProperties": false,
@@ -146,12 +177,10 @@
           "pattern": "^https?://"
         },
         "checkpoint_sha": {
-          "type": "string",
-          "minLength": 7
+          "$ref": "#/$defs/configuredArtifactDigest"
         },
         "norm_stats_sha": {
-          "type": "string",
-          "minLength": 7
+          "$ref": "#/$defs/configuredArtifactDigest"
         }
       }
     }

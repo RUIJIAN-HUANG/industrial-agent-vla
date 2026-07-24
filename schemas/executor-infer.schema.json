@@ -61,11 +61,11 @@
         },
         "checkpoint_sha": {
           "type": "string",
-          "minLength": 7
+          "pattern": "^sha256:[0-9a-fA-F]{64}$"
         },
         "norm_stats_sha": {
           "type": "string",
-          "minLength": 7
+          "pattern": "^sha256:[0-9a-fA-F]{64}$"
         },
         "expected_action_contract": {
           "const": "1.0"
@@ -126,10 +126,12 @@
           ]
         },
         "checkpoint_sha": {
-          "type": "string"
+          "type": "string",
+          "pattern": "^sha256:[0-9a-fA-F]{64}$"
         },
         "norm_stats_sha": {
-          "type": "string"
+          "type": "string",
+          "pattern": "^sha256:[0-9a-fA-F]{64}$"
         },
         "status": {
           "enum": [

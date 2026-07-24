@@ -107,8 +107,8 @@ class OrchestratorTests(unittest.TestCase):
                     name="openvla_oft",
                     task_types=frozenset({"mock_demo"}),
                     action_contract_version=ACTION_CONTRACT_VERSION,
-                    checkpoint_sha="mock-checkpoint",
-                    norm_stats_sha="mock-norm",
+                    checkpoint_sha=f"sha256:{'c' * 64}",
+                    norm_stats_sha=f"sha256:{'d' * 64}",
                 )
                 self.observation_ids: list[str] = []
 

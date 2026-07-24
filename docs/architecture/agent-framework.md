@@ -359,10 +359,12 @@ python scripts/run_mock_demo.py
 python -m unittest discover -s tests -v
 ```
 
-`configs/agent.default.json` 通过
-`IndustrialAgent.from_config(executors, config)` 加载；其机器约束见
-`schemas/agent-config.schema.json`。代码会拒绝打开回切、增加切换次数或
-关闭恢复清队列等破坏冻结不变量的配置。
+`configs/agent.default.json` 的部署 URL 通过
+`build_executors_from_config(config, transport_factory)` 绑定到独立进程 transport；
+随后由 `IndustrialAgent.from_config(executors, config)` 加载核心参数并精确比对
+执行器名称、动作合同、checkpoint SHA 与 norm stats SHA。其机器约束见
+`schemas/agent-config.schema.json`。代码会拒绝未固定摘要、执行器身份漂移、打开
+回切、增加切换次数或关闭恢复清队列等破坏冻结不变量的配置。
 
 Mock 的预期结果：
 

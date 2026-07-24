@@ -122,8 +122,7 @@ class ObservationGateway:
         if unknown:
             raise ObservationError(
                 FailureCode.OBSERVATION_INVALID,
-                f"online observation contains non-allowlisted fields: "
-                f"{sorted(unknown)}",
+                f"online observation contains non-allowlisted fields: {sorted(unknown)}",
             )
         missing = REQUIRED_TOP_LEVEL_FIELDS - set(raw)
         if missing:

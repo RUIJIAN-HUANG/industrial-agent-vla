@@ -25,7 +25,7 @@
 
 | Story | User Story / 结果 | Owner / Support | 截止 | 交付 | Definition of Done |
 |---|---|---|---|---|---|
-| GOV-01 | 作为队长，我要把官方条款映射到需求/评分/提交物，使任何范围决定可追溯 | A/F | D01 | `official-requirements-baseline.md`、Issue 标签 | 5 个冻结输入哈希通过；所有 P0 需求有 owner、证据类型和 Gate |
+| GOV-01 | 作为队长，我要把官方条款映射到需求/评分/提交物，使任何范围决定可追溯 | A/F | D01 | `official-requirements-baseline.md`、Issue 标签 | 2 个官方源和 3 个项目冻结快照分别校验通过；所有 P0 需求有 owner、证据类型和 Gate |
 | GOV-02 | 作为团队成员，我要用同一 Git 流程交付，避免 main 污染和文件丢失 | A/F/全员 | D01 | Guide、CONTRIBUTING、模板、CI | 六人可 clone/push；每人一个 Draft PR；main 禁止直推 |
 | SIM-01 | 作为仿真人员，我要证明唯一平台可稳定 headless 运行 | B/F | D02 | 平台矩阵、1000 步日志、3 次重启、相机样本 | G0 通过；失败则当晚切回退并删除另一主线 |
 | SIM-02 | 作为策略开发者，我需要稳定的 L0 教师环境，以便先验证物理和控制 | B/C/F | D06 | Franka/夹爪/圆柱/料箱场景、50 局报告 | 成功率 >=90%；无穿模/爆炸/越界；失败均有错误码 |

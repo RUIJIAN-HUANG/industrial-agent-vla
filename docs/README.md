@@ -11,6 +11,7 @@
 
 优先入口：
 
+- [仓库目录与文件规范](repository-structure.md)
 - [官方需求不可变基线](requirements/official-requirements-baseline.md)
 - [D01-D40 逐日计划](project-management/daily-plan.md)
 - [GitHub 协作指南](project-management/github-collaboration-guide.md)

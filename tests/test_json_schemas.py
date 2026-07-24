@@ -8,6 +8,9 @@ from pathlib import Path
 from jsonschema import Draft202012Validator, ValidationError
 from referencing import Registry, Resource
 
+CHECKPOINT_SHA = f"sha256:{'a' * 64}"
+NORM_STATS_SHA = f"sha256:{'b' * 64}"
+
 
 class JsonSchemaTests(unittest.TestCase):
     @classmethod
@@ -32,6 +35,51 @@ class JsonSchemaTests(unittest.TestCase):
             (self.root / "configs" / "agent.default.json").read_text(encoding="utf-8")
         )
         Draft202012Validator(schema).validate(config)
+
+    def test_agent_config_rejects_invalid_axis_limits(self) -> None:
+        schema = json.loads(
+            (self.root / "schemas" / "agent-config.schema.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        config = json.loads(
+            (self.root / "configs" / "agent.default.json").read_text(encoding="utf-8")
+        )
+        invalid_limits = (
+            ["bad", False, None, {}, [], -999, "also-bad"],
+            [0.05, 0.05, 0.05, 0.25, 0.25, 0.25, 1.01],
+            [0.05, 0.05, 0.05, 0.25, 0.0, 0.25, 1.0],
+        )
+        validator = Draft202012Validator(schema)
+        for limits in invalid_limits:
+            invalid = deepcopy(config)
+            invalid["safety"]["axis_abs_limits"] = limits
+            with self.subTest(limits=limits):
+                with self.assertRaises(ValidationError):
+                    validator.validate(invalid)
+
+    def test_agent_config_rejects_mutable_artifact_aliases(self) -> None:
+        schema = json.loads(
+            (self.root / "schemas" / "agent-config.schema.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        config = json.loads(
+            (self.root / "configs" / "agent.default.json").read_text(encoding="utf-8")
+        )
+        validator = Draft202012Validator(schema)
+
+        valid = deepcopy(config)
+        valid["executors"]["openvla_oft"]["checkpoint_sha"] = CHECKPOINT_SHA
+        valid["executors"]["openvla_oft"]["norm_stats_sha"] = NORM_STATS_SHA
+        validator.validate(valid)
+
+        for alias in ("latest00", "version1", "sha256:abc", "a" * 40):
+            invalid = deepcopy(valid)
+            invalid["executors"]["openvla_oft"]["checkpoint_sha"] = alias
+            with self.subTest(alias=alias):
+                with self.assertRaises(ValidationError):
+                    validator.validate(invalid)
 
     def test_executor_response_resolves_action_chunk_reference(self) -> None:
         loaded = [
@@ -59,8 +107,8 @@ class JsonSchemaTests(unittest.TestCase):
             "step_id": 0,
             "observation_id": "obs-1",
             "executor": "openvla_oft",
-            "checkpoint_sha": "sha256:checkpoint",
-            "norm_stats_sha": "sha256:norm",
+            "checkpoint_sha": CHECKPOINT_SHA,
+            "norm_stats_sha": NORM_STATS_SHA,
             "status": "ok",
             "action_chunk": {
                 "contract_version": "1.0",
@@ -89,6 +137,10 @@ class JsonSchemaTests(unittest.TestCase):
         invalid_gripper["action_chunk"]["steps"][0]["values"][6] = 2.0
         with self.assertRaises(ValidationError):
             validator.validate(invalid_gripper)
+        mutable_alias = deepcopy(response)
+        mutable_alias["checkpoint_sha"] = "latest00"
+        with self.assertRaises(ValidationError):
+            validator.validate(mutable_alias)
 
 
 if __name__ == "__main__":

@@ -17,7 +17,8 @@ OpenVLA-OFT、π0.5、Isaac/Gazebo、工业数据和真机均尚未集成。**
   [`docs/official/`](docs/official/)。
 - 最终架构图与 A-F 分工图保存在 [`docs/assets/`](docs/assets/)。
 - 初版方案 DOCX 仅是可修订参考，保存在 [`docs/source/`](docs/source/)。
-- 运行 `python scripts/verify_official_baselines.py` 校验五个冻结输入的 SHA-256。
+- 运行 `python scripts/verify_official_baselines.py` 校验唯二官方 PDF；
+  `python scripts/verify_project_frozen_inputs.py` 单独校验两张冻结图和初版 DOCX 快照。
 - 冲突、评分和六项提交物的工程化索引见
   [官方需求基线](docs/requirements/official-requirements-baseline.md)。
 
@@ -29,9 +30,10 @@ OpenVLA-OFT、π0.5、Isaac/Gazebo、工业数据和真机均尚未集成。**
 |---|---|
 | 查看 D01-D40 任务、Gate 和降级点 | [40 天逐日计划](docs/project-management/daily-plan.md) |
 | 查看 Epic/User Story/Task 分解 | [项目 WBS](docs/project-management/wbs.md) |
-| 查看明日 A-F 任务 | [D01 任务公告](docs/project-management/daily/2026-07-25-D01.md) |
+| 查看每日 A-F 任务 | [每日任务公告索引](docs/project-management/daily/README.md) |
 | 查看每日 09:00 自动发布规则 | [每日任务自动化](docs/project-management/daily-task-automation.md) |
 | 学习 clone、分支、提交、PR、冲突处理 | [GitHub 协作指南](docs/project-management/github-collaboration-guide.md) |
+| 判断代码、模型、数据和报告应放哪里 | [仓库目录与文件规范](docs/repository-structure.md) |
 | 查看团队的 Issue/PR/DoD 规则 | [CONTRIBUTING.md](CONTRIBUTING.md) |
 | 查看总 Agent 设计 | [Agent 架构文档](docs/architecture/agent-framework.md) |
 | 对接 D/E/B/F 服务 | [极详细接口契约](docs/architecture/interface-contracts.md) |
@@ -49,6 +51,17 @@ python -m pip install -e ".[test]"
 python scripts/run_mock_demo.py
 python -m unittest discover -s tests -v
 python scripts/verify_official_baselines.py
+python scripts/verify_project_frozen_inputs.py
+```
+
+macOS/Linux 使用：
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e ".[test]"
+python scripts/run_mock_demo.py
+python -m pytest -q
 ```
 
 演示会依次跑成功、同策略恢复和执行器切换三个场景。它用于验证编排合同，
@@ -61,6 +74,7 @@ python -m pip install -e ".[test]"
 python -m ruff format --check .
 python -m ruff check .
 python -m pytest -q
+python scripts/check_repository_hygiene.py
 git diff --check
 ```
 
@@ -106,3 +120,9 @@ B-F 姓名与 GitHub 用户名必须由 A 确认后再启用 CODEOWNERS；不得
 
 完整管理规则见
 [项目管理执行指南](docs/project-management/project-management-guide.md)。
+
+## 许可证状态
+
+仓库当前尚未声明开源许可证。A 应在对外分发或允许第三方复用前确认比赛规则、
+上游模型/资产许可证与团队授权，再通过独立 PR 添加合适的 `LICENSE`；在此之前
+默认不授予外部复制、修改或再分发权利。

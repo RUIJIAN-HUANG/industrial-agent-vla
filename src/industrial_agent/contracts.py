@@ -150,8 +150,7 @@ class TaskSchema:
         if _major(self.schema_version) != _major(TASK_SCHEMA_VERSION):
             raise ContractError(
                 FailureCode.UNSUPPORTED_TASK_VERSION,
-                f"task schema {self.schema_version!r} is incompatible with "
-                f"{TASK_SCHEMA_VERSION!r}",
+                f"task schema {self.schema_version!r} is incompatible with {TASK_SCHEMA_VERSION!r}",
             )
         if not self.task_id or len(self.task_id) > 128:
             raise ContractError(

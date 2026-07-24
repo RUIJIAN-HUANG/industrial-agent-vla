@@ -17,7 +17,12 @@ from .contracts import (
 )
 from .environment import ExecutionEnvironment
 from .errors import AgentError, FailureCode
-from .executor import ExecutionContext, Executor, ExecutorRouter
+from .executor import (
+    ExecutionContext,
+    Executor,
+    ExecutorRouter,
+    is_pinned_artifact_digest,
+)
 from .fsm import AgentFSM, AgentState, StateTransition
 from .observation import ObservationGateway
 from .planner import SemanticTaskPlanner
@@ -177,6 +182,48 @@ class IndustrialAgent:
             raise ValueError(
                 "safety.action_contract_version must match core contract 1.0"
             )
+
+        raw_executors = config.get("executors")
+        if not isinstance(raw_executors, Mapping):
+            raise ValueError("executors config must be an object")
+        provided_names: set[str] = set()
+        for executor in executors:
+            descriptor = executor.descriptor
+            name = descriptor.name
+            if name in provided_names:
+                raise ValueError(f"executor descriptor name is duplicated: {name!r}")
+            provided_names.add(name)
+
+            expected = raw_executors.get(name)
+            if not isinstance(expected, Mapping):
+                raise ValueError(
+                    f"executor {name!r} is not declared in config.executors"
+                )
+            if descriptor.action_contract_version != action_contract:
+                raise ValueError(
+                    f"executor {name!r} action_contract_version mismatch: "
+                    f"expected {action_contract!r}, got "
+                    f"{descriptor.action_contract_version!r}"
+                )
+
+            for field in ("checkpoint_sha", "norm_stats_sha"):
+                expected_value = expected.get(field)
+                actual_value = getattr(descriptor, field)
+                if expected_value == "REPLACE_WITH_PINNED_SHA":
+                    raise ValueError(
+                        f"executor {name!r} config.{field} is still an unsafe placeholder"
+                    )
+                if not is_pinned_artifact_digest(expected_value):
+                    raise ValueError(
+                        f"executor {name!r} config.{field} must match "
+                        "'sha256:<64 hexadecimal characters>'"
+                    )
+                if actual_value != expected_value:
+                    raise ValueError(
+                        f"executor {name!r} {field} mismatch: "
+                        f"expected {expected_value!r}, got {actual_value!r}"
+                    )
+
         return cls(
             executors,
             gateway=gateway,

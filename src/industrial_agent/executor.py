@@ -7,8 +7,9 @@ transport implementation (HTTP, Unix socket, gRPC, etc.) here.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
-from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
+from typing import Any, Callable, Mapping, Protocol, Sequence, runtime_checkable
 from uuid import uuid4
 
 from .contracts import (
@@ -20,6 +21,8 @@ from .contracts import (
 )
 from .errors import ContractError, ExecutorError, FailureCode
 
+ARTIFACT_DIGEST_PATTERN = re.compile(r"sha256:[0-9a-fA-F]{64}")
+
 
 @dataclass(frozen=True)
 class ExecutorDescriptor:
@@ -28,6 +31,10 @@ class ExecutorDescriptor:
     action_contract_version: str
     checkpoint_sha: str
     norm_stats_sha: str
+
+    def __post_init__(self) -> None:
+        _require_pinned_artifact_digest(self.checkpoint_sha, "checkpoint_sha")
+        _require_pinned_artifact_digest(self.norm_stats_sha, "norm_stats_sha")
 
 
 @dataclass(frozen=True)
@@ -67,6 +74,20 @@ class ProcessTransport(Protocol):
     def request(
         self, route: str, payload: Mapping[str, Any], timeout_ms: int
     ) -> Mapping[str, Any]: ...
+
+
+def is_pinned_artifact_digest(value: Any) -> bool:
+    """Return whether a value is a complete immutable SHA-256 identifier."""
+
+    return (
+        isinstance(value, str) and ARTIFACT_DIGEST_PATTERN.fullmatch(value) is not None
+    )
+
+
+def _require_pinned_artifact_digest(value: Any, field: str) -> str:
+    if not is_pinned_artifact_digest(value):
+        raise ValueError(f"{field} must match 'sha256:<64 hexadecimal characters>'")
+    return value
 
 
 def _is_sequence(value: Any) -> bool:
@@ -318,8 +339,7 @@ def _parse_canonical_chunk(
     if missing or unknown:
         raise ExecutorError(
             FailureCode.EXECUTOR_BAD_RESPONSE,
-            f"action_chunk fields invalid; missing={sorted(missing)}, "
-            f"unknown={sorted(unknown)}",
+            f"action_chunk fields invalid; missing={sorted(missing)}, unknown={sorted(unknown)}",
         )
     string_fields = (
         "contract_version",
@@ -418,6 +438,12 @@ class OpenVLAOFTAdapter:
         norm_stats_sha: str,
         task_types: frozenset[str] | None = None,
     ):
+        checkpoint_sha = _require_pinned_artifact_digest(
+            checkpoint_sha, "checkpoint_sha"
+        )
+        norm_stats_sha = _require_pinned_artifact_digest(
+            norm_stats_sha, "norm_stats_sha"
+        )
         self.transport = transport
         self.descriptor = ExecutorDescriptor(
             name="openvla_oft",
@@ -544,6 +570,12 @@ class Pi05Adapter:
         norm_stats_sha: str,
         task_types: frozenset[str] | None = None,
     ):
+        checkpoint_sha = _require_pinned_artifact_digest(
+            checkpoint_sha, "checkpoint_sha"
+        )
+        norm_stats_sha = _require_pinned_artifact_digest(
+            norm_stats_sha, "norm_stats_sha"
+        )
         self.transport = transport
         self.descriptor = ExecutorDescriptor(
             name="pi05",
@@ -645,6 +677,58 @@ class Pi05Adapter:
             return
 
 
+def build_executors_from_config(
+    config: Mapping[str, Any],
+    transport_factory: Callable[[str, str], ProcessTransport],
+) -> tuple[Executor, ...]:
+    """Build both process adapters while binding each configured deployment URL.
+
+    The transport factory receives ``(executor_name, base_url)``. This keeps
+    deployment-specific HTTP/WebSocket code outside the supervisor while ensuring
+    that ``config.executors.*.base_url`` is actually consumed.
+    """
+
+    raw_executors = config.get("executors")
+    if not isinstance(raw_executors, Mapping):
+        raise ValueError("executors config must be an object")
+
+    adapter_types = {
+        "openvla_oft": OpenVLAOFTAdapter,
+        "pi05": Pi05Adapter,
+    }
+    built: list[Executor] = []
+    for name, adapter_type in adapter_types.items():
+        raw = raw_executors.get(name)
+        if not isinstance(raw, Mapping):
+            raise ValueError(f"config.executors.{name} must be an object")
+
+        base_url = raw.get("base_url")
+        if not isinstance(base_url, str) or not base_url.startswith(
+            ("http://", "https://")
+        ):
+            raise ValueError(f"config.executors.{name}.base_url must be an HTTP(S) URL")
+
+        artifact_values: dict[str, str] = {}
+        for field in ("checkpoint_sha", "norm_stats_sha"):
+            value = raw.get(field)
+            if not is_pinned_artifact_digest(value):
+                raise ValueError(
+                    f"config.executors.{name}.{field} must match "
+                    "'sha256:<64 hexadecimal characters>'"
+                )
+            artifact_values[field] = value
+
+        transport = transport_factory(name, base_url)
+        built.append(
+            adapter_type(
+                transport,
+                checkpoint_sha=artifact_values["checkpoint_sha"],
+                norm_stats_sha=artifact_values["norm_stats_sha"],
+            )
+        )
+    return tuple(built)
+
+
 class ExecutorRouter:
     """Deterministic capability router with explicit no-switch-back history."""
 
@@ -671,6 +755,5 @@ class ExecutorRouter:
                 return executor
         raise ExecutorError(
             FailureCode.NO_COMPATIBLE_EXECUTOR,
-            f"no healthy executor supports {task.task_type!r}; excluded="
-            f"{sorted(excluded)}",
+            f"no healthy executor supports {task.task_type!r}; excluded={sorted(excluded)}",
         )

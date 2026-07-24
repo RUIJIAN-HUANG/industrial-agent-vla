@@ -225,6 +225,20 @@ __marimo__/
 credentials*.json
 secrets*.json
 
+# Repository-local tools, scratch files, merge leftovers, and Office lock files
+.agents/
+.codex/
+.local/
+tmp/
+temp/
+scratch/
+*.tmp
+*.bak
+*.orig
+*.rej
+*.swp
+~$*
+
 # IDE and operating-system files
 .idea/
 .vscode/
