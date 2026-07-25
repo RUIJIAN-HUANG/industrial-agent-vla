@@ -20,9 +20,9 @@ openpi API 关键事实（官方源码 Policy.infer）：
 from __future__ import annotations
 
 import json
-import time
 import logging
-from typing import Any, Dict, Optional, Protocol, runtime_checkable
+import time
+from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
 
@@ -40,9 +40,9 @@ logger.setLevel(logging.INFO)
 # openpi 本地依赖（JAX 路径）
 # ---------------------------------------------------------------------------
 try:
-    from openpi.training import config as _openpi_config  # type: ignore
     from openpi.policies import policy_config as _openpi_policy_config  # type: ignore
     from openpi.shared import download as _openpi_download  # type: ignore
+    from openpi.training import config as _openpi_config  # type: ignore
 
     OPENPI_AVAILABLE = True
 except Exception:
@@ -52,8 +52,6 @@ except Exception:
 # openpi 远程客户端依赖（WebSocket）
 # ---------------------------------------------------------------------------
 try:
-    from openpi_client import websocket_client_policy as _ws_client  # type: ignore
-
     WS_CLIENT_AVAILABLE = True
 except Exception:
     WS_CLIENT_AVAILABLE = False
@@ -94,7 +92,7 @@ class PolicyClient(Protocol):
         ...
 
     @property
-    def checkpoint_dir(self) -> Optional[str]:
+    def checkpoint_dir(self) -> str | None:
         """本地客户端返回 checkpoint 路径；远程客户端返回 None。"""
         ...
 
@@ -156,7 +154,7 @@ class WebsocketPolicyClient:
             logger.info("【WS 客户端】已连接 %s", self._ws_url)
 
     @staticmethod
-    def _serialize(data: Dict[str, Any]) -> bytes:
+    def _serialize(data: dict[str, Any]) -> bytes:
         """序列化为 openpi_service 兼容格式：msgpack 优先，fallback JSON。"""
         if _MSGPACK_AVAILABLE:
             try:
@@ -166,7 +164,7 @@ class WebsocketPolicyClient:
         return json.dumps(data, ensure_ascii=False).encode("utf-8")
 
     @staticmethod
-    def _deserialize(raw: bytes) -> Dict[str, Any]:
+    def _deserialize(raw: bytes) -> dict[str, Any]:
         """反序列化 openpi_service 响应。"""
         if _MSGPACK_AVAILABLE:
             try:
@@ -190,7 +188,7 @@ class WebsocketPolicyClient:
         self._ensure_connected()
 
         # ---- 协议转换：openpi example → ObsPacket（方案书 §3.4） ----
-        request: Dict[str, Any] = {
+        request: dict[str, Any] = {
             "schema_version": "v1",
             "episode_id": str(example.get("episode_id", "unknown")),
             "step_id": int(example.get("step_id", 0)),
@@ -229,7 +227,7 @@ class WebsocketPolicyClient:
             return self._deserialize(raw)
 
         try:
-            response: Dict[str, Any] = self._loop.run_until_complete(_send_recv())
+            response: dict[str, Any] = self._loop.run_until_complete(_send_recv())
         except Exception as e:
             logger.error("WebSocket 请求失败: %s", e)
             self._client = None  # 标记断开，下次 infer 时重连
@@ -265,7 +263,7 @@ class WebsocketPolicyClient:
         return "ws"
 
     @property
-    def checkpoint_dir(self) -> Optional[str]:
+    def checkpoint_dir(self) -> str | None:
         return None
 
 
@@ -277,7 +275,7 @@ class LocalOpenPiPolicyClient:
     返回物理动作（已反归一化）。
     """
 
-    def __init__(self, config_name: str, checkpoint_dir: Optional[str]) -> None:
+    def __init__(self, config_name: str, checkpoint_dir: str | None) -> None:
         config = _openpi_config.get_config(config_name)
         ckpt = checkpoint_dir
         if not ckpt:
@@ -300,16 +298,16 @@ class LocalOpenPiPolicyClient:
         return "local"
 
     @property
-    def checkpoint_dir(self) -> Optional[str]:
+    def checkpoint_dir(self) -> str | None:
         return self._ckpt
 
 
 def make_policy_client(
     config_name: str,
-    checkpoint_dir: Optional[str],
-    ws_host: Optional[str],
-    ws_port: Optional[str],
-) -> Optional[PolicyClient]:
+    checkpoint_dir: str | None,
+    ws_host: str | None,
+    ws_port: str | None,
+) -> PolicyClient | None:
     """按优先级创建策略客户端：WebSocket > 本地 JAX。
 
     均不可用时返回 None，由调用方（pi05.py）降级到 Mock 模式。

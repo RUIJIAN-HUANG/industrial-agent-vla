@@ -62,7 +62,7 @@ import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
 
@@ -121,7 +121,7 @@ except Exception:
 # C1 修复：state_dim 不再硬编码，统一从 train_config.STATE_DIM 读取。
 ACTION_DIM: int = 7
 
-NORM_STATS_KEYS: Tuple[str, ...] = ("state", "actions")  # 官方 compute_norm_stats.py 键
+NORM_STATS_KEYS: tuple[str, ...] = ("state", "actions")  # 官方 compute_norm_stats.py 键
 NORM_STATS_FILENAME: str = (
     "norm_stats.json"  # 与 openpi/shared/normalize.py 及 train.py 一致
 )
@@ -267,8 +267,8 @@ class NormStats:
 
     mean: np.ndarray
     std: np.ndarray
-    q01: Optional[np.ndarray] = None  # 1% 分位
-    q99: Optional[np.ndarray] = None  # 99% 分位
+    q01: np.ndarray | None = None  # 1% 分位
+    q99: np.ndarray | None = None  # 99% 分位
 
 
 # ---------------------------------------------------------------------------
@@ -276,9 +276,9 @@ class NormStats:
 # ---------------------------------------------------------------------------
 def compute_stats(
     arr: np.ndarray,
-    mask: Optional[np.ndarray] = None,
+    mask: np.ndarray | None = None,
     key: str = "",
-) -> Dict[str, np.ndarray]:
+) -> dict[str, np.ndarray]:
     """沿 batch/time 轴计算 mean/std/min/max/q01/q99。
 
     Args:
@@ -339,8 +339,8 @@ def compute_stats(
 
 
 def build_norm_stats(
-    stats_by_key: Dict[str, Dict[str, np.ndarray]],
-) -> Dict[str, NormStats]:
+    stats_by_key: dict[str, dict[str, np.ndarray]],
+) -> dict[str, NormStats]:
     """把原始统计 dict 转为 NormStats（仅 mean/std/q01/q99，不含 min/max）。"""
     return {
         k: NormStats(
@@ -356,7 +356,7 @@ def build_norm_stats(
 # ---------------------------------------------------------------------------
 # 序列化（Schema 与 openpi.shared.normalize.serialize_json 100% 一致）
 # ---------------------------------------------------------------------------
-def serialize_norm_stats(norm_stats: Dict[str, NormStats]) -> str:
+def serialize_norm_stats(norm_stats: dict[str, NormStats]) -> str:
     """序列化为 JSON 字符串。
 
     openpi 可用时优先用官方 normalize.serialize_json；否则本地构造等价结构。
@@ -390,7 +390,7 @@ def serialize_norm_stats(norm_stats: Dict[str, NormStats]) -> str:
     return json.dumps(payload, indent=2, ensure_ascii=False)
 
 
-def save_norm_stats(output_path: Path, norm_stats: Dict[str, NormStats]) -> None:
+def save_norm_stats(output_path: Path, norm_stats: dict[str, NormStats]) -> None:
     """保存 JSON 到 output_path（创建父目录）。"""
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(serialize_norm_stats(norm_stats), encoding="utf-8")
@@ -493,7 +493,7 @@ def compute_sha256(path: Path) -> str:
 # ---------------------------------------------------------------------------
 # Mock 数据生成（CPU 兼容验证，固定种子保证 SHA256 可复现）
 # ---------------------------------------------------------------------------
-def generate_mock_data(state_dim: int, action_dim: int) -> Dict[str, np.ndarray]:
+def generate_mock_data(state_dim: int, action_dim: int) -> dict[str, np.ndarray]:
     """生成合成随机数据，模拟 Franka 7-DOF+gripper 状态与 7 维动作。
 
     W3 修复：state_dim 与 action_dim 改为显式参数，消除对全局变量 ACTION_DIM
@@ -554,18 +554,18 @@ def generate_mock_data(state_dim: int, action_dim: int) -> Dict[str, np.ndarray]
 # ---------------------------------------------------------------------------
 # 真实数据加载（LeRobot parquet / canonical episode / npz）
 # ---------------------------------------------------------------------------
-_STATE_CANDIDATES: Tuple[str, ...] = (
+_STATE_CANDIDATES: tuple[str, ...] = (
     "state",
     "observation.state",
     "robot_state",
     "observation_state",
 )
-_ACTIONS_CANDIDATES: Tuple[str, ...] = (
+_ACTIONS_CANDIDATES: tuple[str, ...] = (
     "actions",
     "action",
     "action_vec",
 )
-_MASK_CANDIDATES: Tuple[str, ...] = (
+_MASK_CANDIDATES: tuple[str, ...] = (
     "mask",
     "pad_mask",
     "padding_mask",
@@ -574,7 +574,7 @@ _MASK_CANDIDATES: Tuple[str, ...] = (
 )
 
 
-def _pick_column(df_columns: Any, candidates: Tuple[str, ...]) -> Optional[str]:
+def _pick_column(df_columns: Any, candidates: tuple[str, ...]) -> str | None:
     """从 DataFrame 列名中按候选顺序找到第一个匹配列。"""
     cols = set(df_columns)
     for c in candidates:
@@ -591,7 +591,7 @@ def _stack_object_array(series: Any) -> np.ndarray:
     return np.stack(arrs, axis=0)
 
 
-def _load_from_lerobot_dir(path: Path) -> Optional[Dict[str, np.ndarray]]:
+def _load_from_lerobot_dir(path: Path) -> dict[str, np.ndarray] | None:
     """从 LeRobot 数据集目录读取（data/*.parquet）。
 
     LeRobot v2 列名可能为 observation.state / action 等，按候选名匹配。
@@ -603,11 +603,11 @@ def _load_from_lerobot_dir(path: Path) -> Optional[Dict[str, np.ndarray]]:
     if not parquet_files:
         return None
 
-    states: List[np.ndarray] = []
-    actions: List[np.ndarray] = []
-    masks: List[np.ndarray] = []
+    states: list[np.ndarray] = []
+    actions: list[np.ndarray] = []
+    masks: list[np.ndarray] = []
     found_state = found_actions = False
-    mask_col: Optional[str] = None
+    mask_col: str | None = None
 
     for pf in parquet_files:
         try:
@@ -639,7 +639,7 @@ def _load_from_lerobot_dir(path: Path) -> Optional[Dict[str, np.ndarray]]:
     if not found_state or not found_actions:
         return None
 
-    result: Dict[str, np.ndarray] = {
+    result: dict[str, np.ndarray] = {
         "state": np.concatenate(states, axis=0) if states else np.zeros((0, 0)),
         "actions": np.concatenate(actions, axis=0) if actions else np.zeros((0, 0)),
     }
@@ -648,7 +648,7 @@ def _load_from_lerobot_dir(path: Path) -> Optional[Dict[str, np.ndarray]]:
     return result
 
 
-def _load_from_canonical_dir(path: Path) -> Optional[Dict[str, np.ndarray]]:
+def _load_from_canonical_dir(path: Path) -> dict[str, np.ndarray] | None:
     """从 canonical episode 目录读取（每个子目录含 steps.parquet / steps.hdf5）。
 
     与 convert_openpi.py 的 load_steps 字段名一致：robot_state / action。
@@ -662,9 +662,9 @@ def _load_from_canonical_dir(path: Path) -> Optional[Dict[str, np.ndarray]]:
     if not episode_dirs:
         return None
 
-    states: List[np.ndarray] = []
-    actions: List[np.ndarray] = []
-    masks: List[np.ndarray] = []
+    states: list[np.ndarray] = []
+    actions: list[np.ndarray] = []
+    masks: list[np.ndarray] = []
 
     for ep_dir in episode_dirs:
         steps = _load_canonical_steps(ep_dir)
@@ -680,7 +680,7 @@ def _load_from_canonical_dir(path: Path) -> Optional[Dict[str, np.ndarray]]:
 
     if not states:
         return None
-    result: Dict[str, np.ndarray] = {
+    result: dict[str, np.ndarray] = {
         "state": np.concatenate(states, axis=0),
         "actions": np.concatenate(actions, axis=0),
     }
@@ -692,7 +692,7 @@ def _load_from_canonical_dir(path: Path) -> Optional[Dict[str, np.ndarray]]:
     return result
 
 
-def _load_canonical_steps(episode_dir: Path) -> Optional[Dict[str, np.ndarray]]:
+def _load_canonical_steps(episode_dir: Path) -> dict[str, np.ndarray] | None:
     """读取单个 canonical episode 的 steps（复用 convert_openpi.py 字段名）。
 
     W4 修复：同时提取 mask/pad_mask 字段供 _load_from_canonical_dir 使用。"""
@@ -708,7 +708,7 @@ def _load_canonical_steps(episode_dir: Path) -> Optional[Dict[str, np.ndarray]]:
             action = _stack_object_array(df["action"]) if "action" in df else None
             if robot_state is None or action is None:
                 return None
-            result: Dict[str, np.ndarray] = {
+            result: dict[str, np.ndarray] = {
                 "robot_state": robot_state,
                 "action": action,
             }
@@ -743,7 +743,7 @@ def _load_canonical_steps(episode_dir: Path) -> Optional[Dict[str, np.ndarray]]:
     return None
 
 
-def _load_from_npz(path: Path) -> Optional[Dict[str, np.ndarray]]:
+def _load_from_npz(path: Path) -> dict[str, np.ndarray] | None:
     """从 .npz 文件读取（state / actions / 可选 mask）。"""
     if not path.is_file() or path.suffix.lower() != ".npz":
         return None
@@ -754,7 +754,7 @@ def _load_from_npz(path: Path) -> Optional[Dict[str, np.ndarray]]:
             a_col = next((c for c in _ACTIONS_CANDIDATES if c in keys), None)
             if s_col is None or a_col is None:
                 return None
-            result: Dict[str, np.ndarray] = {
+            result: dict[str, np.ndarray] = {
                 "state": np.asarray(data[s_col], dtype=np.float64),
                 "actions": np.asarray(data[a_col], dtype=np.float64),
             }
@@ -767,7 +767,7 @@ def _load_from_npz(path: Path) -> Optional[Dict[str, np.ndarray]]:
         return None
 
 
-def load_dataset(path: Path) -> Dict[str, np.ndarray]:
+def load_dataset(path: Path) -> dict[str, np.ndarray]:
     """按优先级尝试多种格式加载真实数据集。
 
     优先级：.npz 文件 > LeRobot 目录(data/*.parquet) > canonical episode 目录。
@@ -805,7 +805,7 @@ def load_dataset(path: Path) -> Dict[str, np.ndarray]:
 # ---------------------------------------------------------------------------
 # 维度校验（红线：维度严格按 train_config.py）
 # ---------------------------------------------------------------------------
-def validate_dimensions(data: Dict[str, np.ndarray]) -> None:
+def validate_dimensions(data: dict[str, np.ndarray]) -> None:
     """校验 actions 末维 == ACTION_DIM（train_config.py）。state 维度合理性检查。
 
     S2 修复：补充 state 维度合理性校验（仅 WARNING，不崩溃），防止异常维度数据
@@ -843,7 +843,7 @@ def validate_dimensions(data: Dict[str, np.ndarray]) -> None:
 # QA 打印（方案书 §3.3.1：每维分布 / 1%99% 分位 / 夹爪双峰）
 # ---------------------------------------------------------------------------
 def print_qa_report(
-    stats_by_key: Dict[str, Dict[str, np.ndarray]], quiet: bool
+    stats_by_key: dict[str, dict[str, np.ndarray]], quiet: bool
 ) -> None:
     """打印每维 mean/std/min/max/q01/q99，供 QA 检查分布与夹爪双峰。"""
     if quiet:
@@ -957,7 +957,7 @@ def main() -> int:
         logger.info("数据未含 mask 字段，按全有效处理（无 padding 过滤）")
 
     # ---- 3. 逐键计算统计量 ----
-    stats_by_key: Dict[str, Dict[str, np.ndarray]] = {}
+    stats_by_key: dict[str, dict[str, np.ndarray]] = {}
     for key in NORM_STATS_KEYS:
         if key not in data:
             logger.warning("数据中缺少键 %s，跳过", key)

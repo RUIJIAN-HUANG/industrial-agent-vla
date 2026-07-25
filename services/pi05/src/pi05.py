@@ -23,13 +23,12 @@ openpi / openpi_client，仅依赖 PolicyClient 抽象接口。
 
 from __future__ import annotations
 
-import os
-import time
-import json
 import hashlib
 import logging
+import os
+import time
 from dataclasses import dataclass, field
-from typing import Optional, Dict, Any
+from typing import Any
 
 import numpy as np
 
@@ -51,8 +50,8 @@ logger.setLevel(logging.INFO)
 # 正式 contracts/base 落地后，删除 except 分支即可。
 # ---------------------------------------------------------------------------
 try:  # 正式 contracts（A 提供）
-    from services.pi05.src.observation import ObsPacket  # type: ignore
     from services.pi05.src.action import CanonicalActionChunk  # type: ignore
+    from services.pi05.src.observation import ObsPacket  # type: ignore
 except Exception:  # 占位定义（A 提供 contracts 后删除本分支）
 
     @dataclass
@@ -63,7 +62,7 @@ except Exception:  # 占位定义（A 提供 contracts 后删除本分支）
         step_id: int
         timestamp_ns: int
         rgb_front: np.ndarray  # uint8[H,W,3] 原始 RGB，不做预处理
-        rgb_wrist: Optional[np.ndarray]  # uint8[H,W,3]
+        rgb_wrist: np.ndarray | None  # uint8[H,W,3]
         robot_state: np.ndarray  # float32[d] 本体状态
         instruction: str  # 完整自然语言
         runtime_flags: dict = field(
@@ -91,7 +90,7 @@ except Exception:  # 占位基类（A 提供 base.py 后删除本分支）
     class BaseExecutor:  # type: ignore[no-redef]
         """占位基类。A 提供正式 BaseExecutor 后此分支不再生效。"""
 
-        def infer(self, obs: "ObsPacket") -> "CanonicalActionChunk":  # pragma: no cover
+        def infer(self, obs: ObsPacket) -> CanonicalActionChunk:  # pragma: no cover
             raise NotImplementedError
 
         def cancel_pending_chunk(self) -> None:  # pragma: no cover
@@ -109,10 +108,10 @@ except Exception:  # 占位基类（A 提供 base.py 后删除本分支）
 # ---------------------------------------------------------------------------
 try:
     from services.pi05.src.pi05_client import (  # type: ignore
-        PolicyClient,
-        make_policy_client,
         OPENPI_AVAILABLE,
         WS_CLIENT_AVAILABLE,
+        PolicyClient,
+        make_policy_client,
     )
 except Exception:  # pi05_client 不可用时降级 Mock
     PolicyClient = None  # type: ignore
@@ -138,7 +137,6 @@ from src.industrial_agent.executor import (  # type: ignore
     ExecutorDescriptor,
     is_pinned_artifact_digest,
 )
-
 
 # ---------------------------------------------------------------------------
 # 安全限幅常量（方案书 Table 69 Row7 / 附录B；D5 实测前用候选值）
@@ -244,20 +242,20 @@ class Pi05Executor(BaseExecutor):
             logger.warning("未知 PI05_MODE=%s，回退到 dummy", self.mode)
             self.mode = "dummy"
         self.config_name: str = os.environ.get("PI05_CONFIG_NAME", "pi05_droid")
-        self.checkpoint_dir: Optional[str] = os.environ.get("PI05_CHECKPOINT_DIR")
-        self.ws_host: Optional[str] = os.environ.get("PI05_WS_HOST")
-        self.ws_port: Optional[str] = os.environ.get("PI05_WS_PORT")
-        self.norm_stats_path: Optional[str] = os.environ.get("PI05_NORM_STATS_PATH")
+        self.checkpoint_dir: str | None = os.environ.get("PI05_CHECKPOINT_DIR")
+        self.ws_host: str | None = os.environ.get("PI05_WS_HOST")
+        self.ws_port: str | None = os.environ.get("PI05_WS_PORT")
+        self.norm_stats_path: str | None = os.environ.get("PI05_NORM_STATS_PATH")
 
         # ---- 运行时状态 ----
         self._policy: Any = None  # PolicyClient 实例（real 模式）
-        self._policy_type: Optional[str] = None  # "local" | "ws" | "mock"
+        self._policy_type: str | None = None  # "local" | "ws" | "mock"
         self._norm_stats_sha: str = ""
         self._checkpoint_sha: str = os.environ.get("PI05_CHECKPOINT_SHA", "")
-        self._pending_chunk: Optional[np.ndarray] = None  # 当前动作队列（切换时清空）
+        self._pending_chunk: np.ndarray | None = None  # 当前动作队列（切换时清空）
         self._pending_generated_step: int = -1
-        self._current_episode_id: Optional[str] = None
-        self._last_latency_ms: Optional[int] = None
+        self._current_episode_id: str | None = None
+        self._last_latency_ms: int | None = None
         self._last_truncation_count: int = 0
 
         # ---- 初始化 ----
@@ -330,13 +328,13 @@ class Pi05Executor(BaseExecutor):
             logger.warning("norm_stats SHA 计算失败：%s", e)
 
     # ===================== 预处理 =====================
-    def _build_example(self, obs: "ObsPacket") -> dict:
+    def _build_example(self, obs: ObsPacket) -> dict:
         """将 ObsPacket 转为 openpi example 字典（方案书 Table 23 Row6）。
 
         传原始 RGB（仅保证 uint8/HWC/RGB），resize/pad/normalize 由 openpi input_transform
         内部完成；prompt 传原文（不手动 tokenize）。
         """
-        example: Dict[str, Any] = {
+        example: dict[str, Any] = {
             "observation/exterior_image_1_left": _prep_image(obs.rgb_front),  # 前视 RGB
             "observation/state": np.asarray(obs.robot_state, dtype=np.float32),
             "prompt": obs.instruction,  # 完整自然语言，不拆槽位
@@ -355,7 +353,7 @@ class Pi05Executor(BaseExecutor):
             )
         return example
 
-    def _pixel_audit_if_test(self, obs: "ObsPacket") -> None:
+    def _pixel_audit_if_test(self, obs: ObsPacket) -> None:
         """若传入固定测试图，校验预处理未破坏 RGB/方向/dtype（方案书 §7.5 image_pipeline）。"""
         if obs.rgb_front.shape == FIXED_TEST_IMAGE.shape and np.array_equal(
             obs.rgb_front, FIXED_TEST_IMAGE
@@ -461,7 +459,7 @@ class Pi05Executor(BaseExecutor):
         return clipped
 
     # ===================== 推理 =====================
-    def _infer_mock(self, obs: "ObsPacket") -> np.ndarray:
+    def _infer_mock(self, obs: ObsPacket) -> np.ndarray:
         """Mock 模式：返回安全范围内的假动作块 float32[10,7]。
 
         平移每维 ±0.01m，旋转每维 ±0.01rad，夹爪 0/1（均不触发限幅）。
@@ -472,14 +470,14 @@ class Pi05Executor(BaseExecutor):
         grip = rng.randint(0, 2, size=(MOCK_CHUNK_LEN,)).astype(np.float32)
         return np.concatenate([trans, rot, grip[:, None]], axis=1)
 
-    def _infer_real(self, obs: "ObsPacket") -> np.ndarray:
+    def _infer_real(self, obs: ObsPacket) -> np.ndarray:
         """Real 模式：调用 PolicyClient.infer。返回值已是物理动作（openpi 已反归一化）。"""
         example = self._build_example(obs)
         result = self._policy.infer(example)
         actions = result["actions"] if isinstance(result, dict) else result
         return np.asarray(actions, dtype=np.float32)
 
-    def infer(self, obs: "ObsPacket") -> "CanonicalActionChunk":
+    def infer(self, obs: ObsPacket) -> CanonicalActionChunk:
         """主入口：观测 → 安全动作块（方案书 §3.3.1 Para185）。"""
         t0 = time.time()
         self._pixel_audit_if_test(obs)
@@ -560,7 +558,7 @@ class Pi05Executor(BaseExecutor):
         logger.info("reset：π0.5 适配器状态已清空，下次 infer 将重新传当前图像。")
 
     # ===================== 健康检查 =====================
-    def _query_vram_mb(self) -> Optional[int]:
+    def _query_vram_mb(self) -> int | None:
         """Real 模式查询显存；Mock 返回 None（方案书 §7.1 健康检查）。"""
         if self.mode != "real":
             return None
@@ -618,7 +616,7 @@ class Pi05Executor(BaseExecutor):
     # Executor Protocol（src/industrial_agent/executor.py），不改动任何现有方法。
     # 方案书 interface-contracts.md §4 公共标识、§7.4/§7.5 统一 7 维动作合同。
     @property
-    def descriptor(self) -> "ExecutorDescriptor":
+    def descriptor(self) -> ExecutorDescriptor:
         """返回体系B ExecutorDescriptor（冻结契约对齐）。
 
         - name="pi05"；task_types 覆盖 pick_place / visual_manipulation /
@@ -648,10 +646,10 @@ class Pi05Executor(BaseExecutor):
 
     def to_action_chunk(
         self,
-        canonical: "CanonicalActionChunk",
+        canonical: CanonicalActionChunk,
         task_id: str,
         executor_name: str,
-    ) -> "ActionChunk":
+    ) -> ActionChunk:
         """把体系A CanonicalActionChunk 包装成体系B ActionChunk（冻结契约对齐）。
 
         - canonical.actions[:, :7] 逐行转 tuple(float, ...)，每步恰好 7 维；

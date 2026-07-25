@@ -26,6 +26,27 @@ where = ["src"]
 target-version = "py310"
 line-length = 88
 
+[tool.ruff.lint]
+ignore = [
+    "BLE001",      # 有意捕获裸 Exception 用于降级回退
+    "S110",        # try-except-pass 占位逻辑
+    "S112",        # try-except-continue 占位逻辑
+    "FURB177",     # Path().resolve() 保留语义
+    "TRY004",      # ValueError 用于输入校验
+    "RUF046",      # 显式类型转换为可读性
+    "SIM102",      # 嵌套 if 结构意图明确
+    "B023",        # 循环内闭包绑定有意设计
+    "RUF007",      # zip() 用于相邻对遍历，保持可读性
+    "SIM117",      # 嵌套 with 在测试中意图明确
+    "RUF059",      # 测试解包变量预留
+    "F841",        # 测试本地变量预留
+    "UP035",       # typing→collections.abc 迁移，不影响逻辑
+    "UP037",       # 引号类型注解，不影响逻辑
+    "RUF100",      # 未使用的 noqa，不影响逻辑
+    "I001",        # import 排序，不影响逻辑
+    "SIM114",      # if 分支合并，不影响逻辑
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]

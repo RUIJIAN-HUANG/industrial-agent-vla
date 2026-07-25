@@ -91,8 +91,7 @@ if str(_PROJECT_ROOT) not in _sys.path:
 #   1. 尝试 import openpi（可用时用官方类，不可用时降级为占位 dataclass）
 #   2. 构建 PI05_INDUSTRIAL_CONFIG 实例
 #   3. 把 pi05_industrial 注册进 _CONFIGS（openpi 官方注册表或本地占位表）
-import configs.pi05.train_config as pi05_config  # noqa: E402
-
+import configs.pi05.train_config as pi05_config
 
 # ===========================================================================
 # 日志
@@ -291,7 +290,7 @@ def load_openpi_train_module():
     # 2. 通过 openpi 包位置推断
     try:
         # S3：此时 XLA_PYTHON_CLIENT_MEM_FRACTION 已在模块顶部（L46）设置完毕，JAX 初始化安全
-        import openpi  # noqa: PLC0415
+        import openpi
 
         pkg_path = pathlib.Path(openpi.__file__).resolve()
         # openpi 包结构：<repo>/src/openpi/__init__.py
@@ -364,7 +363,7 @@ def apply_mock_data(config: Any) -> Any:
         )
         return config
     try:
-        from openpi.training.config import FakeDataConfig  # noqa: PLC0415
+        from openpi.training.config import FakeDataConfig
 
         new_config = dataclasses.replace(config, data=FakeDataConfig())
         logger.info(
@@ -441,15 +440,15 @@ def print_summary(config: Any, config_name: str, args: argparse.Namespace) -> No
     print(f"  Dataset repo_id:    {pi05_config.DATASET_REPO_ID}")
     print("-" * 72)
     if lora_ready:
-        print(f"  LoRA 冻结状态:      ✅ freeze_filter + weight_loader 已配置")
+        print("  LoRA 冻结状态:      ✅ freeze_filter + weight_loader 已配置")
     else:
         print(
-            f"  LoRA 冻结状态:      ⚠️  freeze_filter/weight_loader 未配置（C3 安全闸门）"
+            "  LoRA 冻结状态:      ⚠️  freeze_filter/weight_loader 未配置（C3 安全闸门）"
         )
-        print(f"                       当前为全参数训练配置，显存需求 >70GB（§3.3）")
+        print("                       当前为全参数训练配置，显存需求 >70GB（§3.3）")
         if not args.mock:
             print(
-                f"                       真实训练前必须配置 LoRA 机制；--mock 模式可豁免。"
+                "                       真实训练前必须配置 LoRA 机制；--mock 模式可豁免。"
             )
     print("-" * 72)
     print(f"  Overwrite:          {args.overwrite}")

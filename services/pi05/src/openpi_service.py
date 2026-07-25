@@ -22,14 +22,14 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+import logging
 import os
 import re
 import sys
-import json
 import time
-import asyncio
-import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 from uuid import uuid4
 
 # ---------------------------------------------------------------------------
@@ -43,9 +43,9 @@ except Exception:  # msgpack 不存在时服务仍可启动，回退 JSON
     _MSGPACK_AVAILABLE = False
 
 try:
-    from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
-    from fastapi.responses import JSONResponse
     import uvicorn
+    from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+    from fastapi.responses import JSONResponse
 except Exception as _e:  # 致命依赖缺失，无法启动
     print(f"[openpi_service] 致命错误：FastAPI/uvicorn 未安装：{_e}", file=sys.stderr)
     raise
@@ -91,12 +91,12 @@ DEFAULT_EXPIRES_AFTER_MS = 1000
 # sha256:<64hex> 校验模式（方案书 §4：checkpoint_sha/norm_stats_sha 必须为完整不可变摘要）
 _SHA_PATTERN = re.compile(r"^sha256:[0-9a-fA-F]{64}$")
 # HTTP 路由声明的支持任务类型（方案书 §6.2 / Pi05Adapter.descriptor.task_types）
-SUPPORTED_TASK_TYPES: List[str] = [
+SUPPORTED_TASK_TYPES: list[str] = [
     "pick_place",
     "visual_manipulation",
     "instruction_interaction",
 ]
-SUPPORTED_ACTION_CONTRACTS: List[str] = [CONTRACT_SCHEMA_VERSION]
+SUPPORTED_ACTION_CONTRACTS: list[str] = [CONTRACT_SCHEMA_VERSION]
 
 # ---------------------------------------------------------------------------
 # 日志
@@ -116,7 +116,7 @@ logger.setLevel(logging.INFO)
 #       dummy 模式下 openpi 不存在时服务仍能启动。
 # ---------------------------------------------------------------------------
 try:
-    from services.pi05.src.pi05 import Pi05Executor, ObsPacket  # type: ignore
+    from services.pi05.src.pi05 import ObsPacket, Pi05Executor  # type: ignore
 
     _EXECUTOR_AVAILABLE = True
     _EXECUTOR_IMPORT_ERROR = ""
@@ -150,7 +150,7 @@ except Exception as _e:  # 退化：错误码用字符串常量兜底
 # ---------------------------------------------------------------------------
 # 全局执行器实例 + 运行时状态
 # ---------------------------------------------------------------------------
-executor: Optional[Any] = None
+executor: Any | None = None
 _START_TIME = time.time()
 
 # 动作块过期丢弃状态（方案书 §3.4 动作过期）
@@ -158,12 +158,12 @@ _START_TIME = time.time()
 #     "generated_step": int, "timestamp": float,
 #     "expires_after_ms": int, "actions": list
 # }
-pending_chunks: Dict[str, dict] = {}
+pending_chunks: dict[str, dict] = {}
 _pending_chunks_lock: asyncio.Lock = (
     asyncio.Lock()
 )  # 并发保护（方案书 §7.1：多 episode 并发安全）
-current_episode_id: Optional[str] = None
-last_step_id: Optional[int] = None
+current_episode_id: str | None = None
+last_step_id: int | None = None
 
 
 def _init_executor() -> None:
@@ -282,7 +282,7 @@ async def _on_startup() -> None:
 
 
 @app.get("/health")
-async def health() -> Dict[str, Any]:
+async def health() -> dict[str, Any]:
     """健康检查端点（方案书 §6 / schemas/executor-health.schema.json）。
 
     返回 7 必填字段：schema_version / service / status / checkpoint_sha /
@@ -320,7 +320,7 @@ async def health() -> Dict[str, Any]:
 # ===========================================================================
 
 # /v1/infer 请求 14 必填字段（schemas/executor-infer.schema.json#$defs/request）
-_INFER_REQUIRED_FIELDS: Tuple[str, ...] = (
+_INFER_REQUIRED_FIELDS: tuple[str, ...] = (
     "schema_version",
     "request_id",
     "trace_id",
@@ -338,7 +338,7 @@ _INFER_REQUIRED_FIELDS: Tuple[str, ...] = (
 )
 
 # /v1/cancel 请求 7 必填字段（schemas/executor-cancel.schema.json#$defs/request）
-_CANCEL_REQUIRED_FIELDS: Tuple[str, ...] = (
+_CANCEL_REQUIRED_FIELDS: tuple[str, ...] = (
     "schema_version",
     "request_id",
     "trace_id",
@@ -355,20 +355,20 @@ def _failure_code_value(code: Any) -> str:
 
 
 def _make_infer_error_body(
-    req: Dict[str, Any],
+    req: dict[str, Any],
     *,
     code: str,
     message: str,
     retryable: bool,
-    retry_after_ms: Optional[int] = None,
-    details: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+    retry_after_ms: int | None = None,
+    details: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """构造 /v1/infer 错误响应信封（status="error"）。
 
     方案书 §5 / §13：错误响应必须回显关联 ID 与实际 sha，携带 error{code,message,
     retryable[,retry_after_ms,details]}，且不得携带 action_chunk。
     """
-    err: Dict[str, Any] = {
+    err: dict[str, Any] = {
         "code": code,
         "message": message,
         "retryable": retryable,
@@ -395,7 +395,7 @@ def _make_infer_error_body(
 
 
 def _build_obs_from_model_input(
-    model_input: Dict[str, Any], req: Dict[str, Any]
+    model_input: dict[str, Any], req: dict[str, Any]
 ) -> Any:
     """从 model_input 构造 ObsPacket（方案书 §7.3 π0.5 model_input）。
 
@@ -476,7 +476,7 @@ def _build_obs_from_model_input(
     )
 
 
-def _canonical_chunk_to_action_chunk_dict(chunk: Any, task_id: str) -> Dict[str, Any]:
+def _canonical_chunk_to_action_chunk_dict(chunk: Any, task_id: str) -> dict[str, Any]:
     """CanonicalActionChunk → action_chunk dict（schemas/action-chunk.schema.json 9 字段）。
 
     CanonicalActionChunk.actions: float32[N,7] → steps[{values:[7], duration_ms}]。
@@ -493,7 +493,7 @@ def _canonical_chunk_to_action_chunk_dict(chunk: Any, task_id: str) -> Dict[str,
     control_hz = int(getattr(chunk, "control_hz", DEFAULT_CONTROL_HZ))
     duration_ms = max(1, int(round(1000.0 / max(1, control_hz))))
 
-    steps: List[Dict[str, Any]] = []
+    steps: list[dict[str, Any]] = []
     for i in range(actions.shape[0]):
         values = actions[i].tolist()
         # 夹爪原值透传（Pi05Executor 已限幅为 0/1，值域在 schema [-1,1] 内，不做额外归一化）
@@ -651,7 +651,7 @@ async def http_infer(request: Request) -> JSONResponse:
         return JSONResponse(status_code=500, content=err_body)
 
     # ---- 构造成功响应信封（13 必填 + action_chunk + timing）----
-    response: Dict[str, Any] = {
+    response: dict[str, Any] = {
         "schema_version": CONTRACT_SCHEMA_VERSION,
         "request_id": req["request_id"],
         "trace_id": req["trace_id"],
@@ -749,7 +749,7 @@ async def http_cancel(request: Request) -> JSONResponse:
     async with _cancelled_tasks_lock:
         if task_id in _cancelled_tasks:
             status = "already_completed"
-            cancelled_ids: List[str] = []
+            cancelled_ids: list[str] = []
             context_cleared = False
         else:
             # 调用 executor.cancel_pending_chunk() 清空待执行动作队列
@@ -767,7 +767,7 @@ async def http_cancel(request: Request) -> JSONResponse:
             cancelled_ids = []
             context_cleared = True
 
-    response: Dict[str, Any] = {
+    response: dict[str, Any] = {
         "schema_version": CONTRACT_SCHEMA_VERSION,
         "request_id": req["request_id"],
         "trace_id": req["trace_id"],
@@ -782,7 +782,7 @@ async def http_cancel(request: Request) -> JSONResponse:
 # ---------------------------------------------------------------------------
 # 序列化辅助：msgpack 优先（与 openpi 官方兼容），fallback JSON
 # ---------------------------------------------------------------------------
-def _deserialize(raw_bytes: Optional[bytes], raw_text: Optional[str]) -> Dict[str, Any]:
+def _deserialize(raw_bytes: bytes | None, raw_text: str | None) -> dict[str, Any]:
     """反序列化客户端消息：优先 msgpack，fallback JSON。"""
     if raw_bytes is not None:
         if _MSGPACK_AVAILABLE:
@@ -809,7 +809,7 @@ def _deserialize(raw_bytes: Optional[bytes], raw_text: Optional[str]) -> Dict[st
     raise ValueError("空消息")
 
 
-def _serialize(response: Dict[str, Any]) -> Tuple[bytes, bool]:
+def _serialize(response: dict[str, Any]) -> tuple[bytes, bool]:
     """序列化响应：msgpack 可用返回 (bytes, True)；否则返回 (JSON bytes, True)。
 
     第二个返回值保留以区分发送方式（统一 send_bytes）。
@@ -822,14 +822,14 @@ def _serialize(response: Dict[str, Any]) -> Tuple[bytes, bool]:
     return json.dumps(response, ensure_ascii=False).encode("utf-8"), True
 
 
-async def _send(ws: WebSocket, response: Dict[str, Any]) -> None:
+async def _send(ws: WebSocket, response: dict[str, Any]) -> None:
     """统一发送：msgpack 二进制 / JSON 文本。"""
     payload, _ = _serialize(response)
     # metadata 用 JSON 文本发送；推理响应统一用二进制（msgpack 或 JSON bytes）
     await ws.send_bytes(payload)
 
 
-async def _send_error(ws: WebSocket, error: Dict[str, Any]) -> None:
+async def _send_error(ws: WebSocket, error: dict[str, Any]) -> None:
     """发送错误消息（同样走二进制序列化）。"""
     logger.warning("请求错误：%s", error.get("error"))
     await _send(ws, error)
@@ -841,7 +841,7 @@ async def _send_error(ws: WebSocket, error: Dict[str, Any]) -> None:
 REQUIRED_FIELDS = ("episode_id", "step_id", "rgb_front", "instruction")
 
 
-def _validate_request(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _validate_request(data: dict[str, Any]) -> dict[str, Any] | None:
     """校验请求；返回错误 dict 表示失败，None 表示通过。"""
     # 必填字段
     missing = [f for f in REQUIRED_FIELDS if f not in data or data[f] is None]
@@ -901,7 +901,7 @@ def _validate_request(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _check_episode_step(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _check_episode_step(data: dict[str, Any]) -> dict[str, Any] | None:
     """episode_id / step_id 连续性与动作块过期检查（方案书 §3.4 动作过期）。
 
     返回值：错误 dict 表示应拒绝请求；None 表示通过。
@@ -936,7 +936,7 @@ def _check_episode_step(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _build_obs(data: Dict[str, Any]) -> Any:
+def _build_obs(data: dict[str, Any]) -> Any:
     """从请求字典构造 ObsPacket。"""
     if ObsPacket is None:
         raise RuntimeError("ObsPacket 不可用（执行器未导入）")
@@ -999,7 +999,7 @@ async def ws_infer(ws: WebSocket) -> None:
     logger.info("WebSocket 连接建立，已发送 metadata")
 
     # 本连接内的 episode 追踪（用于在异步上下文中触发 episode 切换清理）
-    _ws_prev_episode_id: Optional[str] = None
+    _ws_prev_episode_id: str | None = None
 
     try:
         while True:

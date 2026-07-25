@@ -19,24 +19,24 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from services.pi05.src.observation import ObsPacket
-from services.pi05.src.action import CanonicalActionChunk
 from services.pi05.src import pi05 as pi05_mod
+from services.pi05.src.action import CanonicalActionChunk
+from services.pi05.src.observation import ObsPacket
 from services.pi05.src.pi05 import (
-    Pi05Executor,
     ACTION_DIM,
-    MOCK_CHUNK_LEN,
-    MAX_TRANSLATION_M,
-    MAX_ROTATION_RAD,
     CONTROL_HZ,
-    SOURCE_POLICY,
-    SPACE_ID,
-    FRAME_ID,
     EXPIRES_AFTER_MS,
     FIXED_TEST_IMAGE,
     FIXED_TEST_IMAGE_CHECKSUM,
-    _prep_image,
+    FRAME_ID,
+    MAX_ROTATION_RAD,
+    MAX_TRANSLATION_M,
+    MOCK_CHUNK_LEN,
+    SOURCE_POLICY,
+    SPACE_ID,
+    Pi05Executor,
     _image_checksum,
+    _prep_image,
 )
 
 # 影响执行器初始化的环境变量全集（fixture 统一清空，保证初态确定）

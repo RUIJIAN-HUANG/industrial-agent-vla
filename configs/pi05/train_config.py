@@ -47,10 +47,10 @@ norm stats 计算命令（训练前必跑，方案书 §3.3.1 Para186）：
 
 from __future__ import annotations
 
-import os
 import logging
-from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+import os
+from dataclasses import dataclass
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # 日志
@@ -110,7 +110,7 @@ EVAL_INTERVAL: int = int(os.environ.get("PI05_EVAL_INTERVAL", "1000"))
 # 本地无 openpi 时，仍允许本文件被 import（用于文档/CI 静态检查），
 # 但配置实例为占位 dataclass，不能用于真实训练。
 OPENPI_AVAILABLE: bool = False
-OPENPI_IMPORT_ERROR: Optional[str] = None
+OPENPI_IMPORT_ERROR: str | None = None
 
 TrainConfig: Any = None
 LeRobotLiberoDataConfig: Any = None
@@ -119,13 +119,16 @@ ModelType: Any = None
 CosineDecaySchedule: Any = None
 AdamW: Any = None
 WeightLoader: Any = None
-_CONFIGS: Dict[str, Any] = {}
+_CONFIGS: dict[str, Any] = {}
 
 try:
-    from openpi.training.config import TrainConfig, LeRobotLiberoDataConfig  # type: ignore
-    from openpi.models.pi0_config import Pi0Config  # type: ignore
     from openpi.models.model import ModelType  # type: ignore
-    from openpi.training.optimizer import CosineDecaySchedule, AdamW  # type: ignore
+    from openpi.models.pi0_config import Pi0Config  # type: ignore
+    from openpi.training.config import (  # type: ignore
+        LeRobotLiberoDataConfig,
+        TrainConfig,
+    )
+    from openpi.training.optimizer import AdamW, CosineDecaySchedule  # type: ignore
     from openpi.training.weight_loaders import WeightLoader  # type: ignore
 
     # 复用官方 _CONFIGS 注册表（若官方以字典形式导出）。
@@ -206,8 +209,6 @@ except Exception as _e:  # pragma: no cover
 
     class WeightLoader:
         """占位权重加载器。"""
-
-        pass
 
     _CONFIGS = {}
 
@@ -293,7 +294,7 @@ PI05_INDUSTRIAL_CONFIG: TrainConfig = _build_pi05_industrial_config()
 # ---------------------------------------------------------------------------
 # 安全闸门：冻结核心 LoRA 机制配置前禁止训练（C3 修复）
 # ---------------------------------------------------------------------------
-def validate_lora_ready(config: Optional[TrainConfig] = None) -> bool:
+def validate_lora_ready(config: TrainConfig | None = None) -> bool:
     """检查 LoRA freeze_filter 与 weight_loader 是否已配置。
 
     方案书 §3.3.1 要求走 JAX LoRA 路径；若 freeze_filter / weight_loader 均
@@ -356,7 +357,7 @@ def register_config() -> bool:
         return False
 
 
-def get_config(name: str = "pi05_industrial") -> Optional[TrainConfig]:
+def get_config(name: str = "pi05_industrial") -> TrainConfig | None:
     """获取配置实例。优先从 _CONFIGS 取，其次返回本文件构建的实例。
 
     供 openpi scripts/train.py 或本地脚本调用：get_config("pi05_industrial")。
@@ -390,15 +391,15 @@ def _print_summary() -> None:
         print("提示: LoRA 微调必须走 openpi JAX 路径（方案书 §3.3）。")
         print("      git clone https://github.com/Physical-Intelligence/openpi")
         print("      cd openpi && uv sync")
-    print(f"配置名:             pi05_industrial")
+    print("配置名:             pi05_industrial")
     print(f"model_type:         {getattr(ModelType, 'PI05', 'PI05')}")
-    print(f"action_dim:         7   (方案书 §3.4 [dx,dy,dz,dax,day,daz,gripper])")
-    print(f"action_horizon:     10  (初始候选，D21 后按闭环表现调整)")
+    print("action_dim:         7   (方案书 §3.4 [dx,dy,dz,dax,day,daz,gripper])")
+    print("action_horizon:     10  (初始候选，D21 后按闭环表现调整)")
     print(
         f"batch_size:         {BATCH_SIZE}  (默认安全值 16；方案书 §3.3：22.5GB 卡建议 ≤16)"
     )
-    print(f"lr init_value:      2e-5 (LoRA 微调较小学习率)")
-    print(f"num_train_steps:    30000  (openpi 官方示例参考值；D21 按数据量与收敛调整)")
+    print("lr init_value:      2e-5 (LoRA 微调较小学习率)")
+    print("num_train_steps:    30000  (openpi 官方示例参考值；D21 按数据量与收敛调整)")
     print(
         f"warmup_steps:       {WARMUP_STEPS}  (C2 修复；若 openpi API 不支持则由 scheduler 内部控制)"
     )
@@ -416,7 +417,7 @@ def _print_summary() -> None:
     print(f"base checkpoint:    {BASE_CHECKPOINT}")
     print(f"dataset repo_id:    {DATASET_REPO_ID}")
     print(f"output_dir:         {OUTPUT_DIR}")
-    print(f"fsdp_devices:       1   (单卡，方案书 §3.3 JAX 路径)")
+    print("fsdp_devices:       1   (单卡，方案书 §3.3 JAX 路径)")
     print(f"注册到 _CONFIGS:    {_REGISTERED}")
     # LoRA 安全闸门提示
     _lora_ok = validate_lora_ready()

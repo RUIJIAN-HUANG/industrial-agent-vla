@@ -9,7 +9,8 @@ services/pi05/src/pi05.py 的 Pi05Executor.infer()（体系A），再把 Canonic
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 import numpy as np
 
@@ -41,6 +42,7 @@ def _decode_image(raw: Any) -> np.ndarray | None:
         try:
             import base64
             import io
+
             from PIL import Image  # type: ignore
 
             data = raw.encode("ascii") if isinstance(raw, str) else bytes(raw)
@@ -61,7 +63,7 @@ class Pi05ContractAdapter:
     调 Pi05Executor.infer()，再把 CanonicalActionChunk 包成 ActionChunk。
     """
 
-    def __init__(self, executor: "Pi05Executor | None" = None) -> None:
+    def __init__(self, executor: Pi05Executor | None = None) -> None:
         self._executor: Pi05Executor = executor or Pi05Executor()
 
     @property

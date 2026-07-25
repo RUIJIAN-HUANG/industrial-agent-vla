@@ -12,8 +12,8 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from services.pi05.src.observation import ObsPacket
     from services.pi05.src.action import CanonicalActionChunk
+    from services.pi05.src.observation import ObsPacket
 
 
 class BaseExecutor(ABC):
@@ -23,7 +23,7 @@ class BaseExecutor(ABC):
     """
 
     @abstractmethod
-    def infer(self, obs: "ObsPacket") -> "CanonicalActionChunk":
+    def infer(self, obs: ObsPacket) -> CanonicalActionChunk:
         """观测 → 安全动作块。
 
         Args:

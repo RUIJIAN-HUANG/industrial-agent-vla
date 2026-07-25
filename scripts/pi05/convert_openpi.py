@@ -34,7 +34,7 @@ import json
 import logging
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import numpy as np
 
@@ -56,7 +56,7 @@ logger.setLevel(logging.INFO)
 # ---------------------------------------------------------------------------
 LeRobotDataset: Any = None
 LEROBOT_AVAILABLE: bool = False
-LEROBOT_IMPORT_ERROR: Optional[str] = None
+LEROBOT_IMPORT_ERROR: str | None = None
 
 try:
     from lerobot.common.datasets.lerobot_dataset import LeRobotDataset  # type: ignore
@@ -118,7 +118,7 @@ DEFAULT_IMAGE_HW: tuple = (256, 256)  # openpi LIBERO 默认图像尺寸
 # ---------------------------------------------------------------------------
 def load_image_as_array(
     path: Path, size: tuple = DEFAULT_IMAGE_HW
-) -> Optional[np.ndarray]:
+) -> np.ndarray | None:
     """加载 jpg 为 RGB uint8 ndarray，resize 到指定尺寸；失败返回 None。
 
     方案书 §5.4：LeRobot feature shape 固定 (256,256,3)，需在存储前 resize。
@@ -150,7 +150,7 @@ def load_image_as_array(
 # ---------------------------------------------------------------------------
 # steps 读取（parquet 优先，hdf5 兜底）
 # ---------------------------------------------------------------------------
-def load_steps(episode_dir: Path) -> Optional[Dict[str, np.ndarray]]:
+def load_steps(episode_dir: Path) -> dict[str, np.ndarray] | None:
     """读取 steps.parquet 或 steps.hdf5，返回 dict：
         robot_state: float32[N, d]
         action:      float32[N, 7]
@@ -205,9 +205,9 @@ def load_steps(episode_dir: Path) -> Optional[Dict[str, np.ndarray]]:
 # ---------------------------------------------------------------------------
 # episode 枚举
 # ---------------------------------------------------------------------------
-def find_episodes(data_dir: Path) -> List[Path]:
+def find_episodes(data_dir: Path) -> list[Path]:
     """枚举 data_dir 下所有 episode 文件夹（含 meta.json）。"""
-    episodes: List[Path] = []
+    episodes: list[Path] = []
     for p in sorted(data_dir.iterdir()):
         if p.is_dir() and (p / "meta.json").exists():
             episodes.append(p)
@@ -337,7 +337,7 @@ def main() -> int:
     img_shape: tuple = (img_h, img_w, 3)
 
     # ---- 创建 LeRobot 数据集 ----
-    features: Dict[str, Any] = {
+    features: dict[str, Any] = {
         "image": {
             "dtype": "image",
             "shape": img_shape,
@@ -380,7 +380,7 @@ def main() -> int:
         return 1
 
     # ---- 统计容器 ----
-    stats: Dict[str, Any] = {
+    stats: dict[str, Any] = {
         "total_episodes": 0,  # 成功写入的 episode 数
         "total_steps": 0,  # 成功写入的 step 数
         "skipped_steps": 0,  # 跳过的 step 数
@@ -444,7 +444,7 @@ def main() -> int:
 
         robot_states = steps["robot_state"]  # [N, d] 或 [N*d]
         actions = steps["action"]  # [N, 7] 或 [N*7]
-        n_steps = int(len(robot_states))
+        n_steps = len(robot_states)
         if n_steps == 0:
             logger.warning("[%s] steps 为空，跳过 episode", ep_name)
             stats["skipped_episodes"] += 1
@@ -516,7 +516,7 @@ def main() -> int:
                 continue
 
             # (6) 腕部视图（可选；缺失用黑图占位，不跳过）
-            wrist_image: Optional[np.ndarray] = None
+            wrist_image: np.ndarray | None = None
             if has_wrist_dir:
                 wrist_path = wrist_dir / f"{i:06d}.jpg"
                 if wrist_path.exists():

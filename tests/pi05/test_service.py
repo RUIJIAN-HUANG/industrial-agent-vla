@@ -17,14 +17,14 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import os
 import sys
-import json
 import time
-import asyncio
 import tracemalloc
 from contextlib import contextmanager
-from typing import Any, Dict
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -51,12 +51,11 @@ _PROJECT_ROOT = os.path.dirname(
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-from starlette.testclient import TestClient  # noqa: E402
+from starlette.testclient import TestClient
 
-from services.pi05.src.observation import ObsPacket  # noqa: E402
-from services.pi05.src.action import CanonicalActionChunk  # noqa: E402
-from services.pi05.src import openpi_service  # noqa: E402
-
+from services.pi05.src import openpi_service
+from services.pi05.src.action import CanonicalActionChunk
+from services.pi05.src.observation import ObsPacket
 
 # ---------------------------------------------------------------------------
 # 常量（严格对齐方案书 §3.4 / openpi_service.py 模块常量）
@@ -89,7 +88,7 @@ def make_valid_request(
     rgb_wrist: Any = None,
     robot_state: Any = None,
     runtime_flags: Any = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """构造合法 ObsPacket v1 请求字典（JSON 可序列化）。
 
     字段严格对齐方案书 §3.4：
@@ -110,7 +109,7 @@ def make_valid_request(
     if runtime_flags is None:
         runtime_flags = {"terminated": False, "truncated": False, "camera_ok": True}
 
-    req: Dict[str, Any] = {
+    req: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "episode_id": episode_id,
         "step_id": step_id,
@@ -150,12 +149,12 @@ def make_action_chunk(
     )
 
 
-def serialize_request(req: Dict[str, Any]) -> str:
+def serialize_request(req: dict[str, Any]) -> str:
     """序列化请求为 JSON 文本（TestClient send_text 用）。"""
     return json.dumps(req, ensure_ascii=False)
 
 
-def parse_response(raw: bytes) -> Dict[str, Any]:
+def parse_response(raw: bytes) -> dict[str, Any]:
     """反序列化服务端响应（JSON bytes → dict）。
 
     服务端 _serialize 在无 msgpack 时回退 JSON bytes（openpi_service._serialize）。
