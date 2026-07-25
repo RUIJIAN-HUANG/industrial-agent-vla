@@ -676,8 +676,8 @@ if __name__ == "__main__":
     clipped = ex._clip_actions(bad)
     print("in :", bad[0])
     print("out:", clipped[0])
-    assert abs(clipped[0, 0]) <= MAX_TRANSLATION_M
-    assert abs(clipped[0, 3]) <= MAX_ROTATION_RAD
+    assert abs(clipped[0, 0]) <= np.float32(MAX_TRANSLATION_M)
+    assert abs(clipped[0, 3]) <= np.float32(MAX_ROTATION_RAD)
     assert clipped[0, 6] in (0.0, 1.0)
 
     print("\n=== NaN rejection test ===")

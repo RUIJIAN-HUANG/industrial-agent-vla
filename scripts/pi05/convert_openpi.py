@@ -261,7 +261,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--filter_success_only", action="store_true",
-        help="仅转换 result.json 中 success=true 的 episode（方案书 §5.3：标准成功占约 70%）。",
+        help="仅转换 result.json 中 success=true 的 episode（方案书 §5.3：标准成功占约 70%%）。",
     )
     return parser.parse_args()
 
