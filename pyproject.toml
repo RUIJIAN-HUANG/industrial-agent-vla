@@ -45,6 +45,7 @@ ignore = [
     "RUF100",      # 未使用的 noqa，不影响逻辑
     "I001",        # import 排序，不影响逻辑
     "SIM114",      # if 分支合并，不影响逻辑
+    "E402",        # sys.path 插入后 import，模块级设计
 ]
 
 [tool.pytest.ini_options]
