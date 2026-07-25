@@ -249,6 +249,9 @@ scratch/
 .DS_Store
 Thumbs.db
 
+# Trae IDE local config
+.trae/
+
 # Claude Code
 CLAUDE.md
 AGENTS.md
