@@ -46,13 +46,13 @@ logger.setLevel(logging.INFO)
 
 # ---------------------------------------------------------------------------
 # 共享 schema / 基类
-# 方案书 §7.3 仓库结构：src/contracts/{observation,action}.py、src/executors/base.py。
+# 方案书 §7.3 仓库结构：services/pi05/src/{observation,action,base}.py。
 # A 提供正式版本前，优先 import；import 失败时使用本文件内占位定义，保证可独立运行。
 # 正式 contracts/base 落地后，删除 except 分支即可。
 # ---------------------------------------------------------------------------
 try:  # 正式 contracts（A 提供）
-    from src.contracts.observation import ObsPacket  # type: ignore
-    from src.contracts.action import CanonicalActionChunk  # type: ignore
+    from services.pi05.src.observation import ObsPacket  # type: ignore
+    from services.pi05.src.action import CanonicalActionChunk  # type: ignore
 except Exception:  # 占位定义（A 提供 contracts 后删除本分支）
     @dataclass
     class ObsPacket:
@@ -82,7 +82,7 @@ except Exception:  # 占位定义（A 提供 contracts 后删除本分支）
 
 
 try:  # 正式基类（A 提供）
-    from src.executors.base import BaseExecutor  # type: ignore
+    from services.pi05.src.base import BaseExecutor  # type: ignore
 except Exception:  # 占位基类（A 提供 base.py 后删除本分支）
     class BaseExecutor:  # type: ignore[no-redef]
         """占位基类。A 提供正式 BaseExecutor 后此分支不再生效。"""
@@ -104,7 +104,7 @@ except Exception:  # 占位基类（A 提供 base.py 后删除本分支）
 # 策略客户端抽象（网络/模型加载代码在 pi05_client.py，§7.1 封装 RPC）
 # ---------------------------------------------------------------------------
 try:
-    from src.executors.pi05_client import (  # type: ignore
+    from services.pi05.src.pi05_client import (  # type: ignore
         PolicyClient,
         make_policy_client,
         OPENPI_AVAILABLE,

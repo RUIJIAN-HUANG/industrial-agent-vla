@@ -1,7 +1,7 @@
 """π0.5 体系B 契约适配器（叠加层）。
 
 把 src/industrial_agent/executor.py 的 Executor Protocol（体系B）翻译为
-src/executors/pi05.py 的 Pi05Executor.infer()（体系A），再把 CanonicalActionChunk
+services/pi05/src/pi05.py 的 Pi05Executor.infer()（体系A），再把 CanonicalActionChunk
 包成体系B 的 ActionChunk。不修改任何冻结文件；结构子类型实现，不显式继承。
 
 方案书出处：interface-contracts.md §4/§7；agent-framework.md §9 统一 7 维动作合同。
@@ -12,8 +12,8 @@ from typing import Any, Mapping
 
 import numpy as np
 
-from src.contracts.observation import ObsPacket
-from src.executors.pi05 import Pi05Executor
+from services.pi05.src.observation import ObsPacket
+from services.pi05.src.pi05 import Pi05Executor
 from src.industrial_agent.contracts import ActionChunk, Observation, TaskSchema
 from src.industrial_agent.errors import ExecutorError, FailureCode
 from src.industrial_agent.executor import ExecutionContext, ExecutorDescriptor

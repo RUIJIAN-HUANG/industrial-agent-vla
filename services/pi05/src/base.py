@@ -12,8 +12,8 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from src.contracts.observation import ObsPacket
-    from src.contracts.action import CanonicalActionChunk
+    from services.pi05.src.observation import ObsPacket
+    from services.pi05.src.action import CanonicalActionChunk
 
 
 class BaseExecutor(ABC):

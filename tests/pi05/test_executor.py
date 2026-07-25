@@ -1,6 +1,6 @@
 """Pi05Executor 单元测试。
 
-被测目标：src/executors/pi05.py
+被测目标：services/pi05/src/pi05.py
 方案书出处：
   - §3.3.1 Para185/186：norm stats / 反归一化由 openpi 在 policy.infer 内部完成，
     适配器不再二次反归一化；失败切换清空动作队列与客户端缓存。
@@ -18,10 +18,10 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from src.contracts.observation import ObsPacket
-from src.contracts.action import CanonicalActionChunk
-from src.executors import pi05 as pi05_mod
-from src.executors.pi05 import (
+from services.pi05.src.observation import ObsPacket
+from services.pi05.src.action import CanonicalActionChunk
+from services.pi05.src import pi05 as pi05_mod
+from services.pi05.src.pi05 import (
     Pi05Executor,
     ACTION_DIM,
     MOCK_CHUNK_LEN,

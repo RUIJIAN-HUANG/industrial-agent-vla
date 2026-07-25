@@ -47,9 +47,9 @@ if _PROJECT_ROOT not in sys.path:
 
 from starlette.testclient import TestClient  # noqa: E402
 
-from src.contracts.observation import ObsPacket  # noqa: E402
-from src.contracts.action import CanonicalActionChunk  # noqa: E402
-from src.services import openpi_service  # noqa: E402
+from services.pi05.src.observation import ObsPacket  # noqa: E402
+from services.pi05.src.action import CanonicalActionChunk  # noqa: E402
+from services.pi05.src import openpi_service  # noqa: E402
 
 
 # ---------------------------------------------------------------------------

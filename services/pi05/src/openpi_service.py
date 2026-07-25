@@ -10,14 +10,14 @@
 
 本文件为角色 E 的交付物，负责网络服务层：
 - WebSocket 连接管理、请求校验、序列化（msgpack 优先，与 openpi 官方兼容；fallback JSON）。
-- 调用 src.executors.pi05.Pi05Executor 做模型推理（不在本层直接碰模型）。
+- 调用 services/pi05/src/pi05.py Pi05Executor 做模型推理（不在本层直接碰模型）。
 - 动作块过期丢弃、episode_id/step_id 防错、健康检查 HTTP 端点。
 - PI05_SERVICE_MODE=dummy 时不 import openpi，适合本地全流程联调。
 
 启动：
-    uvicorn src.services.openpi_service:app --reload
+    uvicorn services.pi05.src.openpi_service:app --reload
 或：
-    python -m src.services.openpi_service
+    python -m services.pi05.src.openpi_service
 """
 
 from __future__ import annotations
@@ -112,7 +112,7 @@ logger.setLevel(logging.INFO)
 #       dummy 模式下 openpi 不存在时服务仍能启动。
 # ---------------------------------------------------------------------------
 try:
-    from src.executors.pi05 import Pi05Executor, ObsPacket  # type: ignore
+    from services.pi05.src.pi05 import Pi05Executor, ObsPacket  # type: ignore
     _EXECUTOR_AVAILABLE = True
     _EXECUTOR_IMPORT_ERROR = ""
 except Exception as _e:
@@ -1047,7 +1047,7 @@ async def ws_infer(ws: WebSocket) -> None:
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     uvicorn.run(
-        "src.services.openpi_service:app",
+        "services.pi05.src.openpi_service:app",
         host=SERVICE_HOST,
         port=SERVICE_PORT,
         reload=False,

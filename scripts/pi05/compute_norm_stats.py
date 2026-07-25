@@ -46,7 +46,7 @@ CPU 兼容：--mock 用 numpy 随机数据独立运行，无 GPU / openpi / lero
 
     # 指定输出 + 静默（只输出结果与 SHA256）
     python scripts/pi05/compute_norm_stats.py --dataset-path /path/to/ds \\
-        --output-path ./assets/norm_stats.json --quiet
+        --output-path ./data/fixtures/norm_stats.json --quiet
 """
 from __future__ import annotations
 
@@ -202,7 +202,7 @@ def _resolve_output_path_from_config(config_name: str) -> Path:
     优先级：
       1. PI05_ASSETS_DIR 环境变量 → <assets>/<config_name>/<repo_id>/norm_stats.json
       2. config.assets_dirs 属性（openpi 官方 TrainConfig property）
-      3. 降级 ./assets/<config_name>/<repo_id>/norm_stats.json
+      3. 降级 ./data/fixtures/<repo_id>/norm_stats.json
 
     openpi 不可用时，通过 train_config 的 fallback dataclass 解析 repo_id，
     与 train.py 降级逻辑一致。
@@ -227,8 +227,8 @@ def _resolve_output_path_from_config(config_name: str) -> Path:
         if ad is not None:
             assets_dirs = Path(str(ad)).resolve()
         else:
-            # 3. 降级默认
-            assets_dirs = Path(".").resolve() / "assets" / config_name
+            # 3. 降级默认（12 项迁移后规范路径）
+            assets_dirs = Path(".").resolve() / "data" / "fixtures"
 
     # repo_id 从 config.data 读取（与 train.py get_norm_stats_path() 对齐）
     # C3 修复：回退值引用 train_config.DATASET_REPO_ID 常量，消除硬编码
@@ -902,7 +902,7 @@ def main() -> int:
 
     # ---- 5. SHA256 校验和（供 model_manifest.yaml，方案书 §8.5 / §7.2）----
     sha256_full = compute_sha256(output_path)
-    sha256_short = sha256_full[:16]  # 与 src/executors/pi05.py 的 _norm_stats_sha 截断一致
+    sha256_short = sha256_full[:16]  # 与 services/pi05/src/pi05.py 的 _norm_stats_sha 截断一致
 
     # ---- 6. 输出 ----
     if not args.quiet:
@@ -934,7 +934,7 @@ def main() -> int:
         print("[MOCK] 注意：此文件为 Mock 模式生成，仅供算子校验，不得用于正式训练。")
     print("=" * 72)
     print("下一步：将该 SHA256 写入 model_manifest.yaml（方案书 §8.5）；")
-    print("       训练时设置 PI05_NORM_STATS_PATH 指向此文件（src/executors/pi05.py 追溯）。")
+    print("       训练时设置 PI05_NORM_STATS_PATH 指向此文件（services/pi05/src/pi05.py 追溯）。")
     return 0
 
 

@@ -79,20 +79,20 @@ RUN uv pip install --upgrade "jax[cuda12]"
 
 # -----------------------------------------------------------------------------
 # 7. 复制本项目代码（角色 E 交付物）
-#    - src/:   含 executors/pi05.py、services/openpi_service.py
+#    - services/pi05/src/: 含 pi05.py、openpi_service.py 等核心代码
 #    - scripts/: pi05 工具脚本（如 convert_openpi.py）
 #    - configs/: 服务配置
 #    注意：data/ 不 COPY，数据通过 volume 挂载到 /workspace/project/data
 #          权重不 COPY，通过 volume 挂载到 /workspace/openpi/checkpoints
 # -----------------------------------------------------------------------------
-COPY src/ /workspace/project/src/
+COPY services/pi05/src/ /workspace/project/services/pi05/src/
 COPY scripts/ /workspace/project/scripts/
 COPY configs/ /workspace/project/configs/
 
-# 启动工作目录设为项目根，便于 `python -m src.services.openpi_service` 解析模块
+# 启动工作目录设为项目根，便于 `python -m services.pi05.src.openpi_service` 解析模块
 WORKDIR /workspace/project
 
-# 让 Python 能找到项目根下的 src 包
+# 让 Python 能找到项目根下的包
 ENV PYTHONPATH=/workspace/project:${PYTHONPATH}
 
 # -----------------------------------------------------------------------------
@@ -163,4 +163,4 @@ VOLUME ["/workspace/openpi_data", "/workspace/project/data", "/workspace/openpi/
 #     使用 openpi venv 的 python -m uvicorn，确保使用已安装 uvicorn 的解释器。
 #     默认 dummy 模式启动；真实推理时 `docker run -e PI05_SERVICE_MODE=real`
 # -----------------------------------------------------------------------------
-CMD ["/workspace/openpi/.venv/bin/python", "-m", "uvicorn", "src.services.openpi_service:app", "--host", "0.0.0.0", "--port", "8102"]
+CMD ["/workspace/openpi/.venv/bin/python", "-m", "uvicorn", "services.pi05.src.openpi_service:app", "--host", "0.0.0.0", "--port", "8102"]

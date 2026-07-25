@@ -149,7 +149,7 @@ def get_assets_dirs(config: Any, config_name: str) -> pathlib.Path:
     优先级：
     1. PI05_ASSETS_DIR 环境变量（覆盖 config.assets_base_dir）
     2. config.assets_dirs 属性（openpi 官方 TrainConfig 的 property）
-    3. 降级默认 ./assets/<config_name>
+    3. 降级默认 ./data/fixtures
     """
     assets_base = _os.environ.get("PI05_ASSETS_DIR")
     if assets_base:
@@ -159,7 +159,7 @@ def get_assets_dirs(config: Any, config_name: str) -> pathlib.Path:
         # W3 修复：使用 str() 统一处理 Path/str 两种类型，避免 Path(Path) 冗余包装
         return pathlib.Path(str(ad)).resolve()
     # 降级（占位 config 无 assets_dirs 属性）
-    return (pathlib.Path(".") / "assets" / config_name).resolve()
+    return (pathlib.Path(".") / "data" / "fixtures").resolve()
 
 
 def get_norm_stats_path(config: Any, config_name: str) -> pathlib.Path:
