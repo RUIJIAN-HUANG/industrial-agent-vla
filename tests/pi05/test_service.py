@@ -155,11 +155,13 @@ def serialize_request(req: dict[str, Any]) -> str:
 
 
 def parse_response(raw: bytes) -> dict[str, Any]:
-    """反序列化服务端响应（JSON bytes → dict）。
+    """反序列化服务端响应：msgpack 优先，fallback JSON。"""
+    try:
+        import msgpack
 
-    服务端 _serialize 在无 msgpack 时回退 JSON bytes（openpi_service._serialize）。
-    """
-    return json.loads(raw.decode("utf-8"))
+        return msgpack.unpackb(raw, raw=False)
+    except Exception:
+        return json.loads(raw.decode("utf-8"))
 
 
 # ---------------------------------------------------------------------------
