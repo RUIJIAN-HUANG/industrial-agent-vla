@@ -34,6 +34,7 @@
     PI05_OPENPI_REPO: openpi 仓库根目录（用于定位官方 scripts/train.py，可编辑安装时可不设）
     PI05_QUIET: 静默模式（=1 时 train_config 不打印摘要）
 """
+
 from __future__ import annotations
 
 # ===========================================================================
@@ -49,6 +50,7 @@ _os.environ.setdefault("XLA_PYTHON_CLIENT_MEM_FRACTION", _DEFAULT_MEM_FRACTION)
 # 提前探测 --quiet，避免 train_config 在 import 时打印摘要（train_config 读 PI05_QUIET）
 # 注意：必须先 import sys 才能访问 argv；此处只做字符串探测，不解析 argparse。
 import sys as _sys
+
 if "--quiet" in _sys.argv:
     _os.environ.setdefault("PI05_QUIET", "1")
 
@@ -98,7 +100,9 @@ import configs.pi05.train_config as pi05_config  # noqa: E402
 logger = logging.getLogger("pi05_train")
 if not logger.handlers:
     _h = logging.StreamHandler()
-    _h.setFormatter(logging.Formatter("[%(asctime)s][%(levelname)s][pi05_train] %(message)s"))
+    _h.setFormatter(
+        logging.Formatter("[%(asctime)s][%(levelname)s][pi05_train] %(message)s")
+    )
     logger.addHandler(_h)
 logger.setLevel(logging.INFO)
 
@@ -126,17 +130,28 @@ def get_config(config_name: str) -> Any:
     if pi05_config.OPENPI_AVAILABLE:
         try:
             from openpi.training.config import get_config as _openpi_get_config
+
             cfg = _openpi_get_config(config_name)
             if cfg is not None:
-                logger.info("从 openpi.training.config.get_config 加载配置: %s", config_name)
+                logger.info(
+                    "从 openpi.training.config.get_config 加载配置: %s", config_name
+                )
                 return cfg
-            logger.warning("openpi get_config 返回 None，降级到 train_config.get_config")
+            logger.warning(
+                "openpi get_config 返回 None，降级到 train_config.get_config"
+            )
         except Exception as e:
-            logger.warning("openpi get_config 失败，降级到 train_config.get_config: %s", e)
+            logger.warning(
+                "openpi get_config 失败，降级到 train_config.get_config: %s", e
+            )
     # 降级：train_config.py 本地 get_config
     cfg = pi05_config.get_config(config_name)
     if cfg is None:
-        logger.error("配置 '%s' 未找到（openpi 可用=%s）", config_name, pi05_config.OPENPI_AVAILABLE)
+        logger.error(
+            "配置 '%s' 未找到（openpi 可用=%s）",
+            config_name,
+            pi05_config.OPENPI_AVAILABLE,
+        )
     return cfg
 
 
@@ -190,7 +205,10 @@ def check_norm_stats(config: Any, config_name: str) -> bool:
         return True
     logger.error("❌ norm_stats.json 不存在: %s", path)
     logger.error("   方案书 §3.3.1 Para186 要求训练前必跑 compute_norm_stats。")
-    logger.error("   请先运行: python scripts/pi05/compute_norm_stats.py --config-name %s", config_name)
+    logger.error(
+        "   请先运行: python scripts/pi05/compute_norm_stats.py --config-name %s",
+        config_name,
+    )
     return False
 
 
@@ -229,8 +247,12 @@ def generate_mock_norm_stats(config: Any, config_name: str) -> pathlib.Path:
         }
     }
     path.write_text(json.dumps(mock_stats, indent=2), encoding="utf-8")
-    logger.info("[MOCK] 已生成 mock norm_stats.json: %s (state_dim=%d, action_dim=%d)",
-                path, state_dim, action_dim)
+    logger.info(
+        "[MOCK] 已生成 mock norm_stats.json: %s (state_dim=%d, action_dim=%d)",
+        path,
+        state_dim,
+        action_dim,
+    )
     return path
 
 
@@ -270,6 +292,7 @@ def load_openpi_train_module():
     try:
         # S3：此时 XLA_PYTHON_CLIENT_MEM_FRACTION 已在模块顶部（L46）设置完毕，JAX 初始化安全
         import openpi  # noqa: PLC0415
+
         pkg_path = pathlib.Path(openpi.__file__).resolve()
         # openpi 包结构：<repo>/src/openpi/__init__.py
         # parents: [0]=openpi, [1]=src, [2]=repo_root
@@ -278,7 +301,10 @@ def load_openpi_train_module():
         if train_path.exists():
             logger.info("从 openpi 包位置推断官方 train.py: %s", train_path)
             return _load_module_from_path("openpi_train_script", train_path)
-        logger.warning("openpi 包已安装但 %s/scripts/train.py 不存在（可能为 wheel 安装）", repo_root)
+        logger.warning(
+            "openpi 包已安装但 %s/scripts/train.py 不存在（可能为 wheel 安装）",
+            repo_root,
+        )
     except ImportError:
         pass
 
@@ -314,8 +340,10 @@ def apply_overrides(config: Any, args: argparse.Namespace) -> Any:
         valid_overrides = {k: v for k, v in overrides.items() if k in valid_fields}
         skipped = {k: v for k, v in overrides.items() if k not in valid_fields}
         if skipped:
-            logger.warning("以下覆盖字段在当前 config 中不存在，已跳过: %s（W2 修复：升级为 WARNING 确保可见）",
-                       list(skipped.keys()))
+            logger.warning(
+                "以下覆盖字段在当前 config 中不存在，已跳过: %s（W2 修复：升级为 WARNING 确保可见）",
+                list(skipped.keys()),
+            )
         if not valid_overrides:
             return config
         return dataclasses.replace(config, **valid_overrides)
@@ -331,12 +359,17 @@ def apply_mock_data(config: Any) -> Any:
     FakeDataConfig，以实现无真实数据环境下的流程测试。
     """
     if not pi05_config.OPENPI_AVAILABLE:
-        logger.info("[MOCK] openpi 不可用，跳过 FakeDataConfig 替换（使用 train_config 占位 data）")
+        logger.info(
+            "[MOCK] openpi 不可用，跳过 FakeDataConfig 替换（使用 train_config 占位 data）"
+        )
         return config
     try:
         from openpi.training.config import FakeDataConfig  # noqa: PLC0415
+
         new_config = dataclasses.replace(config, data=FakeDataConfig())
-        logger.info("[MOCK] 已将 data 替换为 FakeDataConfig（openpi 自带，无需真实数据/norm_stats）")
+        logger.info(
+            "[MOCK] 已将 data 替换为 FakeDataConfig（openpi 自带，无需真实数据/norm_stats）"
+        )
         return new_config
     except Exception as e:
         logger.warning("[MOCK] 替换 FakeDataConfig 失败，保留原 data: %s", e)
@@ -357,7 +390,9 @@ def print_summary(config: Any, config_name: str, args: argparse.Namespace) -> No
     num_steps = getattr(config, "num_train_steps", "?")
     warmup = getattr(config, "warmup_steps", pi05_config.WARMUP_STEPS)
     weight_decay = getattr(config, "weight_decay", pi05_config.WEIGHT_DECAY)
-    grad_accum = getattr(config, "gradient_accumulation_steps", pi05_config.GRADIENT_ACCUMULATION_STEPS)
+    grad_accum = getattr(
+        config, "gradient_accumulation_steps", pi05_config.GRADIENT_ACCUMULATION_STEPS
+    )
     mixed_prec = getattr(config, "mixed_precision", pi05_config.MIXED_PRECISION)
     eval_interval = getattr(config, "eval_interval", pi05_config.EVAL_INTERVAL)
     fsdp = getattr(config, "fsdp_devices", "?")
@@ -381,11 +416,17 @@ def print_summary(config: Any, config_name: str, args: argparse.Namespace) -> No
     print(f"  openpi 可用:        {pi05_config.OPENPI_AVAILABLE}")
     print(f"  Mock 模式:          {args.mock}")
     print("-" * 72)
-    print(f"  LoRA Rank:          {lora_rank}  (方案书 §3.2.1 OpenVLA-OFT 示例；π0.5 初始候选值)")
-    print(f"  action_dim:         {action_dim}  (方案书 §3.4 [dx,dy,dz,dax,day,daz,gripper])")
+    print(
+        f"  LoRA Rank:          {lora_rank}  (方案书 §3.2.1 OpenVLA-OFT 示例；π0.5 初始候选值)"
+    )
+    print(
+        f"  action_dim:         {action_dim}  (方案书 §3.4 [dx,dy,dz,dax,day,daz,gripper])"
+    )
     print(f"  action_horizon:     {action_horizon}  (初始候选，D21 后按闭环表现调整)")
     print(f"  Batch Size:         {batch_size}  (方案书 §3.3：22.5GB 卡建议 ≤16)")
-    print(f"  Total Steps:        {num_steps}  (openpi 官方示例参考值；D21 按数据量调整)")
+    print(
+        f"  Total Steps:        {num_steps}  (openpi 官方示例参考值；D21 按数据量调整)"
+    )
     print(f"  Warmup Steps:       {warmup}")
     print(f"  Weight Decay:       {weight_decay}")
     print(f"  Grad Accum Steps:   {grad_accum}")
@@ -402,10 +443,14 @@ def print_summary(config: Any, config_name: str, args: argparse.Namespace) -> No
     if lora_ready:
         print(f"  LoRA 冻结状态:      ✅ freeze_filter + weight_loader 已配置")
     else:
-        print(f"  LoRA 冻结状态:      ⚠️  freeze_filter/weight_loader 未配置（C3 安全闸门）")
+        print(
+            f"  LoRA 冻结状态:      ⚠️  freeze_filter/weight_loader 未配置（C3 安全闸门）"
+        )
         print(f"                       当前为全参数训练配置，显存需求 >70GB（§3.3）")
         if not args.mock:
-            print(f"                       真实训练前必须配置 LoRA 机制；--mock 模式可豁免。")
+            print(
+                f"                       真实训练前必须配置 LoRA 机制；--mock 模式可豁免。"
+            )
     print("-" * 72)
     print(f"  Overwrite:          {args.overwrite}")
     print(f"  Resume:             {args.resume}")
@@ -436,32 +481,40 @@ def parse_args() -> argparse.Namespace:
     )
     # 必需参数
     parser.add_argument(
-        "--config-name", default=DEFAULT_CONFIG_NAME,
+        "--config-name",
+        default=DEFAULT_CONFIG_NAME,
         help="配置名称，必须与 train_config.py 中定义一致（默认 pi05_industrial）。",
     )
     parser.add_argument(
-        "--exp-name", default=None,
+        "--exp-name",
+        default=None,
         help="实验名称，非 mock 模式必须显式指定（用于命名 checkpoint 目录）。",
     )
     # 可选参数
     parser.add_argument(
-        "--mock", action="store_true",
+        "--mock",
+        action="store_true",
         help="启用 Mock 模式：CPU/无 GPU 环境验证训练骨架（替换 FakeDataConfig，豁免 norm_stats）。",
     )
     parser.add_argument(
-        "--overwrite", action="store_true",
+        "--overwrite",
+        action="store_true",
         help="覆盖已有实验 checkpoint 目录。",
     )
     parser.add_argument(
-        "--resume", action="store_true",
+        "--resume",
+        action="store_true",
         help="从最近 checkpoint 恢复训练。",
     )
     parser.add_argument(
-        "--quiet", action="store_true",
+        "--quiet",
+        action="store_true",
         help="静默模式，减少输出信息。",
     )
     parser.add_argument(
-        "--mock-stats", choices=["skip", "generate"], default="skip",
+        "--mock-stats",
+        choices=["skip", "generate"],
+        default="skip",
         help="Mock 模式 norm_stats 处理策略：skip=跳过校验；generate=生成 Mock 统计文件。",
     )
     return parser.parse_args()
@@ -489,15 +542,21 @@ def main() -> int:
     if args.exp_name is None:
         if args.mock:
             args.exp_name = DEFAULT_MOCK_EXP_NAME
-            logger.info("[MOCK] 未指定 --exp-name，使用默认值: %s", DEFAULT_MOCK_EXP_NAME)
+            logger.info(
+                "[MOCK] 未指定 --exp-name，使用默认值: %s", DEFAULT_MOCK_EXP_NAME
+            )
         else:
             logger.error("非 mock 模式下 --exp-name 必须显式指定。")
             return 1
 
     # ---- 3. 应用 CLI 参数与环境变量覆盖（关键参数透传）----
     config = apply_overrides(config, args)
-    logger.info("已应用 CLI 覆盖: exp_name=%s, overwrite=%s, resume=%s",
-                args.exp_name, args.overwrite, args.resume)
+    logger.info(
+        "已应用 CLI 覆盖: exp_name=%s, overwrite=%s, resume=%s",
+        args.exp_name,
+        args.overwrite,
+        args.resume,
+    )
 
     # ---- 4. Mock 模式：替换 data 为 FakeDataConfig（红线 3）----
     if args.mock:
@@ -525,9 +584,13 @@ def main() -> int:
         if args.mock:
             logger.info("=" * 60)
             logger.info("[MOCK] 骨架验证完成。")
-            logger.info("[MOCK] 已验证：配置加载 ✓ / 参数透传 ✓ / Pre-flight 检查 ✓ / 摘要打印 ✓")
+            logger.info(
+                "[MOCK] 已验证：配置加载 ✓ / 参数透传 ✓ / Pre-flight 检查 ✓ / 摘要打印 ✓"
+            )
             logger.info("[MOCK] 真实训练需要 openpi（方案书 §3.3 JAX 路径）：")
-            logger.info("[MOCK]   git clone https://github.com/Physical-Intelligence/openpi")
+            logger.info(
+                "[MOCK]   git clone https://github.com/Physical-Intelligence/openpi"
+            )
             logger.info("[MOCK]   cd openpi && uv sync && uv pip install -e .")
             logger.info("=" * 60)
             return 0
@@ -542,7 +605,9 @@ def main() -> int:
         logger.error("openpi 已安装但无法定位官方 scripts/train.py。")
         logger.error("请设置 PI05_OPENPI_REPO 环境变量指向 openpi 仓库根目录。")
         if args.mock:
-            logger.info("[MOCK] 骨架验证部分完成（无法定位官方 train.py，跳过训练循环）。")
+            logger.info(
+                "[MOCK] 骨架验证部分完成（无法定位官方 train.py，跳过训练循环）。"
+            )
             return 0
         return 1
 

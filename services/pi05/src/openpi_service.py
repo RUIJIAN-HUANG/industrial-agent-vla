@@ -37,6 +37,7 @@ from uuid import uuid4
 # ---------------------------------------------------------------------------
 try:
     import msgpack  # type: ignore
+
     _MSGPACK_AVAILABLE = True
 except Exception:  # msgpack 不存在时服务仍可启动，回退 JSON
     _MSGPACK_AVAILABLE = False
@@ -62,8 +63,10 @@ import numpy as np
 # ---------------------------------------------------------------------------
 SERVICE_MODE = os.environ.get("PI05_SERVICE_MODE", "dummy").lower()
 if SERVICE_MODE not in ("dummy", "real"):
-    print(f"[openpi_service] 未知 PI05_SERVICE_MODE={SERVICE_MODE}，回退到 dummy",
-          file=sys.stderr)
+    print(
+        f"[openpi_service] 未知 PI05_SERVICE_MODE={SERVICE_MODE}，回退到 dummy",
+        file=sys.stderr,
+    )
     SERVICE_MODE = "dummy"
 
 # 把服务层模式桥接给执行器（执行器读 PI05_MODE），保证服务层为唯一真相源
@@ -101,8 +104,9 @@ SUPPORTED_ACTION_CONTRACTS: List[str] = [CONTRACT_SCHEMA_VERSION]
 logger = logging.getLogger("openpi_service")
 if not logger.handlers:
     _h = logging.StreamHandler()
-    _h.setFormatter(logging.Formatter(
-        "[%(asctime)s][%(levelname)s][openpi_service] %(message)s"))
+    _h.setFormatter(
+        logging.Formatter("[%(asctime)s][%(levelname)s][openpi_service] %(message)s")
+    )
     logger.addHandler(_h)
 logger.setLevel(logging.INFO)
 
@@ -113,6 +117,7 @@ logger.setLevel(logging.INFO)
 # ---------------------------------------------------------------------------
 try:
     from services.pi05.src.pi05 import Pi05Executor, ObsPacket  # type: ignore
+
     _EXECUTOR_AVAILABLE = True
     _EXECUTOR_IMPORT_ERROR = ""
 except Exception as _e:
@@ -125,6 +130,7 @@ except Exception as _e:
 # 稳定错误码枚举（方案书 §13；src/industrial_agent/errors.py 为冻结文件，仅 import）
 try:
     from src.industrial_agent.errors import FailureCode  # type: ignore
+
     _FAILURE_CODE_AVAILABLE = True
 except Exception as _e:  # 退化：错误码用字符串常量兜底
     _FAILURE_CODE_AVAILABLE = False
@@ -153,7 +159,9 @@ _START_TIME = time.time()
 #     "expires_after_ms": int, "actions": list
 # }
 pending_chunks: Dict[str, dict] = {}
-_pending_chunks_lock: asyncio.Lock = asyncio.Lock()  # 并发保护（方案书 §7.1：多 episode 并发安全）
+_pending_chunks_lock: asyncio.Lock = (
+    asyncio.Lock()
+)  # 并发保护（方案书 §7.1：多 episode 并发安全）
 current_episode_id: Optional[str] = None
 last_step_id: Optional[int] = None
 
@@ -217,12 +225,16 @@ def _validate_sha_format(sha: str, field_name: str) -> None:
     生产 real 模式部署方必须设置合规的 PI05_CHECKPOINT_SHA / PI05_NORM_STATS_SHA。
     """
     if not sha:
-        logger.warning("%s 为空（生产部署必须设置 sha256:<64hex> 环境变量）", field_name)
+        logger.warning(
+            "%s 为空（生产部署必须设置 sha256:<64hex> 环境变量）", field_name
+        )
         return
     if not _SHA_PATTERN.fullmatch(sha):
         logger.warning(
             "%s 格式不合规：%s（应匹配 sha256:<64hex>；dummy/mock 模式可继续，"
-            "real 模式必须修正）", field_name, sha,
+            "real 模式必须修正）",
+            field_name,
+            sha,
         )
 
 
@@ -309,16 +321,31 @@ async def health() -> Dict[str, Any]:
 
 # /v1/infer 请求 14 必填字段（schemas/executor-infer.schema.json#$defs/request）
 _INFER_REQUIRED_FIELDS: Tuple[str, ...] = (
-    "schema_version", "request_id", "trace_id", "episode_id",
-    "task_id", "subtask_id", "step_id", "observation_id",
-    "deadline_ms", "executor", "checkpoint_sha", "norm_stats_sha",
-    "expected_action_contract", "model_input",
+    "schema_version",
+    "request_id",
+    "trace_id",
+    "episode_id",
+    "task_id",
+    "subtask_id",
+    "step_id",
+    "observation_id",
+    "deadline_ms",
+    "executor",
+    "checkpoint_sha",
+    "norm_stats_sha",
+    "expected_action_contract",
+    "model_input",
 )
 
 # /v1/cancel 请求 7 必填字段（schemas/executor-cancel.schema.json#$defs/request）
 _CANCEL_REQUIRED_FIELDS: Tuple[str, ...] = (
-    "schema_version", "request_id", "trace_id", "episode_id",
-    "task_id", "subtask_id", "reason",
+    "schema_version",
+    "request_id",
+    "trace_id",
+    "episode_id",
+    "task_id",
+    "subtask_id",
+    "reason",
 )
 
 
@@ -401,7 +428,9 @@ def _build_obs_from_model_input(
                 rgb_front = np.array(full_image[key], dtype=np.uint8)
                 break
             except Exception as e:
-                raise ValueError(f"observation.camera.full_image.{key} 无法转为 uint8 数组：{e}")
+                raise ValueError(
+                    f"observation.camera.full_image.{key} 无法转为 uint8 数组：{e}"
+                )
     if rgb_front is None:
         # dummy 模式零图占位（Pi05Executor._infer_mock 不依赖像素内容）
         rgb_front = np.zeros((4, 4, 3), dtype=np.uint8)
@@ -447,9 +476,7 @@ def _build_obs_from_model_input(
     )
 
 
-def _canonical_chunk_to_action_chunk_dict(
-    chunk: Any, task_id: str
-) -> Dict[str, Any]:
+def _canonical_chunk_to_action_chunk_dict(chunk: Any, task_id: str) -> Dict[str, Any]:
     """CanonicalActionChunk → action_chunk dict（schemas/action-chunk.schema.json 9 字段）。
 
     CanonicalActionChunk.actions: float32[N,7] → steps[{values:[7], duration_ms}]。
@@ -461,9 +488,7 @@ def _canonical_chunk_to_action_chunk_dict(
             f"CanonicalActionChunk.actions 形状非法：{actions.shape}，期望 [N,7]"
         )
     if actions.shape[0] < 1 or actions.shape[0] > 32:
-        raise ValueError(
-            f"action_chunk.steps 数量超限：{actions.shape[0]}，期望 1..32"
-        )
+        raise ValueError(f"action_chunk.steps 数量超限：{actions.shape[0]}，期望 1..32")
 
     control_hz = int(getattr(chunk, "control_hz", DEFAULT_CONTROL_HZ))
     duration_ms = max(1, int(round(1000.0 / max(1, control_hz))))
@@ -502,14 +527,18 @@ async def http_infer(request: Request) -> JSONResponse:
         req = await request.json()
     except Exception as e:
         err_body = _make_infer_error_body(
-            {}, code=_failure_code_value(FailureCode.INVALID_TASK),
-            message=f"请求 body 不是合法 JSON：{e}", retryable=False,
+            {},
+            code=_failure_code_value(FailureCode.INVALID_TASK),
+            message=f"请求 body 不是合法 JSON：{e}",
+            retryable=False,
         )
         return JSONResponse(status_code=400, content=err_body)
     if not isinstance(req, dict):
         err_body = _make_infer_error_body(
-            {}, code=_failure_code_value(FailureCode.INVALID_TASK),
-            message="请求 body 必须是 JSON 对象", retryable=False,
+            {},
+            code=_failure_code_value(FailureCode.INVALID_TASK),
+            message="请求 body 必须是 JSON 对象",
+            retryable=False,
         )
         return JSONResponse(status_code=400, content=err_body)
 
@@ -517,8 +546,10 @@ async def http_infer(request: Request) -> JSONResponse:
     missing = [f for f in _INFER_REQUIRED_FIELDS if f not in req or req[f] is None]
     if missing:
         err_body = _make_infer_error_body(
-            req, code=_failure_code_value(FailureCode.INVALID_TASK),
-            message=f"缺少必填字段：{missing}", retryable=False,
+            req,
+            code=_failure_code_value(FailureCode.INVALID_TASK),
+            message=f"缺少必填字段：{missing}",
+            retryable=False,
             details={"missing": missing},
         )
         return JSONResponse(status_code=422, content=err_body)
@@ -526,7 +557,8 @@ async def http_infer(request: Request) -> JSONResponse:
     # ---- executor 必须为 pi05（方案书 §14.2：executor name exact match）----
     if req["executor"] != POLICY_ID:
         err_body = _make_infer_error_body(
-            req, code=_failure_code_value(FailureCode.INVALID_TASK),
+            req,
+            code=_failure_code_value(FailureCode.INVALID_TASK),
             message=f"executor 不匹配：期望 {POLICY_ID!r}，收到 {req['executor']!r}",
             retryable=False,
         )
@@ -535,9 +567,10 @@ async def http_infer(request: Request) -> JSONResponse:
     # ---- expected_action_contract 必须为 1.0 ----
     if req.get("expected_action_contract") != CONTRACT_SCHEMA_VERSION:
         err_body = _make_infer_error_body(
-            req, code=_failure_code_value(FailureCode.INVALID_TASK),
+            req,
+            code=_failure_code_value(FailureCode.INVALID_TASK),
             message=f"expected_action_contract 不兼容：期望 {CONTRACT_SCHEMA_VERSION!r}，"
-                    f"收到 {req.get('expected_action_contract')!r}",
+            f"收到 {req.get('expected_action_contract')!r}",
             retryable=False,
         )
         return JSONResponse(status_code=400, content=err_body)
@@ -547,14 +580,16 @@ async def http_infer(request: Request) -> JSONResponse:
     service_norm = _resolve_norm_stats_sha()
     if req["checkpoint_sha"] != service_ckpt:
         err_body = _make_infer_error_body(
-            req, code=_failure_code_value(FailureCode.EXECUTOR_MODEL_REVISION_MISMATCH),
+            req,
+            code=_failure_code_value(FailureCode.EXECUTOR_MODEL_REVISION_MISMATCH),
             message=f"checkpoint_sha 不匹配：期望 {service_ckpt!r}，收到 {req['checkpoint_sha']!r}",
             retryable=False,
         )
         return JSONResponse(status_code=409, content=err_body)
     if req["norm_stats_sha"] != service_norm:
         err_body = _make_infer_error_body(
-            req, code=_failure_code_value(FailureCode.EXECUTOR_MODEL_REVISION_MISMATCH),
+            req,
+            code=_failure_code_value(FailureCode.EXECUTOR_MODEL_REVISION_MISMATCH),
             message=f"norm_stats_sha 不匹配：期望 {service_norm!r}，收到 {req['norm_stats_sha']!r}",
             retryable=False,
         )
@@ -563,8 +598,11 @@ async def http_infer(request: Request) -> JSONResponse:
     # ---- 执行器可用性 ----
     if executor is None:
         err_body = _make_infer_error_body(
-            req, code=_failure_code_value(FailureCode.EXECUTOR_UNAVAILABLE),
-            message="π0.5 执行器未初始化", retryable=True, retry_after_ms=500,
+            req,
+            code=_failure_code_value(FailureCode.EXECUTOR_UNAVAILABLE),
+            message="π0.5 执行器未初始化",
+            retryable=True,
+            retry_after_ms=500,
         )
         return JSONResponse(status_code=503, content=err_body)
 
@@ -573,8 +611,10 @@ async def http_infer(request: Request) -> JSONResponse:
         obs = _build_obs_from_model_input(req["model_input"], req)
     except Exception as e:
         err_body = _make_infer_error_body(
-            req, code=_failure_code_value(FailureCode.INVALID_TASK),
-            message=f"model_input 解析失败：{e}", retryable=False,
+            req,
+            code=_failure_code_value(FailureCode.INVALID_TASK),
+            message=f"model_input 解析失败：{e}",
+            retryable=False,
         )
         return JSONResponse(status_code=400, content=err_body)
 
@@ -589,8 +629,10 @@ async def http_infer(request: Request) -> JSONResponse:
     except Exception as e:
         logger.error("HTTP /v1/infer 推理异常：%s", e)
         err_body = _make_infer_error_body(
-            req, code=_failure_code_value(FailureCode.EXECUTOR_RUNTIME),
-            message=f"推理失败：{e}", retryable=False,
+            req,
+            code=_failure_code_value(FailureCode.EXECUTOR_RUNTIME),
+            message=f"推理失败：{e}",
+            retryable=False,
         )
         return JSONResponse(status_code=500, content=err_body)
     t_infer_end = time.time()
@@ -601,8 +643,10 @@ async def http_infer(request: Request) -> JSONResponse:
     except Exception as e:
         logger.error("action_chunk 转换失败：%s", e)
         err_body = _make_infer_error_body(
-            req, code=_failure_code_value(FailureCode.EXECUTOR_RUNTIME),
-            message=f"action_chunk 转换失败：{e}", retryable=False,
+            req,
+            code=_failure_code_value(FailureCode.EXECUTOR_RUNTIME),
+            message=f"action_chunk 转换失败：{e}",
+            retryable=False,
         )
         return JSONResponse(status_code=500, content=err_body)
 
@@ -645,7 +689,9 @@ async def http_cancel(request: Request) -> JSONResponse:
             status_code=400,
             content={
                 "schema_version": CONTRACT_SCHEMA_VERSION,
-                "request_id": "", "trace_id": "", "task_id": "",
+                "request_id": "",
+                "trace_id": "",
+                "task_id": "",
                 "status": "error",
                 "error": {
                     "code": _failure_code_value(FailureCode.INVALID_TASK),
@@ -661,7 +707,9 @@ async def http_cancel(request: Request) -> JSONResponse:
             status_code=400,
             content={
                 "schema_version": CONTRACT_SCHEMA_VERSION,
-                "request_id": "", "trace_id": "", "task_id": "",
+                "request_id": "",
+                "trace_id": "",
+                "task_id": "",
                 "status": "error",
                 "error": {
                     "code": _failure_code_value(FailureCode.INVALID_TASK),
@@ -798,21 +846,29 @@ def _validate_request(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     # 必填字段
     missing = [f for f in REQUIRED_FIELDS if f not in data or data[f] is None]
     if missing:
-        return {"error": "missing_required_fields", "missing": missing,
-                "schema_version": SCHEMA_VERSION}
+        return {
+            "error": "missing_required_fields",
+            "missing": missing,
+            "schema_version": SCHEMA_VERSION,
+        }
 
     # episode_id 必须是非空字符串
     ep = data["episode_id"]
     if not isinstance(ep, str) or not ep.strip():
-        return {"error": "invalid_episode_id",
-                "reason": "episode_id 必须是非空字符串",
-                "schema_version": SCHEMA_VERSION}
+        return {
+            "error": "invalid_episode_id",
+            "reason": "episode_id 必须是非空字符串",
+            "schema_version": SCHEMA_VERSION,
+        }
 
     # step_id 必须是整数且 >= 0
     sid = data["step_id"]
     if isinstance(sid, bool):
-        return {"error": "invalid_step_id", "reason": "step_id 不能是 bool",
-                "schema_version": SCHEMA_VERSION}
+        return {
+            "error": "invalid_step_id",
+            "reason": "step_id 不能是 bool",
+            "schema_version": SCHEMA_VERSION,
+        }
     if isinstance(sid, int):
         pass
     elif isinstance(sid, float) and sid.is_integer():
@@ -821,17 +877,26 @@ def _validate_request(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         try:
             sid = int(sid)  # type: ignore
         except (TypeError, ValueError):
-            return {"error": "invalid_step_id", "reason": "step_id 必须是整数",
-                    "schema_version": SCHEMA_VERSION}
+            return {
+                "error": "invalid_step_id",
+                "reason": "step_id 必须是整数",
+                "schema_version": SCHEMA_VERSION,
+            }
     if sid < 0:
-        return {"error": "invalid_step_id", "reason": "step_id 必须 >= 0",
-                "schema_version": SCHEMA_VERSION}
+        return {
+            "error": "invalid_step_id",
+            "reason": "step_id 必须 >= 0",
+            "schema_version": SCHEMA_VERSION,
+        }
     data["step_id"] = sid
 
     # instruction 必须是字符串
     if not isinstance(data["instruction"], str):
-        return {"error": "invalid_instruction", "reason": "instruction 必须是字符串",
-                "schema_version": SCHEMA_VERSION}
+        return {
+            "error": "invalid_instruction",
+            "reason": "instruction 必须是字符串",
+            "schema_version": SCHEMA_VERSION,
+        }
 
     return None
 
@@ -848,8 +913,11 @@ def _check_episode_step(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     # episode 切换：标记（实际清理由 ws_infer 在异步上下文中加锁完成）
     if ep != current_episode_id:
-        logger.info("Episode changed, cleared pending chunks (prev=%s new=%s)",
-                    current_episode_id, ep)
+        logger.info(
+            "Episode changed, cleared pending chunks (prev=%s new=%s)",
+            current_episode_id,
+            ep,
+        )
         current_episode_id = ep
         last_step_id = None
 
@@ -858,9 +926,11 @@ def _check_episode_step(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         logger.warning("step_id 不连续：期望 %d，收到 %d", last_step_id + 1, sid)
     # 同一 episode 内 step_id 应递增；非递增拒绝执行（方案书 §3.4：step_id 不匹配必须丢弃）
     if last_step_id is not None and sid <= last_step_id:
-        return {"error": "stale_step_id",
-                "reason": f"step_id 未递增: last={last_step_id}, curr={sid}",
-                "schema_version": SCHEMA_VERSION}
+        return {
+            "error": "stale_step_id",
+            "reason": f"step_id 未递增: last={last_step_id}, curr={sid}",
+            "schema_version": SCHEMA_VERSION,
+        }
     last_step_id = sid
 
     return None
@@ -904,9 +974,14 @@ async def ws_infer(ws: WebSocket) -> None:
 
     # 执行器未就绪：返回错误并关闭
     if executor is None:
-        await _send_error(ws, {"error": "executor_not_ready",
-                               "reason": "执行器未初始化",
-                               "schema_version": SCHEMA_VERSION})
+        await _send_error(
+            ws,
+            {
+                "error": "executor_not_ready",
+                "reason": "执行器未初始化",
+                "schema_version": SCHEMA_VERSION,
+            },
+        )
         await ws.close()
         return
 
@@ -940,9 +1015,14 @@ async def ws_infer(ws: WebSocket) -> None:
             try:
                 data = _deserialize(raw_bytes, raw_text)
             except Exception as e:
-                await _send_error(ws, {"error": "deserialize_failed",
-                                       "reason": str(e),
-                                       "schema_version": SCHEMA_VERSION})
+                await _send_error(
+                    ws,
+                    {
+                        "error": "deserialize_failed",
+                        "reason": str(e),
+                        "schema_version": SCHEMA_VERSION,
+                    },
+                )
                 continue
 
             # 字段校验
@@ -969,10 +1049,16 @@ async def ws_infer(ws: WebSocket) -> None:
                 expired_chunk = pending_chunks.get(ep)
                 if expired_chunk is not None:
                     age_ms = (time.time() - expired_chunk["timestamp"]) * 1000.0
-                    ttl = expired_chunk.get("expires_after_ms", DEFAULT_EXPIRES_AFTER_MS)
+                    ttl = expired_chunk.get(
+                        "expires_after_ms", DEFAULT_EXPIRES_AFTER_MS
+                    )
                     if age_ms > ttl:
-                        logger.warning("Action chunk expired (episode=%s age_ms=%.0f > %dms)",
-                                       ep, age_ms, ttl)
+                        logger.warning(
+                            "Action chunk expired (episode=%s age_ms=%.0f > %dms)",
+                            ep,
+                            age_ms,
+                            ttl,
+                        )
                         pending_chunks.pop(ep, None)
 
                 # episode 切换时重置执行器（reset() 内部已调用 cancel_pending_chunk()）
@@ -987,9 +1073,14 @@ async def ws_infer(ws: WebSocket) -> None:
             try:
                 obs = _build_obs(data)
             except Exception as e:
-                await _send_error(ws, {"error": "obs_build_failed",
-                                       "reason": str(e),
-                                       "schema_version": SCHEMA_VERSION})
+                await _send_error(
+                    ws,
+                    {
+                        "error": "obs_build_failed",
+                        "reason": str(e),
+                        "schema_version": SCHEMA_VERSION,
+                    },
+                )
                 continue
 
             # 调用执行器（同步推理放线程池，避免阻塞事件循环）
@@ -999,12 +1090,18 @@ async def ws_infer(ws: WebSocket) -> None:
                 else:
                     loop = asyncio.get_event_loop()
                     chunk = await loop.run_in_executor(
-                        None, lambda: executor.infer(obs))
+                        None, lambda: executor.infer(obs)
+                    )
             except Exception as e:
                 logger.error("推理异常：%s", e)
-                await _send_error(ws, {"error": "infer_failed",
-                                       "reason": str(e),
-                                       "schema_version": SCHEMA_VERSION})
+                await _send_error(
+                    ws,
+                    {
+                        "error": "infer_failed",
+                        "reason": str(e),
+                        "schema_version": SCHEMA_VERSION,
+                    },
+                )
                 continue
 
             # 记录 pending chunk，用于后续请求的过期判断（加锁保护并发写入）
@@ -1031,9 +1128,12 @@ async def ws_infer(ws: WebSocket) -> None:
                 "expires_after_ms": chunk.expires_after_ms,
             }
             await _send(ws, response)
-            logger.info("推理完成 episode=%s step=%d shape=%s",
-                        data["episode_id"], data["step_id"],
-                        list(chunk.actions.shape))
+            logger.info(
+                "推理完成 episode=%s step=%d shape=%s",
+                data["episode_id"],
+                data["step_id"],
+                list(chunk.actions.shape),
+            )
     except WebSocketDisconnect:
         logger.info("WebSocket 客户端断开")
     except Exception as e:

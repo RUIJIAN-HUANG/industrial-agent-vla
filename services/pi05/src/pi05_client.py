@@ -16,6 +16,7 @@ openpi API 关键事实（官方源码 Policy.infer）：
   因此 create_trained_policy 返回的 policy，其 infer(example)["actions"] 已经是【物理动作】，
   反归一化使用 compute_norm_stats 生成的统计（本项目自有，满足 §3.3.1 Para186 不沿用 OpenVLA）。
 """
+
 from __future__ import annotations
 
 import json
@@ -28,7 +29,9 @@ import numpy as np
 logger = logging.getLogger("pi05_client")
 if not logger.handlers:
     _h = logging.StreamHandler()
-    _h.setFormatter(logging.Formatter("[%(asctime)s][%(levelname)s][pi05_client] %(message)s"))
+    _h.setFormatter(
+        logging.Formatter("[%(asctime)s][%(levelname)s][pi05_client] %(message)s")
+    )
     logger.addHandler(_h)
 logger.setLevel(logging.INFO)
 
@@ -40,6 +43,7 @@ try:
     from openpi.training import config as _openpi_config  # type: ignore
     from openpi.policies import policy_config as _openpi_policy_config  # type: ignore
     from openpi.shared import download as _openpi_download  # type: ignore
+
     OPENPI_AVAILABLE = True
 except Exception:
     OPENPI_AVAILABLE = False
@@ -49,6 +53,7 @@ except Exception:
 # ---------------------------------------------------------------------------
 try:
     from openpi_client import websocket_client_policy as _ws_client  # type: ignore
+
     WS_CLIENT_AVAILABLE = True
 except Exception:
     WS_CLIENT_AVAILABLE = False
@@ -58,12 +63,14 @@ except Exception:
 # ---------------------------------------------------------------------------
 try:
     import websockets  # type: ignore
+
     _NATIVE_WS_AVAILABLE = True
 except Exception:
     _NATIVE_WS_AVAILABLE = False
 
 try:
     import msgpack as _msgpack  # type: ignore
+
     _MSGPACK_AVAILABLE = True
 except Exception:
     _MSGPACK_AVAILABLE = False
@@ -121,13 +128,14 @@ class WebsocketPolicyClient:
         self._host = host
         self._port = port
         self._ws_url = f"ws://{host}:{port}"
-        self._client: Any = None   # native websockets 连接对象
+        self._client: Any = None  # native websockets 连接对象
         self._loop: Any = None
         logger.info("【WS 客户端】目标 %s (待首次 infer 时连接)", self._ws_url)
 
     def _ensure_connected(self) -> None:
         """建立 / 重建 WebSocket 连接。"""
         import asyncio
+
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -138,7 +146,7 @@ class WebsocketPolicyClient:
         async def _connect():
             self._client = await websockets.connect(
                 self._ws_url,
-                max_size=10 * 1024 * 1024,   # 10 MB 上限（方案书 §3.4 长度校验）
+                max_size=10 * 1024 * 1024,  # 10 MB 上限（方案书 §3.4 长度校验）
                 ping_interval=20,
                 ping_timeout=10,
             )
@@ -189,14 +197,17 @@ class WebsocketPolicyClient:
             "timestamp_ns": int(example.get("timestamp_ns", int(time.time() * 1e9))),
             "instruction": str(example.get("prompt", "")),
             "rgb_front": (
-                example.get("observation/exterior_image_1_left",
-                            np.zeros((480, 640, 3), dtype=np.uint8)).tolist()
-                if isinstance(example.get("observation/exterior_image_1_left"), np.ndarray)
+                example.get(
+                    "observation/exterior_image_1_left",
+                    np.zeros((480, 640, 3), dtype=np.uint8),
+                ).tolist()
+                if isinstance(
+                    example.get("observation/exterior_image_1_left"), np.ndarray
+                )
                 else example.get("observation/exterior_image_1_left", [])
             ),
             "robot_state": (
-                example.get("observation/state",
-                            np.zeros(8, dtype=np.float32)).tolist()
+                example.get("observation/state", np.zeros(8, dtype=np.float32)).tolist()
                 if isinstance(example.get("observation/state"), np.ndarray)
                 else example.get("observation/state", [])
             ),
@@ -221,10 +232,8 @@ class WebsocketPolicyClient:
             response: Dict[str, Any] = self._loop.run_until_complete(_send_recv())
         except Exception as e:
             logger.error("WebSocket 请求失败: %s", e)
-            self._client = None   # 标记断开，下次 infer 时重连
-            raise ConnectionError(
-                f"WebSocket 推理失败 ({self._ws_url}): {e}"
-            ) from e
+            self._client = None  # 标记断开，下次 infer 时重连
+            raise ConnectionError(f"WebSocket 推理失败 ({self._ws_url}): {e}") from e
 
         # ---- 校验响应（方案书 §3.4 协议不变量：非法不下发） ----
         if not isinstance(response, dict):
@@ -241,8 +250,10 @@ class WebsocketPolicyClient:
         """清空客户端连接缓存（失败切换时调用，方案书 §3.3.1 Para186）。"""
         if self._client is not None:
             try:
+
                 async def _close():
                     await self._client.close()
+
                 self._loop.run_until_complete(_close())
             except Exception:
                 pass

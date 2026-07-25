@@ -35,8 +35,14 @@ import pytest
 # 必须在 import openpi_service 之前设置
 # ---------------------------------------------------------------------------
 os.environ.setdefault("PI05_SERVICE_MODE", "dummy")
-os.environ.setdefault("PI05_CHECKPOINT_SHA", "sha256:0000000000000000000000000000000000000000000000000000000000000000")
-os.environ.setdefault("PI05_NORM_STATS_SHA", "sha256:0000000000000000000000000000000000000000000000000000000000000000")
+os.environ.setdefault(
+    "PI05_CHECKPOINT_SHA",
+    "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+)
+os.environ.setdefault(
+    "PI05_NORM_STATS_SHA",
+    "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+)
 
 # 项目根目录加入 sys.path（与被测模块一致，任意目录可运行）
 _PROJECT_ROOT = os.path.dirname(
@@ -64,8 +70,12 @@ MOCK_CHUNK_LEN = 10
 SPACE_ID = "eef_delta_xyz_axisangle_gripper_v1"
 FRAME_ID = "robot_base"
 
-TEST_CHECKPOINT_SHA = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-TEST_NORM_STATS_SHA = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+TEST_CHECKPOINT_SHA = (
+    "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+)
+TEST_NORM_STATS_SHA = (
+    "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -259,7 +269,9 @@ def test_service_lifecycle(test_client: TestClient, mock_executor: MagicMock):
     # 7 必填字段
     assert body["schema_version"] == "1.0"
     assert body["service"] == "pi05"
-    assert body["status"] in ("ready", "loading", "degraded"), "health.status 必须为 ready/loading/degraded"
+    assert body["status"] in ("ready", "loading", "degraded"), (
+        "health.status 必须为 ready/loading/degraded"
+    )
     assert body["status"] == "ready", "executor 就绪时 health 应返回 ready"
     assert body["checkpoint_sha"] == TEST_CHECKPOINT_SHA
     assert body["norm_stats_sha"] == TEST_NORM_STATS_SHA
@@ -561,6 +573,7 @@ def test_service_stress(ws_context, mock_executor: MagicMock):
     方案书 §7.5 service_stress：
       连续100次推理+超时/重启 → 无内存泄漏/状态串扰；旧动作丢弃。
     """
+
     # ---- 每次返回独立 action chunk（按 step_id 区分）----
     def _infer_side_effect(obs: ObsPacket) -> CanonicalActionChunk:
         # 每次返回不同的 actions，验证响应独立性

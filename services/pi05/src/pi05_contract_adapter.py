@@ -6,6 +6,7 @@ services/pi05/src/pi05.py 的 Pi05Executor.infer()（体系A），再把 Canonic
 
 方案书出处：interface-contracts.md §4/§7；agent-framework.md §9 统一 7 维动作合同。
 """
+
 from __future__ import annotations
 
 from typing import Any, Mapping
@@ -47,9 +48,7 @@ def _decode_image(raw: Any) -> np.ndarray | None:
                 data = base64.b64decode(data, validate=True)
             except Exception:
                 pass  # 可能本身就是 raw image bytes
-            return np.array(
-                Image.open(io.BytesIO(data)).convert("RGB"), dtype=np.uint8
-            )
+            return np.array(Image.open(io.BytesIO(data)).convert("RGB"), dtype=np.uint8)
         except Exception:
             return None
     return None

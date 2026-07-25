@@ -54,6 +54,7 @@ try:  # 正式 contracts（A 提供）
     from services.pi05.src.observation import ObsPacket  # type: ignore
     from services.pi05.src.action import CanonicalActionChunk  # type: ignore
 except Exception:  # 占位定义（A 提供 contracts 后删除本分支）
+
     @dataclass
     class ObsPacket:
         """总 Agent → 执行器的观测包（方案书 §3.4 ObsPacket v1）。"""
@@ -61,17 +62,19 @@ except Exception:  # 占位定义（A 提供 contracts 后删除本分支）
         episode_id: str
         step_id: int
         timestamp_ns: int
-        rgb_front: np.ndarray           # uint8[H,W,3] 原始 RGB，不做预处理
+        rgb_front: np.ndarray  # uint8[H,W,3] 原始 RGB，不做预处理
         rgb_wrist: Optional[np.ndarray]  # uint8[H,W,3]
-        robot_state: np.ndarray          # float32[d] 本体状态
-        instruction: str                 # 完整自然语言
-        runtime_flags: dict = field(default_factory=dict)  # {terminated,truncated,camera_ok}
+        robot_state: np.ndarray  # float32[d] 本体状态
+        instruction: str  # 完整自然语言
+        runtime_flags: dict = field(
+            default_factory=dict
+        )  # {terminated,truncated,camera_ok}
 
     @dataclass
     class CanonicalActionChunk:
         """执行器 → 总 Agent 的统一动作块（方案书 §3.4 CanonicalActionChunk v1）。"""
 
-        actions: np.ndarray              # float32[N,7] [dx,dy,dz,dax,day,daz,gripper]
+        actions: np.ndarray  # float32[N,7] [dx,dy,dz,dax,day,daz,gripper]
         space_id: str = "eef_delta_xyz_axisangle_gripper_v1"
         frame: str = "robot_base"
         control_hz: int = 10
@@ -84,6 +87,7 @@ except Exception:  # 占位定义（A 提供 contracts 后删除本分支）
 try:  # 正式基类（A 提供）
     from services.pi05.src.base import BaseExecutor  # type: ignore
 except Exception:  # 占位基类（A 提供 base.py 后删除本分支）
+
     class BaseExecutor:  # type: ignore[no-redef]
         """占位基类。A 提供正式 BaseExecutor 后此分支不再生效。"""
 
@@ -139,19 +143,19 @@ from src.industrial_agent.executor import (  # type: ignore
 # ---------------------------------------------------------------------------
 # 安全限幅常量（方案书 Table 69 Row7 / 附录B；D5 实测前用候选值）
 # ---------------------------------------------------------------------------
-MAX_TRANSLATION_M = 0.02      # 单步平移 ≤ 2cm
-MAX_ROTATION_RAD = 0.0873     # 单步旋转 ≤ 5° ≈ 0.0873 rad
+MAX_TRANSLATION_M = 0.02  # 单步平移 ≤ 2cm
+MAX_ROTATION_RAD = 0.0873  # 单步旋转 ≤ 5° ≈ 0.0873 rad
 GRIPPER_OPEN = 1.0
 GRIPPER_CLOSE = 0.0
 
-ACTION_DIM = 7                # [dx,dy,dz,dax,day,daz,gripper]
+ACTION_DIM = 7  # [dx,dy,dz,dax,day,daz,gripper]
 DIM_NAMES = ["dx", "dy", "dz", "dax", "day", "daz", "gripper"]
-MOCK_CHUNK_LEN = 10           # Mock 动作块长度（LIBERO 配置常用 10，方案书 §3.3）
-CONTROL_HZ = 10               # 方案书 §3.4 control_hz
+MOCK_CHUNK_LEN = 10  # Mock 动作块长度（LIBERO 配置常用 10，方案书 §3.3）
+CONTROL_HZ = 10  # 方案书 §3.4 control_hz
 SOURCE_POLICY = "pi05"
 SPACE_ID = "eef_delta_xyz_axisangle_gripper_v1"
 FRAME_ID = "robot_base"
-EXPIRES_AFTER_MS = 1000       # 动作块超时丢弃（方案书 §3.4 动作过期）
+EXPIRES_AFTER_MS = 1000  # 动作块超时丢弃（方案书 §3.4 动作过期）
 
 
 # ---------------------------------------------------------------------------
@@ -246,11 +250,11 @@ class Pi05Executor(BaseExecutor):
         self.norm_stats_path: Optional[str] = os.environ.get("PI05_NORM_STATS_PATH")
 
         # ---- 运行时状态 ----
-        self._policy: Any = None              # PolicyClient 实例（real 模式）
+        self._policy: Any = None  # PolicyClient 实例（real 模式）
         self._policy_type: Optional[str] = None  # "local" | "ws" | "mock"
         self._norm_stats_sha: str = ""
         self._checkpoint_sha: str = os.environ.get("PI05_CHECKPOINT_SHA", "")
-        self._pending_chunk: Optional[np.ndarray] = None   # 当前动作队列（切换时清空）
+        self._pending_chunk: Optional[np.ndarray] = None  # 当前动作队列（切换时清空）
         self._pending_generated_step: int = -1
         self._current_episode_id: Optional[str] = None
         self._last_latency_ms: Optional[int] = None
@@ -266,7 +270,9 @@ class Pi05Executor(BaseExecutor):
     # ===================== 模式初始化 =====================
     def _init_mock_policy(self) -> None:
         self._policy_type = "mock"
-        logger.info("【Mock 模式】未加载真实 π0.5 模型，infer 返回安全范围内的假动作块。")
+        logger.info(
+            "【Mock 模式】未加载真实 π0.5 模型，infer 返回安全范围内的假动作块。"
+        )
 
     def _init_real_policy(self) -> None:
         """通过 pi05_client 创建策略客户端；不可用则降级 Mock。"""
@@ -283,7 +289,9 @@ class Pi05Executor(BaseExecutor):
             ws_port=self.ws_port,
         )
         if self._policy is None:
-            logger.warning("无可用 π0.5 策略客户端（openpi/WS 均不可用），降级到 Mock 模式。")
+            logger.warning(
+                "无可用 π0.5 策略客户端（openpi/WS 均不可用），降级到 Mock 模式。"
+            )
             self.mode = "dummy"
             self._init_mock_policy()
             return
@@ -292,8 +300,11 @@ class Pi05Executor(BaseExecutor):
         # 本地客户端可从 checkpoint 目录计算 sha；远程客户端用环境变量指定
         if not self._checkpoint_sha and self._policy.checkpoint_dir:
             self._checkpoint_sha = _compute_dir_sha(self._policy.checkpoint_dir)
-        logger.info("【Real 模式·%s】策略客户端就绪 (sha=%s)",
-                    self._policy_type, self._checkpoint_sha)
+        logger.info(
+            "【Real 模式·%s】策略客户端就绪 (sha=%s)",
+            self._policy_type,
+            self._checkpoint_sha,
+        )
 
     # ===================== norm_stats（仅 SHA 追溯） =====================
     def _load_norm_stats_sha(self) -> None:
@@ -306,8 +317,10 @@ class Pi05Executor(BaseExecutor):
         path = self.norm_stats_path
         if not path or not os.path.exists(path):
             if self.mode == "real":
-                logger.warning("未提供 PI05_NORM_STATS_PATH 或文件不存在，norm_stats_sha 为空"
-                               "（建议指向 compute_norm_stats 输出，用于 §7.2 追溯）。")
+                logger.warning(
+                    "未提供 PI05_NORM_STATS_PATH 或文件不存在，norm_stats_sha 为空"
+                    "（建议指向 compute_norm_stats 输出，用于 §7.2 追溯）。"
+                )
             return
         try:
             with open(path, "rb") as f:
@@ -326,7 +339,7 @@ class Pi05Executor(BaseExecutor):
         example: Dict[str, Any] = {
             "observation/exterior_image_1_left": _prep_image(obs.rgb_front),  # 前视 RGB
             "observation/state": np.asarray(obs.robot_state, dtype=np.float32),
-            "prompt": obs.instruction,   # 完整自然语言，不拆槽位
+            "prompt": obs.instruction,  # 完整自然语言，不拆槽位
             # ---- 通信字段（WebSocket 客户端透传至 openpi_service 构建 ObsPacket） ----
             "episode_id": obs.episode_id,
             "step_id": obs.step_id,
@@ -337,7 +350,9 @@ class Pi05Executor(BaseExecutor):
             example["observation/wrist_image_left"] = _prep_image(obs.rgb_wrist)
         else:
             logger.warning("rgb_wrist 为空，使用黑图占位（pi05 通常需要腕部图）")
-            example["observation/wrist_image_left"] = np.zeros_like(_prep_image(obs.rgb_front))
+            example["observation/wrist_image_left"] = np.zeros_like(
+                _prep_image(obs.rgb_front)
+            )
         return example
 
     def _pixel_audit_if_test(self, obs: "ObsPacket") -> None:
@@ -364,8 +379,11 @@ class Pi05Executor(BaseExecutor):
             and prepared.shape[2] == 3
             and np.array_equal(prepared[:, :, 0], FIXED_TEST_IMAGE[:, :, 0])
         )
-        logger.info("image_pipeline 校验：%s (checksum=%s)",
-                    "PASS" if ok else "FAIL", _image_checksum(prepared)[:12])
+        logger.info(
+            "image_pipeline 校验：%s (checksum=%s)",
+            "PASS" if ok else "FAIL",
+            _image_checksum(prepared)[:12],
+        )
         return ok
 
     # ===================== 安全限幅 =====================
@@ -399,15 +417,25 @@ class Pi05Executor(BaseExecutor):
         for i in range(arr.shape[0]):
             for j in range(3):
                 if diff_trans[i, j] > 1e-9:
-                    logger.warning("截断[step=%d,%s] 平移 %.5f -> %.5f (限幅±%.3f m)",
-                                   i, DIM_NAMES[j], trans[i, j], trans_clipped[i, j],
-                                   MAX_TRANSLATION_M)
+                    logger.warning(
+                        "截断[step=%d,%s] 平移 %.5f -> %.5f (限幅±%.3f m)",
+                        i,
+                        DIM_NAMES[j],
+                        trans[i, j],
+                        trans_clipped[i, j],
+                        MAX_TRANSLATION_M,
+                    )
                     trunc_count += 1
             for j in range(3):
                 if diff_rot[i, j] > 1e-9:
-                    logger.warning("截断[step=%d,%s] 旋转 %.5f -> %.5f (限幅±%.4f rad)",
-                                   i, DIM_NAMES[3 + j], rot[i, j], rot_clipped[i, j],
-                                   MAX_ROTATION_RAD)
+                    logger.warning(
+                        "截断[step=%d,%s] 旋转 %.5f -> %.5f (限幅±%.4f rad)",
+                        i,
+                        DIM_NAMES[3 + j],
+                        rot[i, j],
+                        rot_clipped[i, j],
+                        MAX_ROTATION_RAD,
+                    )
                     trunc_count += 1
 
         clipped[:, 0:3] = trans_clipped
@@ -415,12 +443,18 @@ class Pi05Executor(BaseExecutor):
 
         # 夹爪：四舍五入到 0/1（>=0.5 为开）
         gripper = clipped[:, 6]
-        rounded = np.where(gripper >= 0.5, GRIPPER_OPEN, GRIPPER_CLOSE).astype(np.float32)
+        rounded = np.where(gripper >= 0.5, GRIPPER_OPEN, GRIPPER_CLOSE).astype(
+            np.float32
+        )
         diff_grip = np.abs(gripper - rounded)
         for i in range(arr.shape[0]):
             if diff_grip[i] > 1e-9:
-                logger.warning("夹爪[step=%d,gripper] %.3f -> %.1f (仅允许 0/1)",
-                               i, gripper[i], rounded[i])
+                logger.warning(
+                    "夹爪[step=%d,gripper] %.3f -> %.1f (仅允许 0/1)",
+                    i,
+                    gripper[i],
+                    rounded[i],
+                )
         clipped[:, 6] = rounded
 
         self._last_truncation_count = trunc_count
@@ -466,7 +500,7 @@ class Pi05Executor(BaseExecutor):
             # 不足 7 维 pad 0（方案书 §3.3：不足维度由适配器 padding）
             pad = np.zeros((raw.shape[0], ACTION_DIM - raw.shape[1]), dtype=np.float32)
             raw = np.concatenate([raw, pad], axis=1)
-        actions_7 = raw[:, :ACTION_DIM]            # 裁维到前 7 维
+        actions_7 = raw[:, :ACTION_DIM]  # 裁维到前 7 维
         # 反归一化由 openpi output_transform 在 policy.infer 内完成（用本项目 compute_norm_stats，
         # 满足 §3.3.1 Para185/186），适配器不再二次反归一化。
         actions_7 = self._clip_actions(actions_7)  # 安全限幅
@@ -478,9 +512,15 @@ class Pi05Executor(BaseExecutor):
         self._pending_chunk = actions_7.copy()
         self._pending_generated_step = obs.step_id
 
-        logger.info("infer episode=%s step=%d shape=%s latency=%dms mode=%s trunc=%d",
-                    obs.episode_id, obs.step_id, actions_7.shape, latency_ms, self.mode,
-                    self._last_truncation_count)
+        logger.info(
+            "infer episode=%s step=%d shape=%s latency=%dms mode=%s trunc=%d",
+            obs.episode_id,
+            obs.step_id,
+            actions_7.shape,
+            latency_ms,
+            self.mode,
+            self._last_truncation_count,
+        )
 
         return CanonicalActionChunk(
             actions=actions_7,
@@ -497,8 +537,11 @@ class Pi05Executor(BaseExecutor):
     def cancel_pending_chunk(self) -> None:
         """失败切换时清空动作队列与客户端缓存（方案书 §3.3.1 Para186：不得保留旧动作块）。"""
         if self._pending_chunk is not None:
-            logger.info("cancel_pending_chunk：丢弃 %d 步待执行动作块（generated_step=%d）",
-                        self._pending_chunk.shape[0], self._pending_generated_step)
+            logger.info(
+                "cancel_pending_chunk：丢弃 %d 步待执行动作块（generated_step=%d）",
+                self._pending_chunk.shape[0],
+                self._pending_generated_step,
+            )
         self._pending_chunk = None
         self._pending_generated_step = -1
         # 清空策略客户端缓存（若 API 暴露）
@@ -524,6 +567,7 @@ class Pi05Executor(BaseExecutor):
         # 优先 JAX
         try:
             import jax  # type: ignore
+
             devs = jax.local_devices()
             if devs:
                 ms = devs[0].memory_stats()
@@ -541,9 +585,15 @@ class Pi05Executor(BaseExecutor):
         # 退化为 nvidia-smi
         try:
             import subprocess
+
             out = subprocess.check_output(
-                ["nvidia-smi", "--query-gpu=memory.used", "--format=csv,nounits,noheader"],
-                stderr=subprocess.DEVNULL, timeout=5,
+                [
+                    "nvidia-smi",
+                    "--query-gpu=memory.used",
+                    "--format=csv,nounits,noheader",
+                ],
+                stderr=subprocess.DEVNULL,
+                timeout=5,
             )
             return int(out.decode().strip().splitlines()[0])
         except Exception:
@@ -557,7 +607,7 @@ class Pi05Executor(BaseExecutor):
             "config_name": self.config_name,
             "checkpoint_sha": self._checkpoint_sha,
             "norm_stats_sha": self._norm_stats_sha,
-            "vram_usage_mb": self._query_vram_mb(),       # Mock 模式为 None
+            "vram_usage_mb": self._query_vram_mb(),  # Mock 模式为 None
             "last_latency_ms": self._last_latency_ms,
             "openpi_available": OPENPI_AVAILABLE,
             "ws_available": WS_CLIENT_AVAILABLE,
@@ -579,9 +629,9 @@ class Pi05Executor(BaseExecutor):
         """
         checkpoint_sha = os.environ.get("PI05_CHECKPOINT_SHA", "")
         norm_stats_sha = os.environ.get("PI05_NORM_STATS_SHA", "")
-        if not is_pinned_artifact_digest(checkpoint_sha) or not is_pinned_artifact_digest(
-            norm_stats_sha
-        ):
+        if not is_pinned_artifact_digest(
+            checkpoint_sha
+        ) or not is_pinned_artifact_digest(norm_stats_sha):
             raise ValueError(
                 "必须设置 PI05_CHECKPOINT_SHA / PI05_NORM_STATS_SHA 环境变量为 "
                 "sha256:<64hex> 格式"
@@ -664,8 +714,20 @@ if __name__ == "__main__":
     print("\n=== infer (mock) ===")
     chunk = ex.infer(obs)
     print("actions shape:", chunk.actions.shape, "dtype:", chunk.actions.dtype)
-    print("space_id:", chunk.space_id, "| frame:", chunk.frame, "| control_hz:", chunk.control_hz)
-    print("source_policy:", chunk.source_policy, "| checkpoint_sha:", repr(chunk.checkpoint_sha))
+    print(
+        "space_id:",
+        chunk.space_id,
+        "| frame:",
+        chunk.frame,
+        "| control_hz:",
+        chunk.control_hz,
+    )
+    print(
+        "source_policy:",
+        chunk.source_policy,
+        "| checkpoint_sha:",
+        repr(chunk.checkpoint_sha),
+    )
     print("first action:", chunk.actions[0])
     assert chunk.actions.shape == (MOCK_CHUNK_LEN, ACTION_DIM)
     assert chunk.actions.dtype == np.float32
@@ -696,10 +758,14 @@ if __name__ == "__main__":
 
     print("\n=== fixed-test-image pixel audit ===")
     obs_audit = ObsPacket(
-        episode_id="audit", step_id=0, timestamp_ns=0,
-        rgb_front=FIXED_TEST_IMAGE.copy(), rgb_wrist=None,
+        episode_id="audit",
+        step_id=0,
+        timestamp_ns=0,
+        rgb_front=FIXED_TEST_IMAGE.copy(),
+        rgb_wrist=None,
         robot_state=np.zeros(8, dtype=np.float32),
-        instruction="audit", runtime_flags={},
+        instruction="audit",
+        runtime_flags={},
     )
     ex.infer(obs_audit)  # 应打印“像素审计通过”
 

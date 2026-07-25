@@ -44,6 +44,7 @@
 norm stats 计算命令（训练前必跑，方案书 §3.3.1 Para186）：
     uv run scripts/compute_norm_stats.py --config-name pi05_industrial
 """
+
 from __future__ import annotations
 
 import os
@@ -57,7 +58,9 @@ from typing import Any, Dict, Optional
 logger = logging.getLogger("pi05_train_config")
 if not logger.handlers:
     _h = logging.StreamHandler()
-    _h.setFormatter(logging.Formatter("[%(asctime)s][%(levelname)s][pi05_config] %(message)s"))
+    _h.setFormatter(
+        logging.Formatter("[%(asctime)s][%(levelname)s][pi05_config] %(message)s")
+    )
     logger.addHandler(_h)
 logger.setLevel(logging.INFO)
 
@@ -91,7 +94,9 @@ WARMUP_STEPS: int = int(os.environ.get("PI05_WARMUP_STEPS", "2000"))
 # weight_decay：AdamW 权重衰减系数（openpi 官方示例约 0.01—0.1；D21 实验确认）
 WEIGHT_DECAY: float = float(os.environ.get("PI05_WEIGHT_DECAY", "0.01"))
 # gradient_accumulation_steps：梯度累积步数（有效 batch = BATCH_SIZE × GRADIENT_ACCUMULATION_STEPS）
-GRADIENT_ACCUMULATION_STEPS: int = int(os.environ.get("PI05_GRADIENT_ACCUMULATION_STEPS", "1"))
+GRADIENT_ACCUMULATION_STEPS: int = int(
+    os.environ.get("PI05_GRADIENT_ACCUMULATION_STEPS", "1")
+)
 # mixed_precision：混合精度模式（JAX 路径推荐 bf16；方案书 §3.3 禁 PyTorch 路径因不支持混合精度）
 MIXED_PRECISION: str = os.environ.get("PI05_MIXED_PRECISION", "bf16")
 # eval_interval：验证评测间隔步数（方案书 §6.3 要求每个 checkpoint 在独立验证 seed 闭环评测）
@@ -122,6 +127,7 @@ try:
     from openpi.models.model import ModelType  # type: ignore
     from openpi.training.optimizer import CosineDecaySchedule, AdamW  # type: ignore
     from openpi.training.weight_loaders import WeightLoader  # type: ignore
+
     # 复用官方 _CONFIGS 注册表（若官方以字典形式导出）。
     # 注意：_CONFIGS 为 openpi 私有 API（前缀下划线），官方可能随时重命名或移除；
     # 若导入失败则降级为本地空字典，register_config() 仅注册到本地占位表。
@@ -137,6 +143,7 @@ except Exception as _e:  # pragma: no cover
     @dataclass
     class TrainConfig:
         """占位 TrainConfig（openpi 不可用时的降级定义，字段对齐官方 §7.1）。"""
+
         name: str = ""
         exp_name: str = ""
         model: Any = None
@@ -167,6 +174,7 @@ except Exception as _e:  # pragma: no cover
     @dataclass
     class LeRobotLiberoDataConfig:
         """占位数据配置（对齐官方 LeRobotLiberoDataConfig 关键字段）。"""
+
         repo_id: str = ""
         assets: Any = None
         transforms: Any = None
@@ -174,6 +182,7 @@ except Exception as _e:  # pragma: no cover
     @dataclass
     class Pi0Config:
         """占位模型配置（对齐官方 Pi0Config 关键字段）。"""
+
         model_type: Any = None
         action_dim: int = 7
         action_horizon: int = 10
@@ -185,16 +194,19 @@ except Exception as _e:  # pragma: no cover
     @dataclass
     class CosineDecaySchedule:
         """占位学习率调度（对齐官方 CosineDecaySchedule 关键字段）。"""
+
         init_value: float = 2e-5
         warmup_steps: int = 2000  # 线性预热步数（C2 修复）
 
     @dataclass
     class AdamW:
         """占位优化器（官方默认 AdamW；weight_decay 由 openpi 内部控制）。"""
+
         weight_decay: float = 0.01  # C2 修复：显式声明默认值以保持可审计性
 
     class WeightLoader:
         """占位权重加载器。"""
+
         pass
 
     _CONFIGS = {}
@@ -225,9 +237,9 @@ def _build_pi05_industrial_config() -> TrainConfig:
         #   action_horizon=10 为初始候选，D21 首轮微调后按闭环表现调整。
         model=Pi0Config(
             model_type=ModelType.PI05,
-            action_dim=7,           # 7 维动作（方案书 §3.4）
-            action_horizon=10,      # 动作块长度（初始候选，D21 后按闭环表现调整）
-            max_token_len=48,       # 文本 token 最大长度
+            action_dim=7,  # 7 维动作（方案书 §3.4）
+            action_horizon=10,  # 动作块长度（初始候选，D21 后按闭环表现调整）
+            max_token_len=48,  # 文本 token 最大长度
         ),
         # ---- 数据配置 ----
         # 方案书 §5.4：canonical → LeRobot 转换由 scripts/pi05/convert_openpi.py 完成。
@@ -270,7 +282,7 @@ def _build_pi05_industrial_config() -> TrainConfig:
         # ---- 其他 ----
         overwrite=True,
         wandb_enabled=True,
-        fsdp_devices=1,             # 单卡用 1（方案书 §3.3：JAX 路径）
+        fsdp_devices=1,  # 单卡用 1（方案书 §3.3：JAX 路径）
     )
     return cfg
 
@@ -313,10 +325,13 @@ def validate_lora_ready(config: Optional[TrainConfig] = None) -> bool:
             "    2. 创建 LoRAWeightLoader 指向 pi05_base checkpoint，rank=32。\n"
             "    3. 参考: https://github.com/Physical-Intelligence/openpi\n"
             "  (此警告在 openpi 不可用/降级模式下属预期，真实训练前必须消除)\n"
-            + "=" * 64
+            + "="
+            * 64
         )
         return False
-    logger.info("[pi05_train_config] ✅ LoRA freeze_filter 与 weight_loader 均已配置，可安全训练。")
+    logger.info(
+        "[pi05_train_config] ✅ LoRA freeze_filter 与 weight_loader 均已配置，可安全训练。"
+    )
     return True
 
 
@@ -379,15 +394,25 @@ def _print_summary() -> None:
     print(f"model_type:         {getattr(ModelType, 'PI05', 'PI05')}")
     print(f"action_dim:         7   (方案书 §3.4 [dx,dy,dz,dax,day,daz,gripper])")
     print(f"action_horizon:     10  (初始候选，D21 后按闭环表现调整)")
-    print(f"batch_size:         {BATCH_SIZE}  (默认安全值 16；方案书 §3.3：22.5GB 卡建议 ≤16)")
+    print(
+        f"batch_size:         {BATCH_SIZE}  (默认安全值 16；方案书 §3.3：22.5GB 卡建议 ≤16)"
+    )
     print(f"lr init_value:      2e-5 (LoRA 微调较小学习率)")
     print(f"num_train_steps:    30000  (openpi 官方示例参考值；D21 按数据量与收敛调整)")
-    print(f"warmup_steps:       {WARMUP_STEPS}  (C2 修复；若 openpi API 不支持则由 scheduler 内部控制)")
-    print(f"weight_decay:       {WEIGHT_DECAY}  (C2 修复；若 openpi API 不支持则由 optimizer 内部控制)")
+    print(
+        f"warmup_steps:       {WARMUP_STEPS}  (C2 修复；若 openpi API 不支持则由 scheduler 内部控制)"
+    )
+    print(
+        f"weight_decay:       {WEIGHT_DECAY}  (C2 修复；若 openpi API 不支持则由 optimizer 内部控制)"
+    )
     print(f"grad_accum_steps:   {GRADIENT_ACCUMULATION_STEPS}  (C2 修复)")
     print(f"mixed_precision:    {MIXED_PRECISION}  (C2 修复；JAX 路径推荐 bf16)")
-    print(f"eval_interval:      {EVAL_INTERVAL}  (W2 修复；若 openpi API 不支持则由外部脚本触发)")
-    print(f"LoRA rank:          {LORA_RANK} (方案书 §3.2.1 OpenVLA-OFT 示例；π0.5 初始候选值)")
+    print(
+        f"eval_interval:      {EVAL_INTERVAL}  (W2 修复；若 openpi API 不支持则由外部脚本触发)"
+    )
+    print(
+        f"LoRA rank:          {LORA_RANK} (方案书 §3.2.1 OpenVLA-OFT 示例；π0.5 初始候选值)"
+    )
     print(f"base checkpoint:    {BASE_CHECKPOINT}")
     print(f"dataset repo_id:    {DATASET_REPO_ID}")
     print(f"output_dir:         {OUTPUT_DIR}")
@@ -397,7 +422,9 @@ def _print_summary() -> None:
     _lora_ok = validate_lora_ready()
     if not _lora_ok:
         print("⚠️  LoRA 安全闸门: freeze_filter / weight_loader 未配置！(C3)")
-        print("   当前配置禁止用于真实训练；全参数训练显存 >70GB，远超 LoRA 预算 22.5GB。")
+        print(
+            "   当前配置禁止用于真实训练；全参数训练显存 >70GB，远超 LoRA 预算 22.5GB。"
+        )
     else:
         print("✅ LoRA freeze_filter / weight_loader 已配置，可安全训练。")
     print("-" * 64)

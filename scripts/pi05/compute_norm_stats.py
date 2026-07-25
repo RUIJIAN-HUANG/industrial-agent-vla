@@ -48,6 +48,7 @@ CPU 兼容：--mock 用 numpy 随机数据独立运行，无 GPU / openpi / lero
     python scripts/pi05/compute_norm_stats.py --dataset-path /path/to/ds \\
         --output-path ./data/fixtures/norm_stats.json --quiet
 """
+
 from __future__ import annotations
 
 import argparse
@@ -71,7 +72,11 @@ import numpy as np
 logger = logging.getLogger("compute_norm_stats")
 if not logger.handlers:
     _h = logging.StreamHandler()
-    _h.setFormatter(logging.Formatter("[%(asctime)s][%(levelname)s][compute_norm_stats] %(message)s"))
+    _h.setFormatter(
+        logging.Formatter(
+            "[%(asctime)s][%(levelname)s][compute_norm_stats] %(message)s"
+        )
+    )
     logger.addHandler(_h)
 logger.setLevel(logging.INFO)
 
@@ -83,6 +88,7 @@ _normalize: Any = None
 OPENPI_NORMALIZE_AVAILABLE: bool = False
 try:
     from openpi.shared import normalize as _normalize  # type: ignore
+
     OPENPI_NORMALIZE_AVAILABLE = True
 except Exception:  # 本地无 openpi，降级为本地等价实现（Schema 完全相同）
     _normalize = None
@@ -93,12 +99,14 @@ except Exception:  # 本地无 openpi，降级为本地等价实现（Schema 完
 # ---------------------------------------------------------------------------
 try:
     import pandas as pd  # type: ignore
+
     PANDAS_AVAILABLE: bool = True
 except Exception:
     PANDAS_AVAILABLE = False
 
 try:
     import h5py  # type: ignore
+
     H5PY_AVAILABLE: bool = True
 except Exception:
     H5PY_AVAILABLE = False
@@ -114,9 +122,11 @@ except Exception:
 ACTION_DIM: int = 7
 
 NORM_STATS_KEYS: Tuple[str, ...] = ("state", "actions")  # 官方 compute_norm_stats.py 键
-NORM_STATS_FILENAME: str = "norm_stats.json"             # 与 openpi/shared/normalize.py 及 train.py 一致
-EPS: float = 1e-6           # 数值安全：std 下限（方案书要求防除零）
-MOCK_SEED: int = 42         # mock 固定种子，保证 SHA256 可复现
+NORM_STATS_FILENAME: str = (
+    "norm_stats.json"  # 与 openpi/shared/normalize.py 及 train.py 一致
+)
+EPS: float = 1e-6  # 数值安全：std 下限（方案书要求防除零）
+MOCK_SEED: int = 42  # mock 固定种子，保证 SHA256 可复现
 
 
 _TRAIN_CONFIG_MODULE: Any = None
@@ -135,7 +145,9 @@ def _load_train_config_module() -> Any:
     if _TRAIN_CONFIG_MODULE is not None:
         return _TRAIN_CONFIG_MODULE
 
-    cfg_path = Path(__file__).resolve().parents[2] / "configs" / "pi05" / "train_config.py"
+    cfg_path = (
+        Path(__file__).resolve().parents[2] / "configs" / "pi05" / "train_config.py"
+    )
     if not cfg_path.exists():
         logger.warning("未找到 %s，将使用内置回退值", cfg_path)
         _TRAIN_CONFIG_MODULE = None
@@ -143,7 +155,9 @@ def _load_train_config_module() -> Any:
 
     buf = io.StringIO()
     try:
-        spec = importlib.util.spec_from_file_location("_pi05_train_config_readonly", cfg_path)
+        spec = importlib.util.spec_from_file_location(
+            "_pi05_train_config_readonly", cfg_path
+        )
         assert spec is not None and spec.loader is not None
         mod = importlib.util.module_from_spec(spec)
         # 必须先注册到 sys.modules，否则 train_config.py 内的 @dataclass 装饰器
@@ -234,7 +248,10 @@ def _resolve_output_path_from_config(config_name: str) -> Path:
     # C3 修复：回退值引用 train_config.DATASET_REPO_ID 常量，消除硬编码
     repo_id = getattr(cfg.data, "repo_id", None)
     if not repo_id:
-        repo_id = getattr(mod, "DATASET_REPO_ID", "industrial_team/industrial_dataset") or "industrial_team/industrial_dataset"
+        repo_id = (
+            getattr(mod, "DATASET_REPO_ID", "industrial_team/industrial_dataset")
+            or "industrial_team/industrial_dataset"
+        )
     return (assets_dirs / repo_id / NORM_STATS_FILENAME).resolve()
 
 
@@ -247,6 +264,7 @@ class NormStats:
 
     字段：mean / std / q01 / q99（均为 1-D NDArray，长度 = 该键维度）。
     """
+
     mean: np.ndarray
     std: np.ndarray
     q01: Optional[np.ndarray] = None  # 1% 分位
@@ -276,21 +294,31 @@ def compute_stats(
     if arr.ndim == 1:
         arr = arr.reshape(-1, 1)
     if arr.ndim != 2:
-        raise ValueError(f"[{key}] 期望 2-D [N, D]，实际 ndim={arr.ndim} shape={arr.shape}")
+        raise ValueError(
+            f"[{key}] 期望 2-D [N, D]，实际 ndim={arr.ndim} shape={arr.shape}"
+        )
 
     # ---- 掩码过滤 padding（方案书：必须用掩码过滤无效填充，防污染统计量）----
     if mask is not None:
         mask = np.asarray(mask, dtype=bool).reshape(-1)
         if mask.shape[0] != arr.shape[0]:
             logger.warning(
-                "[%s] mask 长度 %d != 样本数 %d，忽略 mask", key, mask.shape[0], arr.shape[0]
+                "[%s] mask 长度 %d != 样本数 %d，忽略 mask",
+                key,
+                mask.shape[0],
+                arr.shape[0],
             )
         else:
             valid_before = arr.shape[0]
             arr = arr[mask]
             valid_after = arr.shape[0]
-            logger.info("[%s] mask 过滤：%d -> %d 有效（剔除 padding %d）",
-                        key, valid_before, valid_after, valid_before - valid_after)
+            logger.info(
+                "[%s] mask 过滤：%d -> %d 有效（剔除 padding %d）",
+                key,
+                valid_before,
+                valid_after,
+                valid_before - valid_after,
+            )
 
     n = arr.shape[0]
     if n == 0:
@@ -310,7 +338,9 @@ def compute_stats(
     return {"mean": mean, "std": std, "q01": q01, "q99": q99, "min": mn, "max": mx}
 
 
-def build_norm_stats(stats_by_key: Dict[str, Dict[str, np.ndarray]]) -> Dict[str, NormStats]:
+def build_norm_stats(
+    stats_by_key: Dict[str, Dict[str, np.ndarray]],
+) -> Dict[str, NormStats]:
     """把原始统计 dict 转为 NormStats（仅 mean/std/q01/q99，不含 min/max）。"""
     return {
         k: NormStats(
@@ -366,7 +396,9 @@ def save_norm_stats(output_path: Path, norm_stats: Dict[str, NormStats]) -> None
     output_path.write_text(serialize_norm_stats(norm_stats), encoding="utf-8")
 
 
-def _verify_output_norm_stats(output_path: Path, expected_state_dim: int, expected_action_dim: int) -> bool:
+def _verify_output_norm_stats(
+    output_path: Path, expected_state_dim: int, expected_action_dim: int
+) -> bool:
     """输出后 QA 校验（C2 修复）：重新加载 JSON 检查完整性。
 
     检查项：
@@ -392,7 +424,10 @@ def _verify_output_norm_stats(output_path: Path, expected_state_dim: int, expect
         return False
 
     all_ok = True
-    for key, expected_dim in (("state", expected_state_dim), ("actions", expected_action_dim)):
+    for key, expected_dim in (
+        ("state", expected_state_dim),
+        ("actions", expected_action_dim),
+    ):
         entry = ns.get(key)
         if entry is None:
             logger.error("❌ 输出后 QA：缺少键 '%s'", key)
@@ -416,18 +451,28 @@ def _verify_output_norm_stats(output_path: Path, expected_state_dim: int, expect
         # 维度匹配
         mean_arr = np.asarray(entry["mean"], dtype=np.float64)
         if mean_arr.shape[0] != expected_dim:
-            logger.error("❌ 输出后 QA：[%s] 维度 %d != 期望 %d", key, mean_arr.shape[0], expected_dim)
+            logger.error(
+                "❌ 输出后 QA：[%s] 维度 %d != 期望 %d",
+                key,
+                mean_arr.shape[0],
+                expected_dim,
+            )
             all_ok = False
 
         # std > 0
         std_arr = np.asarray(entry["std"], dtype=np.float64)
         if np.any(std_arr <= 0):
-            logger.error("❌ 输出后 QA：[%s].std 存在 ≤0 的值: %s", key, std_arr.tolist())
+            logger.error(
+                "❌ 输出后 QA：[%s].std 存在 ≤0 的值: %s", key, std_arr.tolist()
+            )
             all_ok = False
 
     if all_ok:
-        logger.info("✅ 输出后 QA 通过：无 NaN/Inf、std>0、维度匹配（state=%d, actions=%d）",
-                    expected_state_dim, expected_action_dim)
+        logger.info(
+            "✅ 输出后 QA 通过：无 NaN/Inf、std>0、维度匹配（state=%d, actions=%d）",
+            expected_state_dim,
+            expected_action_dim,
+        )
     else:
         logger.error("❌ 输出后 QA 未通过，请检查输出文件: %s", output_path)
     return all_ok
@@ -484,7 +529,9 @@ def generate_mock_data(state_dim: int, action_dim: int) -> Dict[str, np.ndarray]
         actions_valid[:, :6] = rng.normal(0.0, 0.05, size=(n_valid, min(6, action_dim)))
     # 夹爪指令位（惯例最后一维）
     if action_dim >= 1:
-        actions_valid[:, min(6, action_dim - 1)] = rng.integers(0, 2, size=n_valid).astype(np.float64)
+        actions_valid[:, min(6, action_dim - 1)] = rng.integers(
+            0, 2, size=n_valid
+        ).astype(np.float64)
 
     # padding 帧（全零，用 mask 标记为无效）
     state_pad = np.zeros((n_pad, state_dim), dtype=np.float64)
@@ -496,7 +543,10 @@ def generate_mock_data(state_dim: int, action_dim: int) -> Dict[str, np.ndarray]
 
     logger.info(
         "mock 数据生成：state=%s actions=%s（有效 %d + padding %d，mask 验证用）",
-        state.shape, actions.shape, n_valid, n_pad,
+        state.shape,
+        actions.shape,
+        n_valid,
+        n_pad,
     )
     return {"state": state, "actions": actions, "mask": mask}
 
@@ -505,13 +555,22 @@ def generate_mock_data(state_dim: int, action_dim: int) -> Dict[str, np.ndarray]
 # 真实数据加载（LeRobot parquet / canonical episode / npz）
 # ---------------------------------------------------------------------------
 _STATE_CANDIDATES: Tuple[str, ...] = (
-    "state", "observation.state", "robot_state", "observation_state",
+    "state",
+    "observation.state",
+    "robot_state",
+    "observation_state",
 )
 _ACTIONS_CANDIDATES: Tuple[str, ...] = (
-    "actions", "action", "action_vec",
+    "actions",
+    "action",
+    "action_vec",
 )
 _MASK_CANDIDATES: Tuple[str, ...] = (
-    "mask", "pad_mask", "padding_mask", "action_mask", "state_mask",
+    "mask",
+    "pad_mask",
+    "padding_mask",
+    "action_mask",
+    "state_mask",
 )
 
 
@@ -560,8 +619,12 @@ def _load_from_lerobot_dir(path: Path) -> Optional[Dict[str, np.ndarray]]:
         s_col = _pick_column(df.columns, _STATE_CANDIDATES)
         a_col = _pick_column(df.columns, _ACTIONS_CANDIDATES)
         if s_col is None or a_col is None:
-            logger.warning("%s 缺少 state/actions 列（state=%s actions=%s），跳过",
-                           pf.name, s_col, a_col)
+            logger.warning(
+                "%s 缺少 state/actions 列（state=%s actions=%s），跳过",
+                pf.name,
+                s_col,
+                a_col,
+            )
             continue
         found_state = found_actions = True
 
@@ -593,8 +656,9 @@ def _load_from_canonical_dir(path: Path) -> Optional[Dict[str, np.ndarray]]:
     W4 修复：补充 mask/pad_mask 字段提取，防止 canonical 格式中的 padding
     帧污染统计量计算。
     """
-    episode_dirs = [p for p in sorted(path.iterdir())
-                    if p.is_dir() and (p / "meta.json").exists()]
+    episode_dirs = [
+        p for p in sorted(path.iterdir()) if p.is_dir() and (p / "meta.json").exists()
+    ]
     if not episode_dirs:
         return None
 
@@ -622,7 +686,9 @@ def _load_from_canonical_dir(path: Path) -> Optional[Dict[str, np.ndarray]]:
     }
     if masks and sum(m.shape[0] for m in masks) == result["state"].shape[0]:
         result["mask"] = np.concatenate(masks, axis=0)
-        logger.info("canonical 数据已提取 mask（%d 帧中有效掩码）", result["mask"].sum())
+        logger.info(
+            "canonical 数据已提取 mask（%d 帧中有效掩码）", result["mask"].sum()
+        )
     return result
 
 
@@ -636,11 +702,16 @@ def _load_canonical_steps(episode_dir: Path) -> Optional[Dict[str, np.ndarray]]:
     if parquet_path.exists() and PANDAS_AVAILABLE:
         try:
             df = pd.read_parquet(parquet_path)
-            robot_state = _stack_object_array(df["robot_state"]) if "robot_state" in df else None
+            robot_state = (
+                _stack_object_array(df["robot_state"]) if "robot_state" in df else None
+            )
             action = _stack_object_array(df["action"]) if "action" in df else None
             if robot_state is None or action is None:
                 return None
-            result: Dict[str, np.ndarray] = {"robot_state": robot_state, "action": action}
+            result: Dict[str, np.ndarray] = {
+                "robot_state": robot_state,
+                "action": action,
+            }
             # W4：提取 mask/pad_mask
             mask_col = _pick_column(df.columns, _MASK_CANDIDATES)
             if mask_col is not None:
@@ -756,18 +827,24 @@ def validate_dimensions(data: Dict[str, np.ndarray]) -> None:
     if state_dim != _expected_state_dim:
         logger.warning(
             "⚠️  state 维度 %d 与 train_config.STATE_DIM=%d 不一致，请确认数据来源正确",
-            state_dim, _expected_state_dim,
+            state_dim,
+            _expected_state_dim,
         )
     elif state_dim < 7 or state_dim > 32:
         logger.warning("⚠️  state 维度 %d 超出常见范围 [7, 32]，请核查", state_dim)
-    logger.info("维度校验通过：state[D=%d] actions[D=%d]（action_dim 源 train_config.py）",
-                state_dim, actions.shape[1])
+    logger.info(
+        "维度校验通过：state[D=%d] actions[D=%d]（action_dim 源 train_config.py）",
+        state_dim,
+        actions.shape[1],
+    )
 
 
 # ---------------------------------------------------------------------------
 # QA 打印（方案书 §3.3.1：每维分布 / 1%99% 分位 / 夹爪双峰）
 # ---------------------------------------------------------------------------
-def print_qa_report(stats_by_key: Dict[str, Dict[str, np.ndarray]], quiet: bool) -> None:
+def print_qa_report(
+    stats_by_key: Dict[str, Dict[str, np.ndarray]], quiet: bool
+) -> None:
     """打印每维 mean/std/min/max/q01/q99，供 QA 检查分布与夹爪双峰。"""
     if quiet:
         return
@@ -784,9 +861,11 @@ def print_qa_report(stats_by_key: Dict[str, Dict[str, np.ndarray]], quiet: bool)
         print(header)
         print("  " + "-" * (len(header) - 2))
         for i in range(dim):
-            print(f"  {i:>4} | {s['mean'][i]:>12.6f} | {s['std'][i]:>12.6f} | "
-                  f"{s['min'][i]:>12.6f} | {s['max'][i]:>12.6f} | "
-                  f"{s['q01'][i]:>12.6f} | {s['q99'][i]:>12.6f}")
+            print(
+                f"  {i:>4} | {s['mean'][i]:>12.6f} | {s['std'][i]:>12.6f} | "
+                f"{s['min'][i]:>12.6f} | {s['max'][i]:>12.6f} | "
+                f"{s['q01'][i]:>12.6f} | {s['q99'][i]:>12.6f}"
+            )
     print("-" * 72)
 
 
@@ -799,25 +878,30 @@ def parse_args() -> argparse.Namespace:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
-        "--dataset-path", default=None,
+        "--dataset-path",
+        default=None,
         help="数据集路径（LeRobot 目录 / canonical episode 目录 / .npz 文件）。"
-             "启用 --mock 时可选；未启用 --mock 时必填。",
+        "启用 --mock 时可选；未启用 --mock 时必填。",
     )
     parser.add_argument(
-        "--config-name", default="pi05_industrial",
+        "--config-name",
+        default="pi05_industrial",
         help="配置名称（C1/C2 修复：用于解析 norm_stats 默认输出路径，"
-             "需 train_config.py 中已定义。默认 pi05_industrial）。",
+        "需 train_config.py 中已定义。默认 pi05_industrial）。",
     )
     parser.add_argument(
-        "--output-path", default=None,
+        "--output-path",
+        default=None,
         help="输出 JSON 路径。未指定时从 train_config 按 --config-name 自动解析。",
     )
     parser.add_argument(
-        "--mock", action="store_true",
+        "--mock",
+        action="store_true",
         help="生成合成随机数据测试（CPU 兼容，无 GPU/openpi 也能跑）。",
     )
     parser.add_argument(
-        "--quiet", action="store_true",
+        "--quiet",
+        action="store_true",
         help="静默模式：只输出结果与 SHA256，不打印进度 / QA 报告。",
     )
     args = parser.parse_args()
@@ -849,7 +933,11 @@ def main() -> int:
     global ACTION_DIM
     ACTION_DIM = _load_action_dim_from_train_config()
     _state_dim = _load_state_dim_from_train_config()
-    logger.info("真相源维度：action_dim=%d state_dim=%d（源 train_config.py）", ACTION_DIM, _state_dim)
+    logger.info(
+        "真相源维度：action_dim=%d state_dim=%d（源 train_config.py）",
+        ACTION_DIM,
+        _state_dim,
+    )
 
     # ---- 1. 加载数据 ----
     is_mock = bool(args.mock)
@@ -879,8 +967,13 @@ def main() -> int:
             arr = arr.reshape(-1, 1)
         # mask 对所有键共用（按样本维过滤）
         stats_by_key[key] = compute_stats(arr, mask=mask, key=key)
-        logger.info("[%s] 统计量计算完成: shape=%s mean[0]=%.6f std[0]=%.6f",
-                    key, arr.shape, stats_by_key[key]["mean"][0], stats_by_key[key]["std"][0])
+        logger.info(
+            "[%s] 统计量计算完成: shape=%s mean[0]=%.6f std[0]=%.6f",
+            key,
+            arr.shape,
+            stats_by_key[key]["mean"][0],
+            stats_by_key[key]["std"][0],
+        )
 
     if not stats_by_key:
         print("ERROR: 未计算出任何统计量（数据为空或字段缺失）")
@@ -896,13 +989,17 @@ def main() -> int:
     # 从实际数据推断 state 维度用于校验
     _actual_state_dim = stats_by_key["state"]["mean"].shape[0]
     _actual_action_dim = stats_by_key["actions"]["mean"].shape[0]
-    if not _verify_output_norm_stats(output_path, _actual_state_dim, _actual_action_dim):
+    if not _verify_output_norm_stats(
+        output_path, _actual_state_dim, _actual_action_dim
+    ):
         logger.critical("输出后 QA 未通过，返回值非零，请检查输出文件！")
         return 1
 
     # ---- 5. SHA256 校验和（供 model_manifest.yaml，方案书 §8.5 / §7.2）----
     sha256_full = compute_sha256(output_path)
-    sha256_short = sha256_full[:16]  # 与 services/pi05/src/pi05.py 的 _norm_stats_sha 截断一致
+    sha256_short = sha256_full[
+        :16
+    ]  # 与 services/pi05/src/pi05.py 的 _norm_stats_sha 截断一致
 
     # ---- 6. 输出 ----
     if not args.quiet:
@@ -934,7 +1031,9 @@ def main() -> int:
         print("[MOCK] 注意：此文件为 Mock 模式生成，仅供算子校验，不得用于正式训练。")
     print("=" * 72)
     print("下一步：将该 SHA256 写入 model_manifest.yaml（方案书 §8.5）；")
-    print("       训练时设置 PI05_NORM_STATS_PATH 指向此文件（services/pi05/src/pi05.py 追溯）。")
+    print(
+        "       训练时设置 PI05_NORM_STATS_PATH 指向此文件（services/pi05/src/pi05.py 追溯）。"
+    )
     return 0
 
 

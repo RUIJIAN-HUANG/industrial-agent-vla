@@ -11,6 +11,7 @@
 约束：纯 CPU + pytest + unittest.mock，无 GPU 依赖；严禁修改被测源码；
       模拟数据严格对齐 7 维动作 [dx,dy,dz,dax,day,daz,gripper] 与真实协议结构。
 """
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
@@ -189,8 +190,8 @@ def test_process_observation(mock_executor, sample_observation):
     # 前视 RGB 预处理：uint8 / HWC（ndim=3, shape[2]=3）/ 连续内存
     rgb = example["observation/exterior_image_1_left"]
     assert rgb.dtype == np.uint8
-    assert rgb.ndim == 3            # HWC 而非 CHW
-    assert rgb.shape[2] == 3        # 3 通道
+    assert rgb.ndim == 3  # HWC 而非 CHW
+    assert rgb.shape[2] == 3  # 3 通道
     assert rgb.flags["C_CONTIGUOUS"]
     # 像素与输入完全一致：无翻转、无通道交换、无 resize
     np.testing.assert_array_equal(rgb, sample_observation.rgb_front)
@@ -211,7 +212,7 @@ def test_process_observation_pixel_audit(mock_executor, caplog):
     prepared = _prep_image(FIXED_TEST_IMAGE)
     assert _image_checksum(prepared) == FIXED_TEST_IMAGE_CHECKSUM
     assert prepared.dtype == np.uint8
-    assert prepared.shape == (480, 640, 3)   # HWC 而非 CHW
+    assert prepared.shape == (480, 640, 3)  # HWC 而非 CHW
 
     # 3) R 通道（index 0）保持横向渐变 -> 未发生 BGR 通道交换
     assert np.array_equal(prepared[:, :, 0], FIXED_TEST_IMAGE[:, :, 0])
@@ -220,10 +221,14 @@ def test_process_observation_pixel_audit(mock_executor, caplog):
 
     # 4) 传入固定测试图触发 _pixel_audit_if_test，应记录“像素审计通过”
     obs = ObsPacket(
-        episode_id="audit", step_id=0, timestamp_ns=0,
-        rgb_front=FIXED_TEST_IMAGE.copy(), rgb_wrist=None,
+        episode_id="audit",
+        step_id=0,
+        timestamp_ns=0,
+        rgb_front=FIXED_TEST_IMAGE.copy(),
+        rgb_wrist=None,
         robot_state=np.zeros(8, dtype=np.float32),
-        instruction="audit", runtime_flags={},
+        instruction="audit",
+        runtime_flags={},
     )
     with caplog.at_level("INFO", logger="pi05_executor"):
         mock_executor._pixel_audit_if_test(obs)
@@ -233,9 +238,9 @@ def test_process_observation_pixel_audit(mock_executor, caplog):
 def test_prep_image_rejects_bad_shape():
     """用例2补充：非法图像形状被拒绝（保护像素管线不变量）。"""
     with pytest.raises(ValueError, match="rgb 图像形状非法"):
-        _prep_image(np.zeros((480, 640), dtype=np.uint8))          # 缺通道
+        _prep_image(np.zeros((480, 640), dtype=np.uint8))  # 缺通道
     with pytest.raises(ValueError, match="rgb 图像形状非法"):
-        _prep_image(np.zeros((480, 640, 4), dtype=np.uint8))       # 非 3 通道
+        _prep_image(np.zeros((480, 640, 4), dtype=np.uint8))  # 非 3 通道
 
 
 # ---------------------------------------------------------------------------
@@ -272,7 +277,9 @@ def test_action_chunking_pads_short_dim(clean_pi05_env, monkeypatch):
     fake_policy = MagicMock()
     fake_policy.client_type = "local"
     fake_policy.checkpoint_dir = None
-    fake_policy.infer.return_value = {"actions": np.full((4, 5), 0.001, dtype=np.float32)}
+    fake_policy.infer.return_value = {
+        "actions": np.full((4, 5), 0.001, dtype=np.float32)
+    }
     with patch.object(pi05_mod, "make_policy_client", return_value=fake_policy):
         ex = Pi05Executor()
 
@@ -296,7 +303,7 @@ def test_action_chunking_promotes_1d(clean_pi05_env, monkeypatch):
 
     chunk = ex.infer(_make_minimal_obs(step_id=2))
     assert chunk.actions.shape == (1, ACTION_DIM)
-    np.testing.assert_allclose(chunk.actions[0, 6], 1.0)   # 夹爪 1.0 保留
+    np.testing.assert_allclose(chunk.actions[0, 6], 1.0)  # 夹爪 1.0 保留
 
 
 # ---------------------------------------------------------------------------
@@ -385,8 +392,17 @@ def test_safety_clamping(mock_executor, caplog):
 def test_safety_clamping_boundary(mock_executor):
     """用例5补充：恰好等于阈值的动作不被截断（边界值合规）。"""
     boundary = np.array(
-        [[MAX_TRANSLATION_M, -MAX_TRANSLATION_M, 0.0,
-          MAX_ROTATION_RAD, -MAX_ROTATION_RAD, 0.0, 1.0]],
+        [
+            [
+                MAX_TRANSLATION_M,
+                -MAX_TRANSLATION_M,
+                0.0,
+                MAX_ROTATION_RAD,
+                -MAX_ROTATION_RAD,
+                0.0,
+                1.0,
+            ]
+        ],
         dtype=np.float32,
     )
     clipped = mock_executor._clip_actions(boundary)

@@ -22,7 +22,7 @@ class CanonicalActionChunk:
     control_hz: 控制频率
     """
 
-    actions: np.ndarray              # float32[N,7] [dx,dy,dz,dax,day,daz,gripper]
+    actions: np.ndarray  # float32[N,7] [dx,dy,dz,dax,day,daz,gripper]
     space_id: str = "eef_delta_xyz_axisangle_gripper_v1"
     frame: str = "robot_base"
     control_hz: int = 10

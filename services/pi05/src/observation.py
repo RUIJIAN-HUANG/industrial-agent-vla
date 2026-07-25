@@ -24,8 +24,10 @@ class ObsPacket:
     episode_id: str
     step_id: int
     timestamp_ns: int
-    rgb_front: np.ndarray              # uint8[H,W,3] 原始 RGB，不做预处理
-    rgb_wrist: Optional[np.ndarray]     # uint8[H,W,3]，可选腕部相机
-    robot_state: np.ndarray             # float32[d] 本体状态
-    instruction: str                    # 完整自然语言，不拆槽位
-    runtime_flags: dict = field(default_factory=dict)  # {terminated, truncated, camera_ok}
+    rgb_front: np.ndarray  # uint8[H,W,3] 原始 RGB，不做预处理
+    rgb_wrist: Optional[np.ndarray]  # uint8[H,W,3]，可选腕部相机
+    robot_state: np.ndarray  # float32[d] 本体状态
+    instruction: str  # 完整自然语言，不拆槽位
+    runtime_flags: dict = field(
+        default_factory=dict
+    )  # {terminated, truncated, camera_ok}

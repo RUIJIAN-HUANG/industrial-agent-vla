@@ -26,6 +26,7 @@
     python scripts/pi05/convert_openpi.py --data_dir /path/to/canonical/data \\
         --output_repo_id your_team/industrial --push_to_hub
 """
+
 from __future__ import annotations
 
 import argparse
@@ -43,7 +44,9 @@ import numpy as np
 logger = logging.getLogger("convert_openpi")
 if not logger.handlers:
     _h = logging.StreamHandler()
-    _h.setFormatter(logging.Formatter("[%(asctime)s][%(levelname)s][convert_openpi] %(message)s"))
+    _h.setFormatter(
+        logging.Formatter("[%(asctime)s][%(levelname)s][convert_openpi] %(message)s")
+    )
     logger.addHandler(_h)
 logger.setLevel(logging.INFO)
 
@@ -57,6 +60,7 @@ LEROBOT_IMPORT_ERROR: Optional[str] = None
 
 try:
     from lerobot.common.datasets.lerobot_dataset import LeRobotDataset  # type: ignore
+
     LEROBOT_AVAILABLE = True
 except Exception as _e:  # pragma: no cover
     LEROBOT_IMPORT_ERROR = str(_e)
@@ -67,12 +71,14 @@ except Exception as _e:  # pragma: no cover
 # ---------------------------------------------------------------------------
 try:
     from PIL import Image  # type: ignore
+
     PIL_AVAILABLE: bool = True
 except Exception:
     PIL_AVAILABLE = False
 
 try:
     import cv2  # type: ignore
+
     CV2_AVAILABLE: bool = True
 except Exception:
     CV2_AVAILABLE = False
@@ -83,12 +89,14 @@ except Exception:
 # ---------------------------------------------------------------------------
 try:
     import pandas as pd  # type: ignore
+
     PANDAS_AVAILABLE: bool = True
 except Exception:
     PANDAS_AVAILABLE = False
 
 try:
     import h5py  # type: ignore
+
     H5PY_AVAILABLE: bool = True
 except Exception:
     H5PY_AVAILABLE = False
@@ -97,18 +105,20 @@ except Exception:
 # ---------------------------------------------------------------------------
 # 常量
 # ---------------------------------------------------------------------------
-ACTION_DIM: int = 7                       # [dx,dy,dz,dax,day,daz,gripper]，方案书 §5.1
-DEFAULT_FPS: int = 10                     # 方案书 §3.4 control_hz=10
-DEFAULT_STATE_DIM: int = 8                # Franka 7-DOF + 1 gripper
+ACTION_DIM: int = 7  # [dx,dy,dz,dax,day,daz,gripper]，方案书 §5.1
+DEFAULT_FPS: int = 10  # 方案书 §3.4 control_hz=10
+DEFAULT_STATE_DIM: int = 8  # Franka 7-DOF + 1 gripper
 DEFAULT_ROBOT_TYPE: str = "franka"
 DEFAULT_REPO_ID: str = "your_team/industrial"
-DEFAULT_IMAGE_HW: tuple = (256, 256)      # openpi LIBERO 默认图像尺寸
+DEFAULT_IMAGE_HW: tuple = (256, 256)  # openpi LIBERO 默认图像尺寸
 
 
 # ---------------------------------------------------------------------------
 # 图像加载
 # ---------------------------------------------------------------------------
-def load_image_as_array(path: Path, size: tuple = DEFAULT_IMAGE_HW) -> Optional[np.ndarray]:
+def load_image_as_array(
+    path: Path, size: tuple = DEFAULT_IMAGE_HW
+) -> Optional[np.ndarray]:
     """加载 jpg 为 RGB uint8 ndarray，resize 到指定尺寸；失败返回 None。
 
     方案书 §5.4：LeRobot feature shape 固定 (256,256,3)，需在存储前 resize。
@@ -157,14 +167,17 @@ def load_steps(episode_dir: Path) -> Optional[Dict[str, np.ndarray]]:
         try:
             df = pd.read_parquet(parquet_path)
             robot_state = np.asarray(
-                [np.asarray(r, dtype=np.float32) for r in df["robot_state"]], dtype=np.float32
+                [np.asarray(r, dtype=np.float32) for r in df["robot_state"]],
+                dtype=np.float32,
             )
             action = np.asarray(
-                [np.asarray(a, dtype=np.float32) for a in df["action"]], dtype=np.float32
+                [np.asarray(a, dtype=np.float32) for a in df["action"]],
+                dtype=np.float32,
             )
             done = (
                 np.asarray(df["done"].tolist(), dtype=bool)
-                if "done" in df.columns else None
+                if "done" in df.columns
+                else None
             )
             return {"robot_state": robot_state, "action": action, "done": done}
         except Exception as e:
@@ -232,35 +245,47 @@ def parse_args() -> argparse.Namespace:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
-        "--data_dir", required=True,
+        "--data_dir",
+        required=True,
         help="角色C canonical 数据根目录（每个子文件夹是一个 episode）。",
     )
     parser.add_argument(
-        "--output_repo_id", default=DEFAULT_REPO_ID,
+        "--output_repo_id",
+        default=DEFAULT_REPO_ID,
         help="输出 LeRobot 数据集名称（也作为本地缓存目录名）。",
     )
     parser.add_argument(
-        "--push_to_hub", action="store_true",
+        "--push_to_hub",
+        action="store_true",
         help="可选，转换完成后推送到 HuggingFace Hub。",
     )
     parser.add_argument(
-        "--fps", type=int, default=DEFAULT_FPS,
+        "--fps",
+        type=int,
+        default=DEFAULT_FPS,
         help="数据集 fps（方案书 §3.4 control_hz=10）。",
     )
     parser.add_argument(
-        "--state_dim", type=int, default=DEFAULT_STATE_DIM,
+        "--state_dim",
+        type=int,
+        default=DEFAULT_STATE_DIM,
         help="机器人本体状态维度（Franka 7-DOF+gripper=8）。传 0 表示自动检测。",
     )
     parser.add_argument(
-        "--robot_type", default=DEFAULT_ROBOT_TYPE,
+        "--robot_type",
+        default=DEFAULT_ROBOT_TYPE,
         help="LeRobot robot_type 标识。",
     )
     parser.add_argument(
-        "--image_size", type=int, nargs=2, default=list(DEFAULT_IMAGE_HW),
+        "--image_size",
+        type=int,
+        nargs=2,
+        default=list(DEFAULT_IMAGE_HW),
         help="图像 resize 尺寸（H W），默认 256 256。",
     )
     parser.add_argument(
-        "--filter_success_only", action="store_true",
+        "--filter_success_only",
+        action="store_true",
         help="仅转换 result.json 中 success=true 的 episode（方案书 §5.3：标准成功占约 70%%）。",
     )
     return parser.parse_args()
@@ -295,7 +320,9 @@ def main() -> int:
 
     episodes = find_episodes(data_dir)
     if not episodes:
-        print(f"ERROR: data_dir 下未找到任何 episode（需含 meta.json 的子目录）: {data_dir}")
+        print(
+            f"ERROR: data_dir 下未找到任何 episode（需含 meta.json 的子目录）: {data_dir}"
+        )
         return 1
 
     # ---- 确定 state_dim ----
@@ -335,7 +362,11 @@ def main() -> int:
 
     logger.info(
         "创建 LeRobot 数据集: repo_id=%s fps=%d robot_type=%s state_dim=%d image=%s",
-        args.output_repo_id, args.fps, args.robot_type, state_dim, img_shape,
+        args.output_repo_id,
+        args.fps,
+        args.robot_type,
+        state_dim,
+        img_shape,
     )
     try:
         dataset = LeRobotDataset.create(
@@ -350,11 +381,11 @@ def main() -> int:
 
     # ---- 统计容器 ----
     stats: Dict[str, Any] = {
-        "total_episodes": 0,        # 成功写入的 episode 数
-        "total_steps": 0,           # 成功写入的 step 数
-        "skipped_steps": 0,         # 跳过的 step 数
-        "skipped_episodes": 0,      # 整个 episode 跳过的数量
-        "skipped_reasons": {},      # 跳过原因 → 计数
+        "total_episodes": 0,  # 成功写入的 episode 数
+        "total_steps": 0,  # 成功写入的 step 数
+        "skipped_steps": 0,  # 跳过的 step 数
+        "skipped_episodes": 0,  # 整个 episode 跳过的数量
+        "skipped_reasons": {},  # 跳过原因 → 计数
     }
 
     def record_skip(reason: str) -> None:
@@ -387,7 +418,10 @@ def main() -> int:
                     with open(result_path, "r", encoding="utf-8") as f:
                         result = json.load(f)
                     if not result.get("success", True):
-                        logger.info("[%s] result.json success=false，跳过（--filter_success_only）", ep_name)
+                        logger.info(
+                            "[%s] result.json success=false，跳过（--filter_success_only）",
+                            ep_name,
+                        )
                         stats["skipped_episodes"] += 1
                         stats["skipped_reasons"]["result_not_success"] = (
                             stats["skipped_reasons"].get("result_not_success", 0) + 1
@@ -409,7 +443,7 @@ def main() -> int:
             continue
 
         robot_states = steps["robot_state"]  # [N, d] 或 [N*d]
-        actions = steps["action"]            # [N, 7] 或 [N*7]
+        actions = steps["action"]  # [N, 7] 或 [N*7]
         n_steps = int(len(robot_states))
         if n_steps == 0:
             logger.warning("[%s] steps 为空，跳过 episode", ep_name)
@@ -437,7 +471,10 @@ def main() -> int:
             if action.shape[0] != ACTION_DIM:
                 logger.warning(
                     "[%s step=%d] action 维度=%d 不等于 %d，跳过",
-                    ep_name, i, int(action.shape[0]), ACTION_DIM,
+                    ep_name,
+                    i,
+                    int(action.shape[0]),
+                    ACTION_DIM,
                 )
                 record_skip("action_dim_mismatch")
                 continue
@@ -455,19 +492,26 @@ def main() -> int:
             if state.shape[0] != state_dim:
                 logger.warning(
                     "[%s step=%d] robot_state 维度=%d 不等于期望 %d，跳过",
-                    ep_name, i, int(state.shape[0]), state_dim,
+                    ep_name,
+                    i,
+                    int(state.shape[0]),
+                    state_dim,
                 )
                 record_skip("state_dim_mismatch")
                 continue
             # (5) 前视图文件存在
             img_path = front_dir / f"{i:06d}.jpg"
             if not img_path.exists():
-                logger.warning("[%s step=%d] 前视图不存在: %s，跳过", ep_name, i, img_path)
+                logger.warning(
+                    "[%s step=%d] 前视图不存在: %s，跳过", ep_name, i, img_path
+                )
                 record_skip("front_image_missing")
                 continue
             image = load_image_as_array(img_path, size=(img_h, img_w))
             if image is None:
-                logger.warning("[%s step=%d] 前视图读取失败: %s，跳过", ep_name, i, img_path)
+                logger.warning(
+                    "[%s step=%d] 前视图读取失败: %s，跳过", ep_name, i, img_path
+                )
                 record_skip("front_image_load_failed")
                 continue
 
@@ -486,12 +530,14 @@ def main() -> int:
 
             # ---- 添加帧 ----
             try:
-                dataset.add_frame({
-                    "image": image,
-                    "wrist_image": wrist_image,
-                    "state": np.asarray(state, dtype=np.float32),
-                    "actions": np.asarray(action, dtype=np.float32),
-                })
+                dataset.add_frame(
+                    {
+                        "image": image,
+                        "wrist_image": wrist_image,
+                        "state": np.asarray(state, dtype=np.float32),
+                        "actions": np.asarray(action, dtype=np.float32),
+                    }
+                )
                 added += 1
             except Exception as e:
                 logger.warning("[%s step=%d] add_frame 失败: %s，跳过", ep_name, i, e)
@@ -506,7 +552,9 @@ def main() -> int:
                 stats["total_steps"] += added
                 logger.info(
                     "[%s] 写入完成: %d steps, task=%r",
-                    ep_name, added, instruction[:60],
+                    ep_name,
+                    added,
+                    instruction[:60],
                 )
             except Exception as e:
                 logger.error("[%s] save_episode 失败: %s", ep_name, e)
