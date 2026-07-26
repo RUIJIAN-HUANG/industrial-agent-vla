@@ -11,6 +11,7 @@
 | [`daily-task-automation.md`](daily-task-automation.md) | 09:00 自动任务发布规则 | A |
 | [`project-management-guide.md`](project-management-guide.md) | 项目执行与升级规则 | 全员 |
 | [`github-collaboration-guide.md`](github-collaboration-guide.md) | GitHub 新手到 PR/冲突处理 | 全员 |
+| [`data-collection-and-five-member-execution-guide.md`](data-collection-and-five-member-execution-guide.md) | 单箱双臂数据采集、D1–D40 安排与 B–F 固定职责 | A/F |
 
 所有状态必须由 Commit、PR、测试、日志或制品证据支持；“接口已写”“正在调试”
 不能等同于真实仿真/模型已通过。

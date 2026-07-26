@@ -169,7 +169,6 @@ class TaskSchema:
     schema_version: str = TASK_SCHEMA_VERSION
     target_object: str | None = None
     target_location: str | None = None
-    preferred_executor: str | None = None
     constraints: Mapping[str, Any] = field(default_factory=dict)
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
@@ -196,11 +195,6 @@ class TaskSchema:
                 FailureCode.INVALID_TASK,
                 f"unsupported task_type: {self.task_type}",
             )
-        if self.preferred_executor not in {None, "openvla_oft", "pi05"}:
-            raise ContractError(
-                FailureCode.INVALID_TASK,
-                f"unsupported preferred_executor: {self.preferred_executor}",
-            )
         if not self.postconditions:
             raise ContractError(
                 FailureCode.INVALID_TASK, "at least one postcondition is required"
@@ -210,6 +204,23 @@ class TaskSchema:
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "TaskSchema":
+        allowed_fields = {
+            "schema_version",
+            "task_id",
+            "instruction",
+            "task_type",
+            "target_object",
+            "target_location",
+            "constraints",
+            "metadata",
+            "postconditions",
+        }
+        unknown_fields = set(value) - allowed_fields
+        if unknown_fields:
+            raise ContractError(
+                FailureCode.INVALID_TASK,
+                f"task contains unknown fields: {sorted(unknown_fields)}",
+            )
         task = cls(
             schema_version=str(value.get("schema_version", TASK_SCHEMA_VERSION)),
             task_id=str(value.get("task_id", "")),
@@ -217,7 +228,6 @@ class TaskSchema:
             task_type=str(value.get("task_type", "")),
             target_object=value.get("target_object"),
             target_location=value.get("target_location"),
-            preferred_executor=value.get("preferred_executor"),
             constraints=dict(value.get("constraints", {})),
             metadata=dict(value.get("metadata", {})),
             postconditions=tuple(
@@ -238,7 +248,7 @@ class TaskSchema:
             "constraints": dict(self.constraints),
             "metadata": dict(self.metadata),
         }
-        for key in ("target_object", "target_location", "preferred_executor"):
+        for key in ("target_object", "target_location"):
             value = getattr(self, key)
             if value is not None:
                 result[key] = value
@@ -302,7 +312,6 @@ class Subtask:
             schema_version=parent.schema_version,
             target_object=parent.target_object,
             target_location=parent.target_location,
-            preferred_executor=self.assigned_executor or parent.preferred_executor,
             constraints=parent.constraints,
             metadata={
                 **dict(parent.metadata),

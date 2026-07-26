@@ -23,12 +23,28 @@ def chunk(values: list[float]) -> ActionChunk:
 
 class SafetyTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.observation = ObservationGateway().ingest_online(raw_observation())
+        raw = raw_observation()
+        robot = raw["robot"]
+        assert isinstance(robot, dict)
+        robot["arm_a"] = {
+            "tcp_pose_m_rad": list(robot["tcp_pose_m_rad"]),
+            "state": [0.5, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5],
+            "retreated": False,
+        }
+        robot["arm_b"] = {
+            "tcp_pose_m_rad": [0.4, 0.0, 0.5, 0.0, 0.0, 0.0],
+            "state": [0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5],
+            "retreated": True,
+        }
+        self.observation = ObservationGateway().ingest_online(raw)
         self.validator = ActionSafetyValidator()
 
     def test_axis_values_are_limited_before_execution(self) -> None:
         decision = self.validator.validate_and_limit(
-            chunk([0.5, 0, 0, 1.0, 0, 0, 3.0]), self.observation
+            chunk([0.5, 0, 0, 1.0, 0, 0, 3.0]),
+            self.observation,
+            arm_id="Arm_A",
+            control_token="A_ONLY",
         )
         self.assertTrue(decision.accepted)
         assert decision.chunk is not None
@@ -39,18 +55,57 @@ class SafetyTests(unittest.TestCase):
 
     def test_nan_is_rejected_not_limited(self) -> None:
         decision = self.validator.validate_and_limit(
-            chunk([math.nan, 0, 0, 0, 0, 0, 0]), self.observation
+            chunk([math.nan, 0, 0, 0, 0, 0, 0]),
+            self.observation,
+            arm_id="Arm_A",
+            control_token="A_ONLY",
         )
         self.assertFalse(decision.accepted)
         self.assertEqual(decision.code, FailureCode.ACTION_NON_FINITE)
 
     def test_projected_workspace_breach_is_rejected(self) -> None:
         raw = raw_observation()
-        raw["robot"] = {"tcp_pose_m_rad": [0.99, 0.0, 0.5, 0, 0, 0]}
+        robot = raw["robot"]
+        assert isinstance(robot, dict)
+        robot["arm_a"] = {
+            "tcp_pose_m_rad": [0.99, 0.0, 0.5, 0, 0, 0],
+            "state": [0.99, 0.0, 0.5, 0, 0, 0, 0.5],
+            "retreated": False,
+        }
         observation = ObservationGateway().ingest_online(raw)
         decision = self.validator.validate_and_limit(
-            chunk([0.2, 0, 0, 0, 0, 0, 0]), observation
+            chunk([0.2, 0, 0, 0, 0, 0, 0]),
+            observation,
+            arm_id="Arm_A",
+            control_token="A_ONLY",
         )
+        self.assertFalse(decision.accepted)
+        self.assertEqual(decision.code, FailureCode.ACTION_WORKSPACE_BREACH)
+
+    def test_workspace_check_uses_selected_arm_pose(self) -> None:
+        raw = raw_observation()
+        robot = raw["robot"]
+        assert isinstance(robot, dict)
+        robot["tcp_pose_m_rad"] = [0.0, 0.0, 0.5, 0, 0, 0]
+        robot["arm_a"] = {
+            "tcp_pose_m_rad": [0.2, 0.0, 0.5, 0, 0, 0],
+            "state": [0.2, 0.0, 0.5, 0, 0, 0, 0.5],
+            "retreated": True,
+        }
+        robot["arm_b"] = {
+            "tcp_pose_m_rad": [0.99, 0.0, 0.5, 0, 0, 0],
+            "state": [0.99, 0.0, 0.5, 0, 0, 0, 0.5],
+            "retreated": False,
+        }
+        observation = ObservationGateway().ingest_online(raw)
+
+        decision = self.validator.validate_and_limit(
+            chunk([0.2, 0, 0, 0, 0, 0, 0]),
+            observation,
+            arm_id="Arm_B",
+            control_token="B_ONLY",
+        )
+
         self.assertFalse(decision.accepted)
         self.assertEqual(decision.code, FailureCode.ACTION_WORKSPACE_BREACH)
 

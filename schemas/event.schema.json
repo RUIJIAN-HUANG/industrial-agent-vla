@@ -50,19 +50,61 @@
         "VALIDATING_TASK",
         "PLANNING",
         "OBSERVING",
-        "SELECTING_EXECUTOR",
+        "PERCEIVING",
+        "ASSIGNING_ROLE",
         "EXECUTING",
         "VERIFYING",
         "ADVANCING_SUBTASK",
         "REPLANNING",
-        "SWITCHING",
         "SUCCEEDED",
         "FAILED",
-        "SAFE_STOPPED"
+        "SAFE_STOPPED",
+        "SAFE_STOP_FAILED"
       ]
     },
     "payload": {
-      "type": "object"
+      "type": "object",
+      "properties": {
+        "control_token": {
+          "$ref": "#/$defs/controlToken"
+        },
+        "previous_token": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/controlToken"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "next_token": {
+          "$ref": "#/$defs/controlToken"
+        },
+        "arm_id": {
+          "enum": [
+            "Arm_A",
+            "Arm_B",
+            null
+          ]
+        },
+        "selection_mode": {
+          "enum": [
+            "fixed_lifecycle",
+            null
+          ]
+        }
+      }
+    }
+  },
+  "$defs": {
+    "controlToken": {
+      "enum": [
+        "A_ONLY",
+        "HANDOFF_VERIFY",
+        "B_ONLY",
+        "NONE"
+      ]
     }
   }
 }

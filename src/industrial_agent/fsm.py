@@ -12,19 +12,25 @@ class AgentState(str, Enum):
     VALIDATING_TASK = "VALIDATING_TASK"
     PLANNING = "PLANNING"
     OBSERVING = "OBSERVING"
-    SELECTING_EXECUTOR = "SELECTING_EXECUTOR"
+    PERCEIVING = "PERCEIVING"
+    ASSIGNING_ROLE = "ASSIGNING_ROLE"
     EXECUTING = "EXECUTING"
     VERIFYING = "VERIFYING"
     ADVANCING_SUBTASK = "ADVANCING_SUBTASK"
     REPLANNING = "REPLANNING"
-    SWITCHING = "SWITCHING"
     SUCCEEDED = "SUCCEEDED"
     FAILED = "FAILED"
     SAFE_STOPPED = "SAFE_STOPPED"
+    SAFE_STOP_FAILED = "SAFE_STOP_FAILED"
 
 
 TERMINAL_STATES = frozenset(
-    {AgentState.SUCCEEDED, AgentState.FAILED, AgentState.SAFE_STOPPED}
+    {
+        AgentState.SUCCEEDED,
+        AgentState.FAILED,
+        AgentState.SAFE_STOPPED,
+        AgentState.SAFE_STOP_FAILED,
+    }
 )
 
 ALLOWED_TRANSITIONS: dict[AgentState, frozenset[AgentState]] = {
@@ -33,14 +39,23 @@ ALLOWED_TRANSITIONS: dict[AgentState, frozenset[AgentState]] = {
     AgentState.PLANNING: frozenset({AgentState.OBSERVING, AgentState.FAILED}),
     AgentState.OBSERVING: frozenset(
         {
-            AgentState.SELECTING_EXECUTOR,
+            AgentState.PERCEIVING,
+            AgentState.ASSIGNING_ROLE,
             AgentState.ADVANCING_SUBTASK,
             AgentState.SUCCEEDED,
             AgentState.SAFE_STOPPED,
             AgentState.FAILED,
         }
     ),
-    AgentState.SELECTING_EXECUTOR: frozenset(
+    AgentState.PERCEIVING: frozenset(
+        {
+            AgentState.OBSERVING,
+            AgentState.ASSIGNING_ROLE,
+            AgentState.FAILED,
+            AgentState.SAFE_STOPPED,
+        }
+    ),
+    AgentState.ASSIGNING_ROLE: frozenset(
         {
             AgentState.EXECUTING,
             AgentState.FAILED,
@@ -51,7 +66,6 @@ ALLOWED_TRANSITIONS: dict[AgentState, frozenset[AgentState]] = {
         {
             AgentState.VERIFYING,
             AgentState.REPLANNING,
-            AgentState.SWITCHING,
             AgentState.FAILED,
             AgentState.SAFE_STOPPED,
         }
@@ -62,7 +76,6 @@ ALLOWED_TRANSITIONS: dict[AgentState, frozenset[AgentState]] = {
             AgentState.SUCCEEDED,
             AgentState.ADVANCING_SUBTASK,
             AgentState.REPLANNING,
-            AgentState.SWITCHING,
             AgentState.FAILED,
             AgentState.SAFE_STOPPED,
         }
@@ -73,12 +86,10 @@ ALLOWED_TRANSITIONS: dict[AgentState, frozenset[AgentState]] = {
     AgentState.REPLANNING: frozenset(
         {AgentState.OBSERVING, AgentState.SAFE_STOPPED, AgentState.FAILED}
     ),
-    AgentState.SWITCHING: frozenset(
-        {AgentState.OBSERVING, AgentState.SAFE_STOPPED, AgentState.FAILED}
-    ),
     AgentState.SUCCEEDED: frozenset(),
     AgentState.FAILED: frozenset(),
     AgentState.SAFE_STOPPED: frozenset(),
+    AgentState.SAFE_STOP_FAILED: frozenset(),
 }
 
 
@@ -100,6 +111,25 @@ class AgentFSM:
             raise ValueError(
                 f"illegal FSM transition {self.state.value} -> {target.value}"
             )
+        record = StateTransition(
+            previous=self.state,
+            current=target,
+            reason=reason,
+            timestamp_ms=time_ns() // 1_000_000,
+        )
+        self.state = target
+        self.history.append(record)
+        return record
+
+    def force_safety_terminal(
+        self,
+        target: AgentState,
+        reason: str,
+    ) -> StateTransition:
+        """Record a fail-closed emergency terminal from any current state."""
+
+        if target not in {AgentState.SAFE_STOPPED, AgentState.SAFE_STOP_FAILED}:
+            raise ValueError("force_safety_terminal only accepts safety terminals")
         record = StateTransition(
             previous=self.state,
             current=target,

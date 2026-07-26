@@ -10,6 +10,7 @@
 # /data/                                 @<member-c>
 # /services/openvla_oft/                 @<member-d>
 # /services/pi05/                        @<member-e>
+# /services/yolo/                        @<member-f>
 # /tests/                                @<member-f>
 # /.github/                              @<member-a> @<member-f>
 # /docs/official/                        @<member-a>

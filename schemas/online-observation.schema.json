@@ -9,8 +9,11 @@
     "observation_version",
     "observation_id",
     "timestamp_ms",
+    "camera",
     "robot",
-    "safety"
+    "safety",
+    "task",
+    "quality"
   ],
   "properties": {
     "observation_version": {
@@ -27,9 +30,86 @@
       "description": "Unix epoch milliseconds"
     },
     "camera": {
-      "type": "object"
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "full_image",
+        "arm_a_rgb",
+        "handoff_rgb",
+        "arm_b_rgb"
+      ],
+      "properties": {
+        "full_image": {
+          "description": "Immutable image reference shared by the YOLO Agent and selected VLA.",
+          "allOf": [
+            {
+              "$ref": "#/$defs/imageReference"
+            },
+            {
+              "properties": {
+                "camera_id": {
+                  "enum": [
+                    "CAM_A_TOP",
+                    "CAM_HANDOFF",
+                    "CAM_B_TOP"
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "arm_a_rgb": {
+          "description": "RGB stream from /World/Cameras/CAM_A_TOP.",
+          "allOf": [
+            {
+              "$ref": "#/$defs/imageReference"
+            },
+            {
+              "properties": {
+                "camera_id": {
+                  "const": "CAM_A_TOP"
+                }
+              }
+            }
+          ]
+        },
+        "handoff_rgb": {
+          "description": "RGB stream from /World/Cameras/CAM_HANDOFF.",
+          "allOf": [
+            {
+              "$ref": "#/$defs/imageReference"
+            },
+            {
+              "properties": {
+                "camera_id": {
+                  "const": "CAM_HANDOFF"
+                }
+              }
+            }
+          ]
+        },
+        "arm_b_rgb": {
+          "description": "RGB stream from /World/Cameras/CAM_B_TOP.",
+          "allOf": [
+            {
+              "$ref": "#/$defs/imageReference"
+            },
+            {
+              "properties": {
+                "camera_id": {
+                  "const": "CAM_B_TOP"
+                }
+              }
+            }
+          ]
+        },
+        "wrist_image": {
+          "$ref": "#/$defs/imageReference"
+        }
+      }
     },
     "objects": {
+      "description": "Legacy sensor-visible postcondition summary. It is never treated as YOLO output or passed through the perception gate.",
       "type": "array",
       "items": {
         "type": "object",
@@ -57,22 +137,25 @@
     },
     "robot": {
       "type": "object",
+      "additionalProperties": false,
       "required": [
-        "tcp_pose_m_rad"
+        "active_arm",
+        "arm_a",
+        "arm_b"
       ],
       "properties": {
-        "tcp_pose_m_rad": {
-          "type": "array",
-          "minItems": 6,
-          "items": {
-            "type": "number"
-          }
+        "active_arm": {
+          "enum": [
+            "Arm_A",
+            "Arm_B",
+            "NONE"
+          ]
         },
-        "state": {
-          "type": "array",
-          "items": {
-            "type": "number"
-          }
+        "arm_a": {
+          "$ref": "#/$defs/armObservation"
+        },
+        "arm_b": {
+          "$ref": "#/$defs/armObservation"
         }
       }
     },
@@ -101,15 +184,132 @@
       }
     },
     "task": {
-      "type": "object"
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Sensor-derived lifecycle facts only; no simulator ground-truth coordinates.",
+      "required": [
+        "packed_part_count",
+        "bin_at_handoff",
+        "bin_at_finished",
+        "bin_speed_m_s"
+      ],
+      "properties": {
+        "packed_part_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 6
+        },
+        "bin_at_handoff": {
+          "type": "boolean"
+        },
+        "arm_a_retreated": {
+          "type": "boolean"
+        },
+        "arm_b_retreated": {
+          "type": "boolean"
+        },
+        "bin_at_finished": {
+          "type": "boolean"
+        },
+        "bin_speed_m_s": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Sensor-derived bin speed; simulator oracle state is forbidden."
+        },
+        "status": {
+          "type": "string"
+        }
+      }
     },
     "quality": {
       "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "confidence"
+      ],
       "properties": {
         "confidence": {
           "type": "number",
           "minimum": 0,
           "maximum": 1
+        }
+      }
+    }
+  },
+  "$defs": {
+    "imageReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "uri",
+        "image_sha256",
+        "camera_id",
+        "width",
+        "height"
+      ],
+      "properties": {
+        "uri": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "pattern": "^cas://sha256/[0-9a-fA-F]{64}$"
+        },
+        "image_sha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-fA-F]{64}$"
+        },
+        "camera_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "Frozen scene IDs are CAM_A_TOP, CAM_HANDOFF and CAM_B_TOP."
+        },
+        "width": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000
+        }
+      }
+    },
+    "armObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tcp_pose_m_rad",
+        "state",
+        "retreated",
+        "gripper_open",
+        "stationary"
+      ],
+      "properties": {
+        "tcp_pose_m_rad": {
+          "type": "array",
+          "minItems": 6,
+          "items": {
+            "type": "number"
+          }
+        },
+        "state": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          }
+        },
+        "retreated": {
+          "type": "boolean"
+        },
+        "gripper_open": {
+          "type": "boolean",
+          "description": "True only after the controller reports release/open confirmation."
+        },
+        "stationary": {
+          "type": "boolean",
+          "description": "Controller-backed zero-motion acknowledgement for this arm."
         }
       }
     }

@@ -1,0 +1,257 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://industrial-agent.local/schemas/detection-packet.schema.json",
+  "title": "Canonical YOLO Detection Packet",
+  "description": "Online perception output for one immutable image. Offline annotations and privileged target geometry are intentionally absent.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "detection_contract_version",
+    "packet_id",
+    "request_id",
+    "trace_id",
+    "episode_id",
+    "task_id",
+    "subtask_id",
+    "step_id",
+    "observation_id",
+    "image_sha256",
+    "camera_id",
+    "image_width",
+    "image_height",
+    "checkpoint_sha",
+    "class_map_sha",
+    "config_sha",
+    "detections",
+    "timing"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^1\\.[0-9]+$"
+    },
+    "detection_contract_version": {
+      "type": "string",
+      "pattern": "^1\\.[0-9]+$"
+    },
+    "packet_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "trace_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "episode_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "task_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "subtask_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "step_id": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "observation_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "image_sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-fA-F]{64}$"
+    },
+    "camera_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "image_width": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100000
+    },
+    "image_height": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100000
+    },
+    "checkpoint_sha": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-fA-F]{64}$"
+    },
+    "class_map_sha": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-fA-F]{64}$"
+    },
+    "config_sha": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-fA-F]{64}$"
+    },
+    "detections": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": {
+        "$ref": "#/$defs/detection"
+      }
+    },
+    "timing": {
+      "$ref": "#/$defs/timing"
+    }
+  },
+  "$defs": {
+    "detection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "detection_id",
+        "class_id",
+        "class_name",
+        "confidence",
+        "bbox_xyxy",
+        "bbox_format",
+        "camera_id",
+        "image_width",
+        "image_height",
+        "attributes"
+      ],
+      "properties": {
+        "detection_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "class_id": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "class_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "bbox_xyxy": {
+          "description": "Pixel-space [x_min, y_min, x_max, y_max]. Dataclass validation also enforces ordering and image bounds.",
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "prefixItems": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            {
+              "type": "number",
+              "exclusiveMinimum": 0
+            }
+          ],
+          "items": false
+        },
+        "bbox_format": {
+          "const": "xyxy_pixels"
+        },
+        "camera_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "image_width": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000
+        },
+        "image_height": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000
+        },
+        "track_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "zone_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "attributes": {
+          "type": "object",
+          "description": "Flat scalar, non-privileged online estimates such as orientation_state or occlusion.",
+          "propertyNames": {
+            "not": {
+              "pattern": "(?i)(gt|ground[\\s_-]*truth|oracle|privileged|annotations?|labels?|target[\\s_-]*(pose|position|location|coordinates?)|grasp[\\s_-]*(point|pose|coordinates?)|waypoints?)"
+            }
+          },
+          "additionalProperties": {
+            "type": [
+              "string",
+              "boolean",
+              "integer",
+              "number",
+              "null"
+            ]
+          }
+        }
+      }
+    },
+    "timing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "preprocess_ms",
+        "inference_ms",
+        "nms_ms",
+        "total_ms"
+      ],
+      "properties": {
+        "preprocess_ms": {
+          "type": "number",
+          "minimum": 0
+        },
+        "inference_ms": {
+          "type": "number",
+          "minimum": 0
+        },
+        "nms_ms": {
+          "type": "number",
+          "minimum": 0
+        },
+        "total_ms": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

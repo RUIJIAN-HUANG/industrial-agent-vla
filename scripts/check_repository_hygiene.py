@@ -19,6 +19,9 @@ REQUIRED_FILES = (
     "configs/README.md",
     "data/README.md",
     "docs/README.md",
+    "docs/architecture/ADR-0003-yolo-scoring-sidecar.md",
+    "docs/architecture/agent-framework.md",
+    "docs/project-management/data-collection-and-five-member-execution-guide.md",
     "docs/repository-structure.md",
     "experiments/README.md",
     "models/MANIFEST.md",
@@ -30,6 +33,7 @@ REQUIRED_FILES = (
     "services/README.md",
     "services/openvla_oft/README.md",
     "services/pi05/README.md",
+    "services/yolo/README.md",
     "simulation/README.md",
     "src/README.md",
 )
