@@ -1,0 +1,205 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1180" viewBox="0 0 1800 1180">
+  <defs>
+    <linearGradient id="bg2" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f8fafc"/>
+      <stop offset="100%" stop-color="#edf2f7"/>
+    </linearGradient>
+    <marker id="aBlue" markerWidth="11" markerHeight="11" refX="10" refY="5.5" orient="auto">
+      <path d="M0,0 L11,5.5 L0,11 Z" fill="#2563eb"/>
+    </marker>
+    <marker id="aOrange" markerWidth="11" markerHeight="11" refX="10" refY="5.5" orient="auto">
+      <path d="M0,0 L11,5.5 L0,11 Z" fill="#ea580c"/>
+    </marker>
+    <marker id="aGreen" markerWidth="11" markerHeight="11" refX="10" refY="5.5" orient="auto">
+      <path d="M0,0 L11,5.5 L0,11 Z" fill="#15803d"/>
+    </marker>
+    <marker id="aDark" markerWidth="11" markerHeight="11" refX="10" refY="5.5" orient="auto">
+      <path d="M0,0 L11,5.5 L0,11 Z" fill="#334155"/>
+    </marker>
+    <marker id="aPurple" markerWidth="11" markerHeight="11" refX="10" refY="5.5" orient="auto">
+      <path d="M0,0 L11,5.5 L0,11 Z" fill="#7c3aed"/>
+    </marker>
+    <filter id="sh" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="5" stdDeviation="6" flood-color="#0f172a" flood-opacity="0.14"/>
+    </filter>
+    <style>
+      text { font-family: "Microsoft YaHei", "Noto Sans CJK SC", Arial, sans-serif; fill: #172033; }
+      .title { font-size: 34px; font-weight: 800; }
+      .subtitle { font-size: 18px; fill: #526071; }
+      .head { font-size: 21px; font-weight: 800; }
+      .agenttitle { font-size: 19px; font-weight: 800; }
+      .body { font-size: 15px; fill: #354155; }
+      .small { font-size: 13px; fill: #4b5b70; }
+      .tiny { font-size: 11px; fill: #5f6d7e; }
+      .tag { font-size: 14px; font-weight: 800; fill: white; }
+      .mono { font-family: Consolas, "Courier New", monospace; }
+    </style>
+  </defs>
+
+  <rect width="1800" height="1180" fill="url(#bg2)"/>
+  <text x="70" y="58" class="title">最终复核框架｜四 Agent + 双 VLA + 双机械臂 + YOLO 闭环</text>
+  <text x="70" y="92" class="subtitle">单箱四零件 MVP；料箱初始位于蓝区中间 PACK_STATION；装满后由 A 放到中央固定交接位，再由 B 抓取</text>
+
+  <!-- Inputs -->
+  <g filter="url(#sh)">
+    <rect x="90" y="132" width="360" height="104" rx="18" fill="#ffffff" stroke="#64748b" stroke-width="2"/>
+    <text x="115" y="165" class="head">预设自然语言指令</text>
+    <text x="115" y="192" class="body">原文直接送 π0.5，不由总控解析语义</text>
+    <text x="115" y="216" class="small">评委无需现场自由输入</text>
+
+    <rect x="485" y="132" width="360" height="104" rx="18" fill="#ffffff" stroke="#64748b" stroke-width="2"/>
+    <text x="510" y="165" class="head">冻结 TaskProfile / 配方</text>
+    <text x="510" y="192" class="body mono">BIN_01=[P01,P02,P03,P04]</text>
+    <text x="510" y="216" class="body mono">READY=4/4 · HANDOFF_COUNT=1</text>
+  </g>
+
+  <!-- Supervisor -->
+  <g filter="url(#sh)">
+    <rect x="910" y="122" width="800" height="220" rx="22" fill="#ecfdf5" stroke="#16803b" stroke-width="4"/>
+    <rect x="934" y="144" width="142" height="32" rx="16" fill="#16803b"/>
+    <text x="1005" y="166" class="tag" text-anchor="middle">AGENT 1 / 4</text>
+    <text x="1095" y="171" class="head">Supervisor Agent｜任务生命周期总控</text>
+
+    <rect x="940" y="194" width="224" height="60" rx="13" fill="#fff" stroke="#86efac" stroke-width="2"/>
+    <text x="1052" y="219" class="body" text-anchor="middle">Mission FSM + 单箱状态</text>
+    <text x="1052" y="241" class="small" text-anchor="middle">ID / phase / retry / timeout</text>
+
+    <rect x="1180" y="194" width="224" height="60" rx="13" fill="#fff" stroke="#86efac" stroke-width="2"/>
+    <text x="1292" y="219" class="body" text-anchor="middle">静态子任务 DAG / 调度</text>
+    <text x="1292" y="241" class="small" text-anchor="middle">不做 NLP，不判断“复杂度”</text>
+
+    <rect x="1420" y="194" width="260" height="60" rx="13" fill="#fff" stroke="#86efac" stroke-width="2"/>
+    <text x="1550" y="219" class="body" text-anchor="middle">Verifier：视觉 + 机器人遥测融合</text>
+    <text x="1550" y="241" class="small" text-anchor="middle">生成 PICK_OK / BIN_READY 等业务事件</text>
+
+    <rect x="940" y="270" width="224" height="50" rx="13" fill="#fff" stroke="#86efac" stroke-width="2"/>
+    <text x="1052" y="301" class="body" text-anchor="middle">Safety / 令牌 / 工作区互锁</text>
+    <rect x="1180" y="270" width="224" height="50" rx="13" fill="#fff" stroke="#86efac" stroke-width="2"/>
+    <text x="1292" y="301" class="body" text-anchor="middle">有限重试 / SAFE_STOP</text>
+    <rect x="1420" y="270" width="260" height="50" rx="13" fill="#fff" stroke="#86efac" stroke-width="2"/>
+    <text x="1550" y="301" class="body" text-anchor="middle">GPU 推理锁 / Trace / 证据归档</text>
+  </g>
+
+  <!-- Input arrows -->
+  <path d="M450 184 C610 270 760 286 900 286" fill="none" stroke="#334155" stroke-width="3" marker-end="url(#aDark)"/>
+  <text x="655" y="275" class="small" text-anchor="middle">创建 task_id / trace_id；保存原始指令</text>
+  <path d="M845 184 H900" fill="none" stroke="#334155" stroke-width="3" marker-end="url(#aDark)"/>
+
+  <!-- Agents row -->
+  <g filter="url(#sh)">
+    <rect x="70" y="408" width="470" height="220" rx="22" fill="#eff6ff" stroke="#2563eb" stroke-width="4"/>
+    <rect x="94" y="430" width="142" height="32" rx="16" fill="#2563eb"/>
+    <text x="165" y="452" class="tag" text-anchor="middle">AGENT 2 / 4</text>
+    <text x="252" y="456" class="agenttitle">π0.5 Agent｜Arm A 主执行</text>
+    <text x="100" y="495" class="body">输入：原始主指令 + CAM_A 原始 RGB + A 臂状态</text>
+    <text x="100" y="523" class="body">职责：语言理解、最多区域选择、抓取、纠姿、装箱</text>
+    <text x="100" y="551" class="body">输出：有限长度 canonical ActionChunk A</text>
+    <text x="100" y="583" class="small">固定角色；失败后重新观察并重推理，不切换到 OpenVLA</text>
+    <rect x="100" y="596" width="405" height="20" rx="10" fill="#dbeafe"/>
+    <text x="302" y="611" class="tiny" text-anchor="middle">VLA 输入永远是未叠加 YOLO 框的原始图像</text>
+
+    <rect x="665" y="408" width="470" height="220" rx="22" fill="#f5f3ff" stroke="#7c3aed" stroke-width="4"/>
+    <rect x="689" y="430" width="142" height="32" rx="16" fill="#7c3aed"/>
+    <text x="760" y="452" class="tag" text-anchor="middle">AGENT 4 / 4</text>
+    <text x="850" y="456" class="agenttitle">YOLO Agent｜独立检测与证据</text>
+    <text x="695" y="495" class="body">输入：CAM_A / CAM_HANDOFF / CAM_B 原始帧</text>
+    <text x="695" y="523" class="body">输出：bbox、类别、置信度、ROI 计数、姿态、占用</text>
+    <text x="695" y="551" class="body">在线：DetectionPacket → Supervisor Verifier</text>
+    <text x="695" y="579" class="body">离线：保存全部预测，和冻结 GT 计算 mAP</text>
+    <rect x="695" y="596" width="405" height="20" rx="10" fill="#ede9fe"/>
+    <text x="897" y="611" class="tiny" text-anchor="middle">不理解语言，不产生机械臂动作，不单独宣判抓取成功</text>
+
+    <rect x="1260" y="408" width="470" height="220" rx="22" fill="#fff7ed" stroke="#ea580c" stroke-width="4"/>
+    <rect x="1284" y="430" width="142" height="32" rx="16" fill="#ea580c"/>
+    <text x="1355" y="452" class="tag" text-anchor="middle">AGENT 3 / 4</text>
+    <text x="1440" y="456" class="agenttitle">OpenVLA Agent｜Arm B 协作执行</text>
+    <text x="1290" y="495" class="body">输入：固定协作指令 + CAM_B 原始 RGB + B 臂状态</text>
+    <text x="1290" y="523" class="body">触发：Supervisor 发出 handoff_ready + B_ONLY 令牌</text>
+    <text x="1290" y="551" class="body">职责：抓箱把手、水平搬运、放入固定成品位</text>
+    <text x="1290" y="579" class="body">输出：有限长度 canonical ActionChunk B</text>
+    <rect x="1290" y="596" width="405" height="20" rx="10" fill="#ffedd5"/>
+    <text x="1492" y="611" class="tiny" text-anchor="middle">固定角色；不选择最多区域，不进入上游工作区</text>
+  </g>
+
+  <!-- Supervisor to agents -->
+  <path d="M1040 342 C880 370 540 360 420 402" fill="none" stroke="#2563eb" stroke-width="3" marker-end="url(#aBlue)"/>
+  <text x="720" y="365" class="small" text-anchor="middle">原始指令 + phase + 当前新观测</text>
+  <path d="M1550 342 C1580 360 1585 380 1570 402" fill="none" stroke="#ea580c" stroke-width="3" marker-end="url(#aOrange)"/>
+  <text x="1637" y="374" class="small" text-anchor="middle">handoff_ready</text>
+  <path d="M1120 408 C1170 378 1300 375 1420 342" fill="none" stroke="#7c3aed" stroke-width="3" marker-end="url(#aPurple)"/>
+  <text x="1260" y="386" class="small" text-anchor="middle">DetectionPacket / evidence</text>
+
+  <!-- Safety gateways -->
+  <g filter="url(#sh)">
+    <rect x="145" y="690" width="320" height="82" rx="18" fill="#ffffff" stroke="#2563eb" stroke-width="3"/>
+    <text x="305" y="721" class="head" text-anchor="middle">Safety Gateway A</text>
+    <text x="305" y="749" class="small" text-anchor="middle">Schema / NaN / 速度 / 关节 / WS_A / watchdog</text>
+
+    <rect x="1335" y="690" width="320" height="82" rx="18" fill="#ffffff" stroke="#ea580c" stroke-width="3"/>
+    <text x="1495" y="721" class="head" text-anchor="middle">Safety Gateway B</text>
+    <text x="1495" y="749" class="small" text-anchor="middle">Schema / NaN / 速度 / 关节 / WS_B / token</text>
+  </g>
+  <path d="M305 628 V682" fill="none" stroke="#2563eb" stroke-width="4" marker-end="url(#aBlue)"/>
+  <text x="320" y="664" class="small">ActionChunk A</text>
+  <path d="M1495 628 V682" fill="none" stroke="#ea580c" stroke-width="4" marker-end="url(#aOrange)"/>
+  <text x="1510" y="664" class="small">ActionChunk B</text>
+
+  <!-- Cameras / telemetry hub -->
+  <g filter="url(#sh)">
+    <rect x="605" y="680" width="590" height="102" rx="18" fill="#ffffff" stroke="#7c3aed" stroke-width="3"/>
+    <text x="900" y="712" class="head" text-anchor="middle">新鲜观测与机器人遥测（每个动作块后强制刷新）</text>
+    <text x="900" y="739" class="body" text-anchor="middle">CAM_A_TOP · CAM_HANDOFF · CAM_B_TOP · joint/gripper/TCP/controller state</text>
+    <text x="900" y="765" class="small" text-anchor="middle">同一 observation_id 关联 VLA、YOLO、动作、验证与日志</text>
+  </g>
+  <path d="M780 680 C720 652 700 638 690 628" fill="none" stroke="#7c3aed" stroke-width="3" marker-end="url(#aPurple)"/>
+  <path d="M900 680 V636" fill="none" stroke="#7c3aed" stroke-width="3" marker-end="url(#aPurple)"/>
+  <path d="M1020 680 C1080 652 1110 638 1120 628" fill="none" stroke="#7c3aed" stroke-width="3" marker-end="url(#aPurple)"/>
+
+  <!-- Physical execution row -->
+  <g filter="url(#sh)">
+    <rect x="70" y="842" width="500" height="178" rx="22" fill="#dbeafe" stroke="#2563eb" stroke-width="4"/>
+    <text x="95" y="878" class="head">Arm A 上游单元</text>
+    <text x="95" y="907" class="body">A=2（含 1 个倒放） · B=1 · C=1 · D=0</text>
+    <text x="95" y="935" class="body">在 PACK_STATION 向 BIN_01 装入 P01～P04，共 4 件</text>
+    <text x="95" y="963" class="body">BIN_READY → A 把满箱放到 HANDOFF_CENTER → HOME_A</text>
+    <text x="95" y="993" class="small">倒放件先纠姿；2×3 箱保留两个空格</text>
+
+    <rect x="650" y="866" width="500" height="130" rx="22" fill="#dcfce7" stroke="#16803b" stroke-width="4"/>
+    <text x="900" y="902" class="head" text-anchor="middle">中央固定交接位</text>
+    <text x="900" y="934" class="body" text-anchor="middle">A_ONLY → HANDOFF_VERIFY → B_ONLY</text>
+    <text x="900" y="964" class="small" text-anchor="middle">初始为空；满箱稳定且 A 完全退出后才发 handoff_ready</text>
+
+    <rect x="1230" y="842" width="500" height="178" rx="22" fill="#ffedd5" stroke="#ea580c" stroke-width="4"/>
+    <text x="1255" y="878" class="head">Arm B 下游单元</text>
+    <text x="1255" y="907" class="body">持有 B_ONLY 后，在 HANDOFF_CENTER 抓取料箱把手</text>
+    <text x="1255" y="935" class="body">保持水平 → FINISHED_01 唯一固定成品位</text>
+    <text x="1255" y="963" class="body">放置验证通过 → 松爪 → HOME_B → 释放令牌</text>
+    <text x="1255" y="993" class="small">不叠放，降低第一版仿真与微调难度</text>
+  </g>
+  <path d="M305 772 V834" fill="none" stroke="#2563eb" stroke-width="4" marker-end="url(#aBlue)"/>
+  <path d="M570 931 H642" fill="none" stroke="#16803b" stroke-width="5" marker-end="url(#aGreen)"/>
+  <path d="M1150 931 H1222" fill="none" stroke="#16803b" stroke-width="5" marker-end="url(#aGreen)"/>
+  <path d="M1495 772 V834" fill="none" stroke="#ea580c" stroke-width="4" marker-end="url(#aOrange)"/>
+
+  <!-- Closed loop return -->
+  <path d="M320 1020 C420 1085 620 1090 720 790" fill="none" stroke="#334155" stroke-width="3" stroke-dasharray="10 7" marker-end="url(#aDark)"/>
+  <path d="M1480 1020 C1380 1085 1180 1090 1080 790" fill="none" stroke="#334155" stroke-width="3" stroke-dasharray="10 7" marker-end="url(#aDark)"/>
+  <text x="880" y="1068" class="body" text-anchor="middle">闭环：执行 → 新图像/遥测 → YOLO 检测 → Verifier 融合</text>
+  <text x="880" y="1097" class="body" text-anchor="middle">成功继续｜失败有限重试｜超限 SAFE_STOP</text>
+
+  <!-- Offline mAP -->
+  <g>
+    <rect x="70" y="1044" width="500" height="92" rx="16" fill="#faf5ff" stroke="#7c3aed" stroke-width="2" stroke-dasharray="8 6"/>
+    <text x="95" y="1073" class="head">离线 mAP 证据链（不进入在线控制）</text>
+    <text x="95" y="1101" class="body">YOLO 全量预测 + 冻结测试集 GT → AP50 / AP75 / mAP50:95</text>
+    <text x="95" y="1126" class="small">保存 class_map、权重/配置/数据哈希、PR 曲线和评测命令</text>
+  </g>
+  <path d="M800 628 C690 700 620 870 520 1038" fill="none" stroke="#7c3aed" stroke-width="2.5" stroke-dasharray="9 7" marker-end="url(#aPurple)"/>
+
+  <!-- Key invariant -->
+  <g transform="translate(1190,1052)">
+    <rect width="540" height="82" rx="16" fill="#fff" stroke="#ef4444" stroke-width="2"/>
+    <text x="270" y="30" class="head" text-anchor="middle" fill="#b91c1c">不可破坏的边界</text>
+    <text x="270" y="57" class="body" text-anchor="middle">GT 不在线 · YOLO 框不进 VLA · 双 VLA 不互相切换 · 只有 4 个 Agent</text>
+  </g>
+</svg>

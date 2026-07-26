@@ -33,6 +33,10 @@ class VerificationResult:
     verdict: Verdict
     code: FailureCode
     conditions: tuple[ConditionResult, ...]
+    composite_pass_votes: int = 0
+    composite_fail_votes: int = 0
+    composite_uncertain_votes: int = 0
+    composite_required_votes: int = 0
 
 
 _MISSING = object()
@@ -53,19 +57,26 @@ def _frame_verdict(
     quality = observation.data.get("quality", {})
     if not isinstance(quality, Mapping):
         return Verdict.UNCERTAIN, "frame quality is not an object"
-    confidence = quality.get("confidence", 1.0)
+    confidence = quality.get("confidence", _MISSING)
     if (
-        isinstance(confidence, bool)
+        confidence is _MISSING
+        or isinstance(confidence, bool)
         or not isinstance(confidence, (int, float))
         or not isfinite(float(confidence))
     ):
-        return Verdict.UNCERTAIN, "frame confidence is not a finite number"
+        return Verdict.UNCERTAIN, "frame confidence is missing or not finite"
     if float(confidence) < condition.min_confidence:
         return Verdict.UNCERTAIN, "frame confidence below threshold"
     if condition.kind == "field_equals":
         value = _resolve_path(observation.data, condition.path)
         if value is _MISSING:
             return Verdict.UNCERTAIN, f"path {condition.path!r} missing"
+        if type(value) is not type(condition.expected):
+            return (
+                Verdict.FAIL,
+                f"observed type {type(value).__name__}, "
+                f"expected {type(condition.expected).__name__}",
+            )
         return (
             (Verdict.PASS, "field equals expected")
             if value == condition.expected
@@ -140,8 +151,10 @@ class PostconditionVerifier:
                 Verdict.UNCERTAIN, FailureCode.OBSERVATION_INVALID, ()
             )
         results: list[ConditionResult] = []
+        votes_by_condition: list[list[tuple[Verdict, str]]] = []
         for condition in task.postconditions:
             votes = [_frame_verdict(condition, frame) for frame in frames]
+            votes_by_condition.append(votes)
             pass_votes = sum(item[0] is Verdict.PASS for item in votes)
             fail_votes = sum(item[0] is Verdict.FAIL for item in votes)
             uncertain_votes = len(votes) - pass_votes - fail_votes
@@ -174,12 +187,56 @@ class PostconditionVerifier:
                     detail=detail,
                 )
             )
-        if all(item.verdict is Verdict.PASS for item in results):
-            return VerificationResult(Verdict.PASS, FailureCode.NONE, tuple(results))
-        if any(item.verdict is Verdict.FAIL for item in results):
+        composite_required_votes = max(
+            condition.required_votes for condition in task.postconditions
+        )
+        composite_frame_verdicts: list[Verdict] = []
+        for frame_index in range(len(frames)):
+            frame_votes = [
+                condition_votes[frame_index][0]
+                for condition_votes in votes_by_condition
+            ]
+            if all(verdict is Verdict.PASS for verdict in frame_votes):
+                composite_frame_verdicts.append(Verdict.PASS)
+            elif any(verdict is Verdict.FAIL for verdict in frame_votes):
+                composite_frame_verdicts.append(Verdict.FAIL)
+            else:
+                composite_frame_verdicts.append(Verdict.UNCERTAIN)
+        composite_pass_votes = sum(
+            verdict is Verdict.PASS for verdict in composite_frame_verdicts
+        )
+        composite_fail_votes = sum(
+            verdict is Verdict.FAIL for verdict in composite_frame_verdicts
+        )
+        composite_uncertain_votes = (
+            len(frames) - composite_pass_votes - composite_fail_votes
+        )
+        common = {
+            "conditions": tuple(results),
+            "composite_pass_votes": composite_pass_votes,
+            "composite_fail_votes": composite_fail_votes,
+            "composite_uncertain_votes": composite_uncertain_votes,
+            "composite_required_votes": composite_required_votes,
+        }
+        if (
+            composite_pass_votes >= composite_required_votes
+            and composite_fail_votes >= composite_required_votes
+        ):
             return VerificationResult(
-                Verdict.FAIL, FailureCode.POSTCONDITION_FAILED, tuple(results)
+                Verdict.FAIL,
+                FailureCode.POSTCONDITION_FAILED,
+                **common,
+            )
+        if composite_pass_votes >= composite_required_votes:
+            return VerificationResult(Verdict.PASS, FailureCode.NONE, **common)
+        if composite_fail_votes >= composite_required_votes:
+            return VerificationResult(
+                Verdict.FAIL,
+                FailureCode.POSTCONDITION_FAILED,
+                **common,
             )
         return VerificationResult(
-            Verdict.UNCERTAIN, FailureCode.VERIFICATION_UNCERTAIN, tuple(results)
+            Verdict.UNCERTAIN,
+            FailureCode.VERIFICATION_UNCERTAIN,
+            **common,
         )

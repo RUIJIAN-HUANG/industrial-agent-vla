@@ -288,6 +288,7 @@ checkpoints/
 simulation/cache/
 simulation/generated/
 simulation/packages/
+simulation.zip
 
 # Generated media is kept out of normal Git by default. Curated documentation
 # images under docs/assets/ remain trackable.

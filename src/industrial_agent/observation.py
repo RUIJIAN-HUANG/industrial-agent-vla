@@ -134,8 +134,11 @@ REQUIRED_TOP_LEVEL_FIELDS = frozenset(
         "observation_version",
         "observation_id",
         "timestamp_ms",
+        "camera",
         "robot",
         "safety",
+        "task",
+        "quality",
     }
 )
 
@@ -232,6 +235,12 @@ def _scan_for_gt(
     return None
 
 
+def find_forbidden_online_path(value: Any, path: str = "$") -> str | None:
+    """Return the first GT/oracle-like nested path using the canonical scanner."""
+
+    return _scan_for_gt(value, path)
+
+
 class ObservationGateway:
     """Single ingress for data visible to the online decision loop."""
 
@@ -250,7 +259,7 @@ class ObservationGateway:
                 FailureCode.OBSERVATION_INVALID,
                 "online observation must be an object",
             )
-        forbidden_path = _scan_for_gt(raw)
+        forbidden_path = find_forbidden_online_path(raw)
         if forbidden_path:
             raise ObservationError(
                 FailureCode.OBSERVATION_GT_FORBIDDEN,
@@ -268,14 +277,17 @@ class ObservationGateway:
                 FailureCode.OBSERVATION_INVALID,
                 f"online observation is missing required fields: {sorted(missing)}",
             )
-        version = str(raw.get("observation_version", OBSERVATION_VERSION))
-        if version.split(".", 1)[0] != OBSERVATION_VERSION.split(".", 1)[0]:
+        version = raw.get("observation_version")
+        if (
+            not isinstance(version, str)
+            or version.split(".", 1)[0] != OBSERVATION_VERSION.split(".", 1)[0]
+        ):
             raise ObservationError(
                 FailureCode.OBSERVATION_INVALID,
                 f"incompatible observation version: {version}",
             )
-        observation_id = str(raw.get("observation_id", ""))
-        if not observation_id:
+        observation_id = raw.get("observation_id")
+        if not isinstance(observation_id, str) or not observation_id:
             raise ObservationError(
                 FailureCode.OBSERVATION_INVALID, "observation_id is required"
             )

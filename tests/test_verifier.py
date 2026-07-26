@@ -119,6 +119,74 @@ class VerifierTests(unittest.TestCase):
                 self.assertEqual(result.conditions[0].uncertain_votes, 1)
                 self.assertIn("finite numeric value", result.conditions[0].detail)
 
+    def test_field_equals_requires_exact_json_type(self) -> None:
+        task = TaskSchema(
+            task_id="strict-bool",
+            instruction="verify strict boolean",
+            task_type="mock_demo",
+            postconditions=(
+                Postcondition(
+                    kind="field_equals",
+                    path="task.done",
+                    expected=True,
+                    required_votes=1,
+                ),
+            ),
+        )
+        raw = raw_observation()
+        raw["task"] = {"done": 1}
+        observation = ObservationGateway().ingest_online(raw)
+
+        result = PostconditionVerifier().verify(task, [observation])
+
+        self.assertEqual(result.verdict, Verdict.FAIL)
+        self.assertEqual(result.conditions[0].pass_votes, 0)
+        self.assertIn("expected bool", result.conditions[0].detail)
+
+    def test_multiple_conditions_require_same_frame_composite_quorum(self) -> None:
+        task = TaskSchema(
+            task_id="composite-quorum",
+            instruction="verify both conditions together",
+            task_type="mock_demo",
+            postconditions=(
+                Postcondition(
+                    kind="field_equals",
+                    path="task.left",
+                    expected=True,
+                    required_votes=2,
+                ),
+                Postcondition(
+                    kind="field_equals",
+                    path="task.right",
+                    expected=True,
+                    required_votes=2,
+                ),
+            ),
+        )
+        observations = []
+        for index, values in enumerate(
+            (
+                {"left": True, "right": False},
+                {"left": True, "right": True},
+                {"left": False, "right": True},
+            ),
+            start=1,
+        ):
+            raw = raw_observation()
+            raw["observation_id"] = f"composite-{index}"
+            raw["timestamp_ms"] = index
+            raw["task"] = values
+            observations.append(ObservationGateway().ingest_online(raw))
+
+        result = PostconditionVerifier().verify(task, observations)
+
+        self.assertEqual(result.verdict, Verdict.FAIL)
+        self.assertEqual(result.composite_pass_votes, 1)
+        self.assertEqual(result.composite_fail_votes, 2)
+        self.assertTrue(
+            all(condition.pass_votes == 2 for condition in result.conditions)
+        )
+
     def test_conflicting_vote_quorums_fail_closed(self) -> None:
         result = PostconditionVerifier().verify(
             self.task,

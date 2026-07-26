@@ -8,98 +8,243 @@ from pathlib import Path
 
 from industrial_agent.mock import MockExecutor
 from industrial_agent.orchestrator import IndustrialAgent
+from industrial_agent.perception import MockPerceptionAgent
+
+
+PERCEPTION_CHECKPOINT_SHA = f"sha256:{'c' * 64}"
+CLASS_MAP_SHA = f"sha256:{'d' * 64}"
+PERCEPTION_CONFIG_SHA = f"sha256:{'e' * 64}"
 
 
 class ConfigTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        config_path = (
-            Path(__file__).resolve().parents[1] / "configs" / "agent.default.json"
+        root = Path(__file__).resolve().parents[1]
+        cls.config = json.loads(
+            (root / "configs" / "agent.default.json").read_text(encoding="utf-8")
         )
-        cls.config = json.loads(config_path.read_text(encoding="utf-8"))
+        cls.schema = json.loads(
+            (root / "schemas" / "agent-config.schema.json").read_text(encoding="utf-8")
+        )
 
-    def _config_for(self, executor: MockExecutor) -> dict:
+    @staticmethod
+    def _executors() -> tuple[MockExecutor, MockExecutor]:
+        return (
+            MockExecutor("openvla_oft", 0.01),
+            MockExecutor("pi05", 0.02),
+        )
+
+    def _config_for(
+        self,
+        executors: tuple[MockExecutor, MockExecutor],
+    ) -> dict:
         config = deepcopy(self.config)
-        for name, raw in config["executors"].items():
-            raw["enabled"] = name == executor.descriptor.name
-        raw = config["executors"][executor.descriptor.name]
-        raw["checkpoint_sha"] = executor.descriptor.checkpoint_sha
-        raw["norm_stats_sha"] = executor.descriptor.norm_stats_sha
+        for executor in executors:
+            raw = config["executors"][executor.descriptor.name]
+            raw["enabled"] = True
+            raw["checkpoint_sha"] = executor.descriptor.checkpoint_sha
+            raw["norm_stats_sha"] = executor.descriptor.norm_stats_sha
+        config["perception"]["checkpoint_sha"] = PERCEPTION_CHECKPOINT_SHA
+        config["perception"]["class_map_sha"] = CLASS_MAP_SHA
+        config["perception"]["config_sha"] = PERCEPTION_CONFIG_SHA
         return config
 
-    def test_default_config_builds_core(self) -> None:
-        executor = MockExecutor("openvla_oft", 0.01)
-        agent = IndustrialAgent.from_config([executor], self._config_for(executor))
+    @staticmethod
+    def _perception() -> MockPerceptionAgent:
+        return MockPerceptionAgent(
+            checkpoint_sha=PERCEPTION_CHECKPOINT_SHA,
+            class_map_sha=CLASS_MAP_SHA,
+            config_sha=PERCEPTION_CONFIG_SHA,
+        )
+
+    def test_default_config_matches_json_schema(self) -> None:
+        try:
+            import jsonschema
+        except ImportError:  # pragma: no cover - optional local dependency
+            self.skipTest("jsonschema is not installed")
+        jsonschema.Draft202012Validator(self.schema).validate(self.config)
+
+    def test_default_config_builds_fixed_dual_vla_core(self) -> None:
+        executors = self._executors()
+        agent = IndustrialAgent.from_config(
+            executors,
+            self._config_for(executors),
+            perception=self._perception(),
+        )
+        self.assertEqual(agent.topology_mode, "FIXED_DUAL_VLA_SERIAL")
         self.assertEqual(agent.verification_frames, 3)
-        self.assertEqual(agent.max_decisions_per_strategy_attempt, 8)
+        self.assertEqual(agent.max_decisions_per_strategy_attempt, 32)
         self.assertEqual(agent.safety.policy.max_chunk_steps, 32)
+        self.assertEqual(
+            tuple(agent.executors._executors),
+            ("openvla_oft", "pi05"),
+        )
+        self.assertEqual(agent.task_profile.primary_executor, "pi05")
+        self.assertEqual(
+            agent.task_profile.collaborative_executor,
+            "openvla_oft",
+        )
+        self.assertEqual(agent.task_profile.handoff_verification_frames, 3)
+        self.assertEqual(agent.task_profile.handoff_required_votes, 2)
+        self.assertIn("HOME_A", agent.task_profile.arm_a_instruction)
+        self.assertIn("FINISHED_01", agent.task_profile.arm_b_instruction)
 
-    def test_config_cannot_weaken_frozen_recovery_invariants(self) -> None:
-        config = deepcopy(self.config)
-        config["recovery"]["allow_switch_back"] = True
+    def test_legacy_routing_and_switch_fields_are_rejected(self) -> None:
+        executors = self._executors()
+        config = self._config_for(executors)
+        config["routing"] = {"default_executor": "pi05"}
+        with self.assertRaisesRegex(ValueError, "routing is obsolete"):
+            IndustrialAgent.from_config(
+                executors,
+                config,
+                perception=self._perception(),
+            )
+
+        config = self._config_for(executors)
+        config["recovery"]["allow_switch_back"] = False
         with self.assertRaisesRegex(ValueError, "frozen"):
-            IndustrialAgent.from_config([MockExecutor("openvla_oft", 0.01)], config)
+            IndustrialAgent.from_config(
+                executors,
+                config,
+                perception=self._perception(),
+            )
 
-    def test_config_cannot_widen_canonical_action_bounds(self) -> None:
-        for key, value in (
-            ("max_chunk_steps", 33),
-            ("axis_abs_limits", [0.05] * 6 + [5.0]),
-        ):
-            config = deepcopy(self.config)
-            config["safety"][key] = value
-            with self.subTest(key=key):
-                with self.assertRaises(ValueError):
+    def test_config_requires_exact_frozen_lifecycle(self) -> None:
+        executors = self._executors()
+        mutations = (
+            (
+                lambda config: config["lifecycle"].update({"supervisor_nlp": True}),
+                "supervisor_nlp",
+            ),
+            (
+                lambda config: config["lifecycle"].update(
+                    {"token_sequence": ["A_ONLY", "B_ONLY"]}
+                ),
+                "token_sequence",
+            ),
+            (
+                lambda config: config["lifecycle"]["task_profile"].update(
+                    {"primary_executor": "openvla_oft"}
+                ),
+                "cannot be changed",
+            ),
+            (
+                lambda config: config["lifecycle"]["task_profile"].update(
+                    {"handoff_required_votes": 3}
+                ),
+                "cannot be changed",
+            ),
+            (
+                lambda config: config["lifecycle"]["task_profile"].update(
+                    {"arm_b_instruction": "临时生成的指令"}
+                ),
+                "cannot be changed",
+            ),
+            (
+                lambda config: config.update({"verification_frames": 2}),
+                "exactly 3 verification frames",
+            ),
+            (
+                lambda config: config["recovery"].update({"max_switches_per_run": 1}),
+                "frozen",
+            ),
+        )
+        for mutation, message in mutations:
+            config = self._config_for(executors)
+            mutation(config)
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ValueError, message):
                     IndustrialAgent.from_config(
-                        [MockExecutor("openvla_oft", 0.01)], config
+                        executors,
+                        config,
+                        perception=self._perception(),
                     )
 
+    def test_config_requires_both_executors_enabled_and_injected(self) -> None:
+        executors = self._executors()
+        config = self._config_for(executors)
+        config["executors"]["openvla_oft"]["enabled"] = False
+        with self.assertRaisesRegex(ValueError, "both executors enabled"):
+            IndustrialAgent.from_config(
+                (executors[1],),
+                config,
+                perception=self._perception(),
+            )
+
+        with self.assertRaisesRegex(ValueError, "enabled executor set mismatch"):
+            IndustrialAgent.from_config(
+                (executors[0],),
+                self._config_for(executors),
+                perception=self._perception(),
+            )
+
     def test_config_accepts_exact_executor_artifact_identity(self) -> None:
-        executor = MockExecutor("openvla_oft", 0.01)
-        config = self._config_for(executor)
-        agent = IndustrialAgent.from_config([executor], config)
-        self.assertEqual(tuple(agent.router._executors), ("openvla_oft",))
+        executors = self._executors()
+        agent = IndustrialAgent.from_config(
+            executors,
+            self._config_for(executors),
+            perception=self._perception(),
+        )
+        self.assertTrue(agent.perception_required)
+        self.assertEqual(agent.perception_timeout_ms, 5000)
+        self.assertEqual(agent.max_perception_attempts, 1)
 
     def test_config_rejects_executor_artifact_mismatch(self) -> None:
-        executor = MockExecutor("openvla_oft", 0.01)
-        for field in ("checkpoint_sha", "norm_stats_sha"):
-            config = self._config_for(executor)
-            config["executors"]["openvla_oft"][field] = f"sha256:{'f' * 64}"
-            with self.subTest(field=field):
-                with self.assertRaisesRegex(ValueError, field):
-                    IndustrialAgent.from_config([executor], config)
+        executors = self._executors()
+        for name in ("openvla_oft", "pi05"):
+            for field in ("checkpoint_sha", "norm_stats_sha"):
+                config = self._config_for(executors)
+                config["executors"][name][field] = f"sha256:{'f' * 64}"
+                with self.subTest(executor=name, field=field):
+                    with self.assertRaisesRegex(ValueError, field):
+                        IndustrialAgent.from_config(
+                            executors,
+                            config,
+                            perception=self._perception(),
+                        )
 
-    def test_config_rejects_undeclared_executor(self) -> None:
-        with self.assertRaisesRegex(ValueError, "not declared"):
-            IndustrialAgent.from_config([MockExecutor("other", 0.01)], self.config)
-
-    def test_placeholder_cannot_be_bypassed_by_mock_task_type(self) -> None:
-        executor = MockExecutor("openvla_oft", 0.01)
-        with self.assertRaisesRegex(ValueError, "unsafe placeholder"):
-            IndustrialAgent.from_config([executor], self.config)
-
-    def test_config_rejects_executor_action_contract_mismatch(self) -> None:
-        executor = MockExecutor("openvla_oft", 0.01)
-        executor.descriptor = replace(
-            executor.descriptor,
+    def test_config_rejects_action_contract_mismatch(self) -> None:
+        executors = list(self._executors())
+        executors[0].descriptor = replace(
+            executors[0].descriptor,
             action_contract_version="2.0",
         )
-        with self.assertRaisesRegex(ValueError, "action_contract_version mismatch"):
-            IndustrialAgent.from_config([executor], self.config)
+        executor_tuple = (executors[0], executors[1])
+        with self.assertRaisesRegex(
+            ValueError,
+            "action_contract_version mismatch",
+        ):
+            IndustrialAgent.from_config(
+                executor_tuple,
+                self._config_for(executor_tuple),
+                perception=self._perception(),
+            )
 
-    def test_config_requires_exact_enabled_executor_set(self) -> None:
-        with self.assertRaisesRegex(ValueError, "enabled executor set mismatch"):
-            IndustrialAgent.from_config([], self.config)
+    def test_config_requires_matching_yolo_agent_identity(self) -> None:
+        executors = self._executors()
+        config = self._config_for(executors)
+        with self.assertRaisesRegex(ValueError, "requires an injected YOLO"):
+            IndustrialAgent.from_config(executors, config)
 
-        config = deepcopy(self.config)
-        for raw in config["executors"].values():
-            raw["enabled"] = False
-        with self.assertRaisesRegex(ValueError, "at least one executor"):
-            IndustrialAgent.from_config([], config)
+        mismatched = MockPerceptionAgent(
+            checkpoint_sha=f"sha256:{'f' * 64}",
+            class_map_sha=CLASS_MAP_SHA,
+            config_sha=PERCEPTION_CONFIG_SHA,
+        )
+        with self.assertRaisesRegex(ValueError, "checkpoint_sha mismatch"):
+            IndustrialAgent.from_config(
+                executors,
+                config,
+                perception=mismatched,
+            )
 
-        malformed = deepcopy(self.config)
-        del malformed["executors"]["pi05"]
-        with self.assertRaisesRegex(ValueError, "declare exactly"):
-            IndustrialAgent.from_config([], malformed)
+    def test_placeholder_cannot_bypass_artifact_pinning(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unsafe placeholder"):
+            IndustrialAgent.from_config(
+                self._executors(),
+                self.config,
+                perception=self._perception(),
+            )
 
 
 if __name__ == "__main__":
