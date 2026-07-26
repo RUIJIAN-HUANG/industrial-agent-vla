@@ -12,7 +12,7 @@ class FSMTests(unittest.TestCase):
             AgentState.VALIDATING_TASK,
             AgentState.PLANNING,
             AgentState.OBSERVING,
-            AgentState.SELECTING_EXECUTOR,
+            AgentState.ASSIGNING_ROLE,
             AgentState.EXECUTING,
             AgentState.VERIFYING,
             AgentState.SUCCEEDED,

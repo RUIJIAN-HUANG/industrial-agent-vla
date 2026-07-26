@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from math import isfinite
 from typing import Any, Callable, Mapping, Protocol, Sequence, runtime_checkable
 from uuid import uuid4
 
@@ -22,6 +23,7 @@ from .contracts import (
 from .errors import ContractError, ExecutorError, FailureCode
 
 ARTIFACT_DIGEST_PATTERN = re.compile(r"sha256:[0-9a-fA-F]{64}")
+CAS_IMAGE_URI_PATTERN = re.compile(r"cas://sha256/([0-9a-fA-F]{64})")
 
 
 @dataclass(frozen=True)
@@ -44,6 +46,7 @@ class ExecutionContext:
     replan_index: int
     step_id: int = 0
     timeout_ms: int = 15_000
+    original_instruction: str | None = None
 
 
 @runtime_checkable
@@ -107,6 +110,161 @@ def _is_compatible_version(value: Any, expected: str) -> bool:
         and all(part.isdigit() for part in parts)
         and parts[0] == expected_parts[0]
     )
+
+
+def _phase_vla_inputs(
+    observation: Observation,
+    *,
+    arm_key: str,
+    camera_key: str,
+) -> tuple[Any, Any, Any, Any]:
+    """Return only phase RGB/proprio fields; never lifecycle summaries."""
+
+    camera = observation.data.get("camera")
+    robot = observation.data.get("robot")
+    if not isinstance(camera, Mapping) or not isinstance(robot, Mapping):
+        raise ExecutorError(
+            FailureCode.EXECUTOR_BAD_RESPONSE,
+            "camera and robot observations must be objects",
+        )
+    arm_state = robot.get(arm_key)
+    if not isinstance(arm_state, Mapping):
+        raise ExecutorError(
+            FailureCode.EXECUTOR_BAD_RESPONSE,
+            f"robot.{arm_key} observation must be an object",
+        )
+    expected_camera_id_by_key = {
+        "arm_a_rgb": "CAM_A_TOP",
+        "arm_b_rgb": "CAM_B_TOP",
+    }
+    expected_camera_id = expected_camera_id_by_key.get(camera_key)
+    if expected_camera_id is None:
+        raise ExecutorError(
+            FailureCode.EXECUTOR_BAD_RESPONSE,
+            f"unsupported fixed VLA camera key: {camera_key!r}",
+        )
+    if camera_key not in camera:
+        raise ExecutorError(
+            FailureCode.EXECUTOR_BAD_RESPONSE,
+            f"camera.{camera_key} is required; production VLA inputs do not "
+            "fall back to camera.full_image",
+        )
+    full_image = _canonical_image_reference(
+        camera[camera_key],
+        f"camera.{camera_key}",
+        expected_camera_id=expected_camera_id,
+    )
+    wrist_image_raw = camera.get("wrist_image")
+    wrist_image = (
+        None
+        if wrist_image_raw is None
+        else _canonical_image_reference(wrist_image_raw, "camera.wrist_image")
+    )
+    state = arm_state.get("state", arm_state.get("tcp_pose_m_rad"))
+    tcp_pose = arm_state.get("tcp_pose_m_rad")
+    if state is None:
+        raise ExecutorError(
+            FailureCode.EXECUTOR_BAD_RESPONSE,
+            f"{camera_key}/full_image and robot.{arm_key}.state are required",
+        )
+    state = _finite_numeric_vector(state, f"robot.{arm_key}.state")
+    tcp_pose = _finite_numeric_vector(
+        tcp_pose,
+        f"robot.{arm_key}.tcp_pose_m_rad",
+        minimum_length=6,
+    )
+    return full_image, wrist_image, state, tcp_pose
+
+
+def _canonical_image_reference(
+    value: Any,
+    field: str,
+    *,
+    expected_camera_id: str | None = None,
+) -> dict[str, Any]:
+    """Rebuild an exact image allowlist before crossing a VLA boundary."""
+
+    required = {"uri", "image_sha256", "camera_id", "width", "height"}
+    if not isinstance(value, Mapping) or set(value) != required:
+        actual = sorted(value) if isinstance(value, Mapping) else type(value).__name__
+        raise ExecutorError(
+            FailureCode.EXECUTOR_BAD_RESPONSE,
+            f"{field} must contain exactly {sorted(required)}; got {actual}",
+        )
+    uri = value["uri"]
+    image_sha256 = value["image_sha256"]
+    camera_id = value["camera_id"]
+    width = value["width"]
+    height = value["height"]
+    if not isinstance(uri, str) or not uri:
+        raise ExecutorError(
+            FailureCode.EXECUTOR_BAD_RESPONSE,
+            f"{field}.uri must be a non-empty string",
+        )
+    uri_match = CAS_IMAGE_URI_PATTERN.fullmatch(uri)
+    if uri_match is None:
+        raise ExecutorError(
+            FailureCode.EXECUTOR_BAD_RESPONSE,
+            f"{field}.uri must be a content-addressed cas://sha256/<digest> URI",
+        )
+    if not is_pinned_artifact_digest(image_sha256):
+        raise ExecutorError(
+            FailureCode.EXECUTOR_BAD_RESPONSE,
+            f"{field}.image_sha256 must be a complete SHA-256 identifier",
+        )
+    if uri_match.group(1).casefold() != image_sha256.split(":", 1)[1].casefold():
+        raise ExecutorError(
+            FailureCode.EXECUTOR_BAD_RESPONSE,
+            f"{field}.uri digest must match image_sha256",
+        )
+    if not isinstance(camera_id, str) or not camera_id:
+        raise ExecutorError(
+            FailureCode.EXECUTOR_BAD_RESPONSE,
+            f"{field}.camera_id must be a non-empty string",
+        )
+    if expected_camera_id is not None and camera_id != expected_camera_id:
+        raise ExecutorError(
+            FailureCode.EXECUTOR_BAD_RESPONSE,
+            f"{field}.camera_id must be {expected_camera_id!r}, got {camera_id!r}",
+        )
+    if any(
+        isinstance(item, bool) or not isinstance(item, int) or item < 1
+        for item in (width, height)
+    ):
+        raise ExecutorError(
+            FailureCode.EXECUTOR_BAD_RESPONSE,
+            f"{field}.width/height must be positive integers",
+        )
+    return {
+        "uri": uri,
+        "image_sha256": image_sha256,
+        "camera_id": camera_id,
+        "width": width,
+        "height": height,
+    }
+
+
+def _finite_numeric_vector(
+    value: Any,
+    field: str,
+    *,
+    minimum_length: int = 1,
+) -> list[float]:
+    if (
+        not _is_sequence(value)
+        or len(value) < minimum_length
+        or any(
+            isinstance(item, bool)
+            or not isinstance(item, (int, float))
+            or not isfinite(float(item))
+            for item in value
+        )
+    ):
+        raise ExecutorError(
+            FailureCode.EXECUTOR_BAD_RESPONSE,
+            f"{field} must contain at least {minimum_length} finite numbers",
+        )
+    return [float(item) for item in value]
 
 
 def _validate_health_response(
@@ -468,16 +626,20 @@ class OpenVLAOFTAdapter:
     def plan(
         self, task: TaskSchema, observation: Observation, context: ExecutionContext
     ) -> ActionChunk:
-        camera = observation.data.get("camera", {})
-        robot = observation.data.get("robot", {})
-        if not isinstance(camera, Mapping) or not isinstance(robot, Mapping):
-            raise ExecutorError(
-                FailureCode.EXECUTOR_BAD_RESPONSE,
-                "camera and robot observations must be objects",
-            )
+        full_image, wrist_image, state, _ = _phase_vla_inputs(
+            observation,
+            arm_key="arm_b",
+            camera_key="arm_b_rgb",
+        )
         request_id = str(uuid4())
         subtask_id = str(task.metadata.get("subtask_id", task.task_id))
         self._cancel_context_by_task[task.task_id] = (context.run_id, subtask_id)
+        model_input = {
+            "task_description": context.original_instruction or task.instruction,
+            "full_image": full_image,
+            "wrist_image": wrist_image,
+            "state": state,
+        }
         payload = {
             "schema_version": "1.0",
             "request_id": request_id,
@@ -492,12 +654,7 @@ class OpenVLAOFTAdapter:
             "checkpoint_sha": self.descriptor.checkpoint_sha,
             "norm_stats_sha": self.descriptor.norm_stats_sha,
             "expected_action_contract": ACTION_CONTRACT_VERSION,
-            "model_input": {
-                "task_description": task.instruction,
-                "full_image": camera.get("full_image"),
-                "wrist_image": camera.get("wrist_image"),
-                "state": robot.get("state", robot.get("tcp_pose_m_rad")),
-            },
+            "model_input": model_input,
         }
         try:
             response = self.transport.request("/v1/infer", payload, context.timeout_ms)
@@ -602,9 +759,27 @@ class Pi05Adapter:
     def plan(
         self, task: TaskSchema, observation: Observation, context: ExecutionContext
     ) -> ActionChunk:
+        full_image, wrist_image, state, tcp_pose = _phase_vla_inputs(
+            observation,
+            arm_key="arm_a",
+            camera_key="arm_a_rgb",
+        )
         request_id = str(uuid4())
         subtask_id = str(task.metadata.get("subtask_id", task.task_id))
         self._cancel_context_by_task[task.task_id] = (context.run_id, subtask_id)
+        model_input = {
+            "prompt": context.original_instruction or task.instruction,
+            "observation": {
+                "camera": {
+                    "full_image": full_image,
+                    "wrist_image": wrist_image,
+                },
+                "robot": {
+                    "state": state,
+                    "tcp_pose_m_rad": tcp_pose,
+                },
+            },
+        }
         payload = {
             "schema_version": "1.0",
             "request_id": request_id,
@@ -619,10 +794,7 @@ class Pi05Adapter:
             "checkpoint_sha": self.descriptor.checkpoint_sha,
             "norm_stats_sha": self.descriptor.norm_stats_sha,
             "expected_action_contract": ACTION_CONTRACT_VERSION,
-            "model_input": {
-                "prompt": task.instruction,
-                "observation": observation.to_dict(),
-            },
+            "model_input": model_input,
         }
         try:
             response = self.transport.request("/v1/infer", payload, context.timeout_ms)
@@ -736,31 +908,36 @@ def build_executors_from_config(
     return tuple(built)
 
 
-class ExecutorRouter:
-    """Deterministic capability router with explicit no-switch-back history."""
+class ExecutorRegistry:
+    """Registry for the two lifecycle-assigned VLA services."""
 
-    def __init__(self, executors: Sequence[Executor]):
+    def __init__(
+        self,
+        executors: Sequence[Executor],
+    ):
         names = [item.descriptor.name for item in executors]
         if len(names) != len(set(names)):
             raise ValueError("executor names must be unique")
         self._executors = {item.descriptor.name: item for item in executors}
 
-    def select(
-        self, task: TaskSchema, excluded: frozenset[str] = frozenset()
-    ) -> Executor:
-        ordered_names = list(self._executors)
-        if task.preferred_executor in self._executors:
-            ordered_names.remove(task.preferred_executor)
-            ordered_names.insert(0, task.preferred_executor)
-        for name in ordered_names:
-            executor = self._executors[name]
-            if (
-                name not in excluded
-                and task.task_type in executor.descriptor.task_types
-                and executor.health()
-            ):
-                return executor
-        raise ExecutorError(
-            FailureCode.NO_COMPATIBLE_EXECUTOR,
-            f"no healthy executor supports {task.task_type!r}; excluded={sorted(excluded)}",
-        )
+    def select_exact(self, executor_name: str, task: TaskSchema) -> Executor:
+        """Return one lifecycle-assigned executor without routing or fallback."""
+
+        executor = self._executors.get(executor_name)
+        if executor is None:
+            raise ExecutorError(
+                FailureCode.NO_COMPATIBLE_EXECUTOR,
+                f"required lifecycle executor is unavailable: {executor_name!r}",
+            )
+        if task.task_type not in executor.descriptor.task_types:
+            raise ExecutorError(
+                FailureCode.NO_COMPATIBLE_EXECUTOR,
+                f"required executor {executor_name!r} does not support "
+                f"{task.task_type!r}",
+            )
+        if not executor.health():
+            raise ExecutorError(
+                FailureCode.EXECUTOR_UNAVAILABLE,
+                f"required lifecycle executor is unhealthy: {executor_name!r}",
+            )
+        return executor

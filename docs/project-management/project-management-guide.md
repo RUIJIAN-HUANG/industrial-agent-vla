@@ -2,10 +2,11 @@
 
 ## 1. 管理目标
 
-在 2026 年 9 月 2 日前形成可复现的“自然语言 → 语义任务分解 →
-VLA 动作 → 仿真执行 → 重新观察/核验 → 恢复或切换”闭环，并在
-9 月 3-5 日只做提交校验。项目以官方需求和可重复证据为准，不以工作时长或
-口头完成度为准。
+在 2026 年 9 月 2 日前形成可复现的四 Agent、双 Franka 固定串行闭环：
+“预设自然语言 → π0.5/Arm_A 装箱与交接 → 三帧核验 →
+OpenVLA-OFT/Arm_B 搬运 → 终局核验”。YOLO 对当前新鲜帧进行同步评分
+sidecar 调用，失败不阻止 VLA 或令牌推进。9 月 3-5 日只做提交校验。
+项目以官方需求和可重复证据为准，不以工作时长或口头完成度为准。
 
 ## 2. 单一事实源
 
@@ -63,7 +64,7 @@ flowchart LR
 
 | 角色 | 最终负责 | 必须验收谁 | 主要消费者 |
 |---|---|---|---|
-| A | 需求、TaskPlan/FSM、路由/恢复、总集成 | B/D/E/F 的统一合同 | 全员 |
+| A | 需求、TaskEnvelope/TaskProfile/FSM、固定生命周期、令牌/恢复、总集成 | B/D/E/F 的统一合同 | 全员 |
 | B | 仿真、机器人、控制、安全执行 | A 的动作合同、C 的资产 | A/D/E/F |
 | C | 场景、任务生成、canonical 数据 | B/F 的回放与 QA | D/E/F |
 | D | OpenVLA-OFT 复现/微调/服务 | A/B 的观察动作合同 | A/F |
@@ -131,7 +132,7 @@ flowchart LR
 - 三任务族成功率、失败码分布和置信区间；
 - 仿真/模型 P50/P95、显存和稳定性；
 - 数据有效率、回放一致率、split/泄漏审计；
-- base vs fine-tuned、单/双模型、恢复策略消融；
+- π0.5 与 OpenVLA-OFT 各自的 base vs fine-tuned、固定阶段和恢复策略消融；
 - P0/P1 数量、关键路径偏差和下周降级决定；
 - 六项官方提交物的 `No evidence / Partial / Reproducible` 状态。
 
@@ -147,4 +148,5 @@ flowchart LR
 - [项目看板](dashboard.md)
 - [风险登记册](risk-register.md)
 - [GitHub 协作指南](github-collaboration-guide.md)
+- [数据采集与 B–F 五位成员执行指南](data-collection-and-five-member-execution-guide.md)
 - [代码贡献规范](../../CONTRIBUTING.md)

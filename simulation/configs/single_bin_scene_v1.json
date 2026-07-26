@@ -1,0 +1,274 @@
+{
+  "schema_version": "1.0",
+  "scene_id": "single_bin_static_handoff_v1",
+  "description": "Frozen MVP workcell: dual Franka, four parts, one 2x3 bin, and a fixed handoff.",
+  "units": {
+    "linear": "meter",
+    "angular": "degree",
+    "up_axis": "Z"
+  },
+  "table": {
+    "id": "TABLE",
+    "pose": {
+      "position_m": [0.0, 0.0, 0.725],
+      "rpy_deg": [0.0, 0.0, 0.0]
+    },
+    "size_m": [2.3, 1.1, 0.05],
+    "surface_z_m": 0.75,
+    "color_rgb": [0.55, 0.57, 0.6]
+  },
+  "robots": [
+    {
+      "id": "Arm_A",
+      "model": "franka_panda",
+      "executor": "pi05",
+      "role": "pack_and_handoff",
+      "base_pose": {
+        "position_m": [-0.55, -0.3, 0.75],
+        "rpy_deg": [0.0, 0.0, 90.0]
+      },
+      "soft_work_radius_m": 0.65
+    },
+    {
+      "id": "Arm_B",
+      "model": "franka_panda",
+      "executor": "openvla_oft",
+      "role": "bin_transport",
+      "base_pose": {
+        "position_m": [0.5, -0.3, 0.75],
+        "rpy_deg": [0.0, 0.0, 90.0]
+      },
+      "soft_work_radius_m": 0.65
+    }
+  ],
+  "stations": [
+    {
+      "id": "PACK_STATION",
+      "kind": "bin_initial",
+      "pose": {
+        "position_m": [-0.35, -0.15, 0.785],
+        "rpy_deg": [0.0, 0.0, 0.0]
+      },
+      "footprint_m": [0.22, 0.16],
+      "color_rgb": [0.16, 0.48, 0.92]
+    },
+    {
+      "id": "HANDOFF_CENTER",
+      "kind": "shared_handoff",
+      "pose": {
+        "position_m": [0.0, 0.0, 0.785],
+        "rpy_deg": [0.0, 0.0, 0.0]
+      },
+      "footprint_m": [0.26, 0.2],
+      "color_rgb": [0.25, 0.72, 0.3]
+    },
+    {
+      "id": "FINISHED_01",
+      "kind": "finished_bin",
+      "pose": {
+        "position_m": [0.7, 0.1, 0.785],
+        "rpy_deg": [0.0, 0.0, 0.0]
+      },
+      "footprint_m": [0.26, 0.2],
+      "color_rgb": [0.96, 0.57, 0.16]
+    }
+  ],
+  "zones": [
+    {
+      "id": "A",
+      "pose": {
+        "position_m": [-0.85, 0.2, 0.751],
+        "rpy_deg": [0.0, 0.0, 0.0]
+      },
+      "footprint_m": [0.22, 0.16],
+      "expected_part_count": 2,
+      "color_rgb": [0.2, 0.55, 0.96]
+    },
+    {
+      "id": "B",
+      "pose": {
+        "position_m": [-0.6, 0.2, 0.751],
+        "rpy_deg": [0.0, 0.0, 0.0]
+      },
+      "footprint_m": [0.18, 0.16],
+      "expected_part_count": 1,
+      "color_rgb": [0.28, 0.68, 0.96]
+    },
+    {
+      "id": "C",
+      "pose": {
+        "position_m": [-0.85, 0.0, 0.751],
+        "rpy_deg": [0.0, 0.0, 0.0]
+      },
+      "footprint_m": [0.18, 0.15],
+      "expected_part_count": 1,
+      "color_rgb": [0.25, 0.78, 0.82]
+    },
+    {
+      "id": "D",
+      "pose": {
+        "position_m": [-0.6, 0.0, 0.751],
+        "rpy_deg": [0.0, 0.0, 0.0]
+      },
+      "footprint_m": [0.18, 0.15],
+      "expected_part_count": 0,
+      "color_rgb": [0.42, 0.78, 0.76]
+    }
+  ],
+  "parts": [
+    {
+      "id": "P01",
+      "zone_id": "A",
+      "state": "upright",
+      "pose": {
+        "position_m": [-0.9, 0.2, 0.772],
+        "rpy_deg": [0.0, 0.0, 0.0]
+      },
+      "geometry": {
+        "type": "cylinder",
+        "radius_m": 0.022,
+        "height_m": 0.044,
+        "mass_kg": 0.065
+      },
+      "color_rgb": [0.82, 0.08, 0.06]
+    },
+    {
+      "id": "P02",
+      "zone_id": "A",
+      "state": "inverted",
+      "pose": {
+        "position_m": [-0.8, 0.2, 0.772],
+        "rpy_deg": [180.0, 0.0, 0.0]
+      },
+      "geometry": {
+        "type": "cylinder",
+        "radius_m": 0.022,
+        "height_m": 0.044,
+        "mass_kg": 0.065
+      },
+      "color_rgb": [0.82, 0.08, 0.06]
+    },
+    {
+      "id": "P03",
+      "zone_id": "B",
+      "state": "upright",
+      "pose": {
+        "position_m": [-0.6, 0.2, 0.772],
+        "rpy_deg": [0.0, 0.0, 0.0]
+      },
+      "geometry": {
+        "type": "cylinder",
+        "radius_m": 0.022,
+        "height_m": 0.044,
+        "mass_kg": 0.065
+      },
+      "color_rgb": [0.82, 0.08, 0.06]
+    },
+    {
+      "id": "P04",
+      "zone_id": "C",
+      "state": "upright",
+      "pose": {
+        "position_m": [-0.85, 0.0, 0.772],
+        "rpy_deg": [0.0, 0.0, 0.0]
+      },
+      "geometry": {
+        "type": "cylinder",
+        "radius_m": 0.022,
+        "height_m": 0.044,
+        "mass_kg": 0.065
+      },
+      "color_rgb": [0.82, 0.08, 0.06]
+    }
+  ],
+  "bin": {
+    "id": "Bin_01",
+    "initial_station_id": "PACK_STATION",
+    "pose": {
+      "position_m": [-0.35, -0.15, 0.785],
+      "rpy_deg": [0.0, 0.0, 0.0]
+    },
+    "size_m": [0.18, 0.12, 0.07],
+    "mass_kg": 0.35,
+    "grid": {
+      "rows": 2,
+      "columns": 3
+    },
+    "recipe_part_ids": ["P01", "P02", "P03", "P04"],
+    "empty_slots_after_pack": 2,
+    "wall_thickness_m": 0.006,
+    "divider_thickness_m": 0.004,
+    "bottom_thickness_m": 0.006,
+    "handle": {
+      "side": "negative_y",
+      "size_m": [0.08, 0.012, 0.022],
+      "offset_m": [0.0, -0.066, 0.015]
+    },
+    "color_rgb": [0.18, 0.2, 0.22]
+  },
+  "cameras": [
+    {
+      "id": "CAM_A_TOP",
+      "pose": {
+        "position_m": [-0.65, -0.15, 1.5]
+      },
+      "look_at_m": [-0.65, 0.12, 0.75],
+      "resolution_px": [1280, 720],
+      "horizontal_fov_deg": 68.0,
+      "consumers": ["pi05", "yolo"]
+    },
+    {
+      "id": "CAM_HANDOFF",
+      "pose": {
+        "position_m": [0.0, -0.45, 1.18]
+      },
+      "look_at_m": [0.0, 0.0, 0.785],
+      "resolution_px": [1280, 720],
+      "horizontal_fov_deg": 68.0,
+      "consumers": ["yolo", "verifier"]
+    },
+    {
+      "id": "CAM_B_TOP",
+      "pose": {
+        "position_m": [0.6, -0.18, 1.45]
+      },
+      "look_at_m": [0.48, 0.18, 0.75],
+      "resolution_px": [1280, 720],
+      "horizontal_fov_deg": 68.0,
+      "consumers": ["openvla_oft", "yolo"]
+    }
+  ],
+  "safety": {
+    "handoff_zone": {
+      "x_m": [-0.16, 0.16],
+      "y_m": [-0.12, 0.12],
+      "z_m": [0.74, 1.15]
+    },
+    "normal_workspace_limits": {
+      "Arm_A": {
+        "max_x_m": -0.16
+      },
+      "Arm_B": {
+        "min_x_m": 0.16
+      }
+    }
+  },
+  "workflow": {
+    "token_sequence": ["A_ONLY", "HANDOFF_VERIFY", "B_ONLY", "NONE"],
+    "handoff_ready_event": "handoff_ready",
+    "handoff_verify_stable_cycles": 3,
+    "handoff_owner_by_token": {
+      "A_ONLY": "Arm_A",
+      "HANDOFF_VERIFY": null,
+      "B_ONLY": "Arm_B",
+      "NONE": null
+    }
+  },
+  "physics": {
+    "gravity_m_s2": [0.0, 0.0, -9.81],
+    "physics_dt_s": 0.008333333333333333,
+    "rendering_dt_s": 0.03333333333333333,
+    "control_frequency_hz": 60,
+    "reset_settle_steps": 120
+  }
+}

@@ -1,406 +1,264 @@
-# 工业智能体总 Agent 框架
+# 工业环境四 Agent 双 VLA 双臂框架
 
-版本：1.0
-状态：轻量参考实现，可运行 Mock；真实模型与真实机器人尚未接入
-适用范围：轻量总 Agent + OpenVLA-OFT / π0.5 双 VLA 执行
+产品基线：v2.0
+冻结日期：2026-07-26
 
-## 1. 目标与非目标
+## 1. 一句话结论
 
-总 Agent 负责把用户自然语言任务转换为可审计的语义级计划，选择 VLA
-执行器，执行安全门控，在每个子任务后重新感知与核验，并按确定性上限进行
-恢复。它不生成机器人坐标、轨迹、抓取点或关节控制量。
+系统采用固定四 Agent、双 VLA、双 Franka、单料箱、静态中央交接位：
 
-当前代码的目标：
+> π0.5 理解预设自然语言并控制 Arm_A 完成装箱和交接；Supervisor 用确定性
+> FSM、安全规则和多帧证据管理生命周期；OpenVLA-OFT 控制 Arm_B 搬运同一料箱；
+> YOLO 同帧保存检测框，供离线 mAP 评分。
 
-1. 固化 TaskSchema、TaskPlan、Observation、ActionChunk 和事件契约。
-2. 用显式 FSM 表达所有正常、恢复、切换和安全停止路径。
-3. 将 OpenVLA-OFT 与 π0.5 视为两个独立进程，允许 D/E 并行开发。
-4. 在任何动作进入机器人/仿真控制器前完成 7 维合同校验和安全检查。
-5. 用在线传感器后置条件验证结果，不把 GT 暴露给 Agent。
-6. 用零第三方依赖 Mock 演示成功、重规划、切换和系统故障安全停止。
+不增加 NLP Agent，不做“简单任务/复杂任务”路由，不让两个 VLA 互相接管。
 
-当前代码明确不代表：
+## 2. 中文架构图
 
-- 已下载、微调、部署或验证真实 OpenVLA-OFT / π0.5 权重；
-- 已完成真实相机、Franka/夹爪或 Isaac Sim 接口；
-- 已达到比赛指标；
-- 可替代机器人控制器、PLC、安全门或人工急停的功能安全认证。
+![中文版：四 Agent 固定双 VLA 双臂闭环](assets/four-agent-fixed-dual-vla-architecture-v4-zh.png)
 
-Isaac Sim 5.1 / Isaac Lab 2.3.2 可作为 B 的计划环境，但不是本核心包的
-运行依赖。真实 VLA 版本、CUDA/PyTorch/JAX 依赖必须留在各自独立环境。
+[简化可编辑 SVG](assets/four-agent-single-bin-static-handoff-framework-v3.svg)
 
-## 2. 冻结的职责边界
+图中实线是控制闭环，虚线是 YOLO 评分证据链。YOLO 失败不会改变 VLA
+执行顺序或控制令牌。
 
-| 组件 | 责任 | 明确不负责 |
-|---|---|---|
-| `TaskSchema` | 接收任务、目标、约束、可观测后置条件 | 轨迹和动作 |
-| `SemanticTaskPlanner` | 生成有序语义子任务及依赖 | 坐标、姿态、抓取点 |
-| `AgentFSM` | 唯一合法状态转移 | 隐式异常跳转 |
-| `ExecutorRouter` | 按偏好、能力、健康状态选 VLA | 模型内部推理 |
-| `OpenVLAOFTAdapter` | 协议转换、调用独立进程、归一化 action chunk | 导入/加载真实模型 |
-| `Pi05Adapter` | 协议转换、调用独立进程、归一化 actions | 导入 JAX/openpi |
-| `ObservationGateway` | 在线白名单、版本检查、GT 深度扫描 | 离线评测 GT |
-| `ActionSafetyValidator` | 合同、NaN/Inf、限幅、工作空间校验 | 功能安全认证 |
-| `ExecutionEnvironment` | observe / step / safe_stop 抽象 | 任务决策 |
-| `PostconditionVerifier` | 多帧可观测后置条件投票 | 读取 GT |
-| `EventSink` / `RunMemory` | 事件日志和紧凑运行记忆 | 保存隐藏思维链 |
+## 3. 冻结决策
 
-## 3. 代码结构
-
-```text
-src/industrial_agent/
-├── contracts.py       # Task、TaskPlan、Observation、7D ActionChunk
-├── planner.py         # 三类确定性语义分解模板
-├── fsm.py             # 显式状态和允许转移
-├── observation.py     # 在线白名单与 GT 隔离
-├── executor.py        # Protocol、路由、双 VLA 独立进程适配器
-├── safety.py          # 动作校验、限幅、工作空间与系统故障
-├── verifier.py        # 后置条件与多帧投票
-├── environment.py     # 仿真/机器人接口
-├── telemetry.py       # JSON 事件与紧凑记忆
-├── orchestrator.py    # 总 Agent 编排循环
-└── mock.py            # 无第三方依赖 Mock
-```
-
-JSON Schema 位于 `schemas/`；默认配置位于
-`configs/agent.default.json`；演示入口为
-`scripts/run_mock_demo.py`。
-
-## 4. 从指令到 TaskPlan
-
-### 4.1 语义子任务合同
-
-每个 `Subtask` 包含：
-
-| 字段 | 含义 |
+| 项目 | 冻结结果 |
 |---|---|
-| `subtask_id` | 计划内稳定且唯一的 ID |
-| `sequence` | 从 1 开始连续递增 |
-| `instruction` | 交给 VLA 的自然语言子指令 |
-| `task_type` | 能力路由标签 |
-| `preconditions` | 开始前必须成立的可观测条件 |
-| `postconditions` | 本子任务结束后必须成立的可观测条件 |
-| `depends_on` | 只能引用序列中已出现的子任务 |
-| `assigned_executor` | 可选执行器偏好，不是强制硬编码 |
-| `repeat_until_postcondition` | 是否为有界语义循环 |
-| `max_iterations` | 循环动作块上限，1–100 |
-| `status` | PENDING / READY / RUNNING / VERIFIED / FAILED |
+| Agent 数量 | 4：Supervisor、π0.5、OpenVLA-OFT、YOLO |
+| 机械臂 | 2 台 Franka：Arm_A、Arm_B |
+| 料箱 | 1 个 `Bin_01` |
+| 传送带 | 无 |
+| 共享位置 | 固定中央交接位 `HANDOFF_CENTER` |
+| π0.5 | Arm_A 唯一 VLA，负责装四个零件、移箱、释放、退避 |
+| OpenVLA-OFT | Arm_B 唯一 VLA，负责搬同一料箱到 `FINISHED_01`、释放、退避 |
+| Supervisor | 固定任务模板、FSM、令牌、安全、核验、恢复、遥测；不做 NLP |
+| YOLO | 独立目标检测与 mAP 证据；不产生机械臂动作 |
+| 在线 GT | 严禁进入任何 Agent |
+| 失败恢复 | 当前阶段同一 VLA 有界恢复；硬超时隔离并停机 |
 
-Schema 中没有 `coordinate`、`pose`、`trajectory`、`waypoint` 或
-`grasp_point`。总 Agent 不能越权生成低层运动方案。
+## 4. 四个 Agent 的职责
 
-### 4.2 内置确定性分解
+| Agent | 输入 | 输出 | 明确禁止 |
+|---|---|---|---|
+| Supervisor | 冻结 TaskSchema、在线 Observation、服务健康状态 | TaskPlan、FSM 状态、控制令牌、事件、最终结果 | 理解自然语言、按复杂度选模型、生成 VLA 动作、读取 GT |
+| π0.5 | Arm_A 冻结原始指令、`CAM_A_TOP`、Arm_A 状态 | Arm_A canonical ActionChunk | 控制 Arm_B、改写任务、读取 YOLO/GT 后作弊 |
+| OpenVLA-OFT | Arm_B 冻结协作指令、`CAM_B_TOP`、Arm_B 状态 | Arm_B canonical ActionChunk | 控制 Arm_A、选择上游零件、读取 GT |
+| YOLO | 当前阶段单张不可变 RGB、类别白名单、阈值 | bbox、类别、置信度、时延、模型/帧摘要 | 理解任务、生成动作、授予令牌、调用 VLA、读取在线 GT |
 
-| workflow | 语义计划 | 循环/推进规则 |
-|---|---|---|
-| `place_in_designated_slot` | 定位目标 → 放入指定格 | 定位核验通过后才执行放置 |
-| `pack_until_full` | 逐件装箱，传感器确认满后停止 | 每轮一个动作块，最多 `max_pack_iterations` |
-| `fill_then_move_stack` | 未满先装满 → 搬运满箱 → 叠放 | 满箱后才解锁搬运；搬运后才解锁叠放 |
-| `single` | 原任务作为单一子任务 | 用于未模板化的任务 |
+Safety、Verifier、Isaac Sim Adapter、离线 mAP Evaluator 是普通确定性组件，
+不是第五、第六个 Agent。
 
-扩展新任务时，在 `SemanticTaskPlanner` 增加模板并保持四条约束：
+## 5. 场景与分区
 
-1. 只输出语义意图；
-2. 每个子任务有可观测后置条件；
-3. 循环必须有硬上限；
-4. 依赖只能向前引用，禁止环。
+场景采用一张工作台：
 
-未来若接入 NLP/LLM 分解器，它必须输出同一 `TaskPlan` Schema，并在进入
-FSM 前通过同样的确定性校验。LLM 不得直接返回动作。
+- 左侧蓝区：Arm_A 装箱工作区；
+- 中间绿区：`HANDOFF_CENTER`，单料箱静态交接；
+- 右侧橙区：Arm_B 搬运工作区和 `FINISHED_01`；
+- 左区四个托盘：前三个共放四个零件，第四个为空；
+- `Bin_01` 放在蓝区靠中央桌角，Arm_A 能抓取并放到绿区；
+- 两臂只在各自阶段运动，共享区永远只有一枚控制令牌。
 
-## 5. 显式 FSM
+场景详情与坐标：
+
+- [单料箱静态交接场景](single-bin-static-handoff-scene-v2.md)
+- [端到端场景流程](final-frozen-scene-and-flow.md)
+- [Isaac Sim 构建脚本](../../simulation/build_single_bin_scene.py)
+
+## 6. 固定生命周期
 
 ```mermaid
-stateDiagram-v2
-    [*] --> IDLE
-    IDLE --> VALIDATING_TASK
-    VALIDATING_TASK --> PLANNING: TaskSchema valid
-    VALIDATING_TASK --> FAILED: invalid contract
-    PLANNING --> OBSERVING: TaskPlan valid
-    PLANNING --> FAILED: invalid plan
-    OBSERVING --> SELECTING_EXECUTOR: online observation accepted
-    OBSERVING --> SAFE_STOPPED: system safety fault
-    SELECTING_EXECUTOR --> EXECUTING: compatible executor
-    SELECTING_EXECUTOR --> FAILED: no executor
-    EXECUTING --> VERIFYING: queue drained
-    EXECUTING --> REPLANNING: recoverable failure
-    EXECUTING --> SWITCHING: local replan exhausted
-    EXECUTING --> SAFE_STOPPED: E-stop / protective stop / system fault
-    VERIFYING --> ADVANCING_SUBTASK: verified or bounded loop continues
-    VERIFYING --> REPLANNING: fail or uncertain
-    VERIFYING --> SWITCHING: replan exhausted
-    VERIFYING --> SUCCEEDED: final subtask verified
-    VERIFYING --> SAFE_STOPPED: system safety fault
-    REPLANNING --> OBSERVING: queue cleared, fresh frame
-    SWITCHING --> OBSERVING: queue cleared, old executor excluded
-    ADVANCING_SUBTASK --> OBSERVING: fresh frame
-    FAILED --> [*]
-    SAFE_STOPPED --> [*]
-    SUCCEEDED --> [*]
+flowchart LR
+    T["冻结任务"] --> A["A_ONLY"]
+    A --> P["π0.5 / Arm_A<br/>装箱 + 移箱 + 释放 + 退避"]
+    P --> H["HANDOFF_VERIFY<br/>两臂无动作"]
+    H -->|"3帧中至少2个整帧通过<br/>事件已持久化"| B["B_ONLY"]
+    B --> O["OpenVLA-OFT / Arm_B<br/>搬运 + 释放 + 退避"]
+    O --> V["最终3帧核验"]
+    V --> N["NONE / SUCCEEDED"]
+    A -.故障.-> S["SAFE_STOP"]
+    H -.故障.-> S
+    B -.故障.-> S
+    V -.故障.-> S
 ```
 
-任何映射表以外的跳转都抛出异常，因此日志和测试可以证明没有隐藏路径。
-
-## 6. 主执行序列
-
-```mermaid
-sequenceDiagram
-    actor U as 用户
-    participant A as 总 Agent
-    participant P as SemanticTaskPlanner
-    participant O as ObservationGateway
-    participant V as VLA 独立进程
-    participant S as SafetyValidator
-    participant E as Robot/Simulator
-    participant R as Verifier
-
-    U->>A: TaskSchema
-    A->>P: plan(task)
-    P-->>A: ordered TaskPlan
-    loop 每个 Subtask
-        A->>E: observe()
-        E-->>O: raw sensor observation
-        O-->>A: sanitized Observation
-        A->>V: POST /v1/infer
-        V-->>A: canonical 7-D ActionChunk
-        A->>S: validate_and_limit(chunk, observation)
-        alt 系统故障
-            A->>E: safe_stop()
-            A-->>U: SAFE_STOPPED
-        else 动作合同通过
-            A->>E: 只执行 chunk 第 1 个 safe action
-            E-->>O: fresh observation
-            A->>R: postconditions + 3 个唯一在线帧
-            R-->>A: PASS / FAIL / UNCERTAIN
-            alt PASS
-                A->>A: 标记 VERIFIED，推进下一子任务
-            else 决策预算未到上限
-                A->>A: 丢弃旧 chunk 剩余动作
-                A->>V: 用新 observation_id 重新 infer
-            else recoverable
-                A->>A: 当前策略最多重规划 1 次
-            else replan exhausted
-                A->>A: 最多切换 1 次，禁止切回
-            end
-        end
-    end
-    A-->>U: SUCCEEDED / FAILED / SAFE_STOPPED
-```
-
-执行采用**单步滚动时域**：服务可以返回多步 ActionChunk，但总 Agent 每次
-只执行第 1 步，明确丢弃其余旧动作；动作后以新的 `observation_id` 核验，
-未完成时重新调用 VLA。这样第 2 个物理动作永远不会沿用第 1 步之前生成的
-旧视觉判断。每个子任务开始前也会重新 `observe()`；已 `VERIFIED` 的子任务
-不会因后续子任务失败而重跑。
-
-## 7. 恢复策略与硬不变量
-
-| 触发 | 当前动作队列 | 同策略 | 切换 | 终态 |
-|---|---|---|---|---|
-| 后置条件 FAIL/UNCERTAIN，滚动决策预算未耗尽 | 丢弃剩余旧动作 | 新帧重新 infer，不计技术重规划 | 不切换 | 继续当前子任务 |
-| 后置条件 FAIL/UNCERTAIN，滚动决策预算耗尽 | 清空 | 当前子任务最多重规划 1 次 | 重规划耗尽后最多 1 次 | 耗尽后 FAILED |
-| 执行器超时/坏响应 | 清空 | 同上 | 同上 | 耗尽后 FAILED |
-| 动作合同/工作空间拒绝 | 清空 | 同上 | 同上 | 耗尽后 FAILED |
-| E-stop / protective stop / system fault | 立即清空 | 禁止 | 禁止 | SAFE_STOPPED |
-
-硬不变量：
-
-- 重规划计数以“当前子任务 + 当前策略”为边界；
-- 一个运行全程最多发生一次策略切换；
-- 被切走的执行器加入**整个 run** 的排除集合；后续子任务也不允许切回；
-- 重规划、切换、终止和安全停止都调用 `action_queue.clear()`；
-- 系统故障检查发生在初始感知、每个动作后和每个核验帧；
-- 安全停止调用环境 `safe_stop()`，不进入核验和恢复；
-- 循环装箱属于正常业务循环，不消耗技术重规划次数，但受
-  `max_iterations` 硬上限约束。
-- repeat-until 子任务在下发动作前先核验；例如料箱已满时零动作完成。
-
-## 8. Observation 白名单与 GT 隔离
-
-在线顶层只允许：
-
-`observation_version`、`observation_id`、`timestamp_ms`、`camera`、
-`objects`、`robot`、`safety`、`task`、`quality`。
-
-`ObservationGateway` 会递归扫描所有键，大小写归一化后拒绝：
-
-`gt`、`ground_truth`、`groundtruth`、`label(s)`、`annotation(s)`、
-`oracle`、`truth`、`privileged_state` 及其 snake_case、camelCase、PascalCase、
-连字符或空格复合变体（如 `sim_gt_mask`、`groundTruthPose`），并拒绝
-`target_pose`、`targetX`、`targetMatrix`、`desiredPose`、`actualPose`、
-`grasp_point`、`waypoint` 等越权低层目标几何。进入 target/desired/goal/
-grasp/actual 等引用容器后，其中任何数值标量、向量或矩阵都会被拒绝，避免用
-`value`、`data` 等无语义字段藏入目标坐标；常见复数和数字后缀
-（`targetsPose`、`target1Pose`、`waypoints2`）同样处理。字符串对象 ID/状态
-不受影响。该 fail-closed 边界也会拒绝引用容器中的 `target_count` 等高层
-数值；此类数据必须改放到双方冻结且不处于引用上下文的传感字段。
-
-发现 GT 字段时整个在线帧以 `OBS_1102_GT_FORBIDDEN` 拒绝；不会静默删除后
-继续决策。首次动作前拒帧可直接失败且不得产生运动；一旦本次 run 已执行过
-任一动作，后续控制、前置检查、循环或核验阶段遇到非法/含 GT 帧，必须调用
-`safe_stop()` 并进入 `SAFE_STOPPED`，禁止重试或切换执行器。离线评测、标注
-和指标计算必须在 F 的独立进程/目录完成，禁止把 GT 合并进在线 Observation。
-`robot` 和 `safety` 是必需字段，三项安全状态缺失或类型错误均 fail-closed。
-每个 run 内 `observation_id` 必须唯一，时间戳不得倒退。`mock.py` 的完成规则
-是仿真内部状态，Agent 只看到模拟传感器结果。
-
-## 9. 统一 7 维物理动作合同
-
-动作向量固定为：
+令牌顺序只能是：
 
 ```text
-[dx_m, dy_m, dz_m, droll_rad, dpitch_rad, dyaw_rad, gripper_norm]
+A_ONLY -> HANDOFF_VERIFY -> B_ONLY -> NONE
 ```
 
-| 维度 | 坐标系/单位 | 默认单步绝对上限 |
-|---|---|---:|
-| dx, dy, dz | `robot_base` / m | 0.05 |
-| droll, dpitch, dyaw | 增量欧拉角 / rad | 0.25 |
-| gripper | 归一化命令 | 1.0 |
+| 阶段 | 可运动机械臂 | 进入条件 | 离开条件 |
+|---|---|---|---|
+| `A_ONLY` | 仅 Arm_A | 任务、双 VLA、相机和安全预检通过 | 料箱已交接、Arm_A 释放并退避 |
+| `HANDOFF_VERIFY` | 无 | Arm_A 阶段动作结束 | 三帧两票复合 PASS，事件持久化 |
+| `B_ONLY` | 仅 Arm_B | `handoff.verified` 已持久化 | 同一料箱到完成区、Arm_B 释放并退避 |
+| `NONE` | 无 | 最终核验成功或安全停止 | 新 episode reset |
 
-固定元数据：
+## 7. 单步闭环
 
-- `action_space = ee_delta_pose_gripper`
-- `frame = robot_base`
-- `translation_unit = m`
-- `rotation_unit = rad`
-- `gripper_unit = normalized`
-- `contract_version = 1.x`
+两个 VLA 都执行相同的滚动时域闭环：
 
-执行前顺序：
+```text
+获取新 Observation
+-> 当前阶段 YOLO 同帧留证（失败不门控）
+-> 调用当前阶段固定 VLA
+-> 推理完成后再次观测
+-> Safety + 令牌 + 工作空间 + 对侧臂互锁
+-> 控制器原子 compare-and-execute
+-> 只执行 ActionChunk 第 1 步
+-> 获取新 Observation
+-> 核验
+-> 成功 / 同角色有界重规划 / 安全停止
+```
 
-1. 校验合同主版本、字段、动作空间、坐标系、单位和非空 chunk；
-2. 校验每一步恰好 7 维；
-3. NaN/Inf 直接拒绝，不做限幅；
-4. 各轴超限值确定性夹紧并记录 `safety.action_limited`；
-5. 逐步累积前三维，预测 TCP 是否越出工作空间；
-6. 超出工作空间时拒绝整个 chunk，任何一步都不下发；
-7. 通过后只把第 1 步进入内存动作队列；剩余动作在新观测前不得执行。
+即使 VLA 返回多步，在线基线也只执行第一步，剩余旧动作全部丢弃。
+这样每次环境变化都会触发重新观察和重新决策，形成可展示的真实闭环。
 
-默认工作空间为 x/y `[-1.0, 1.0] m`、z `[0.0, 1.5] m`。这些只是 Mock
-缺省值，真实部署必须由 B 根据场景、机器人和安全评估冻结。
+## 8. 为什么自然语言仍由 VLA 处理
 
-## 10. 后置条件与多帧投票
+比赛允许我们预设自然语言，因此 Supervisor 无需先“理解”句子再决定用哪个模型：
 
-支持四种在线条件：
+1. 部署配置已经固定第一阶段一定由 π0.5/Arm_A 执行；
+2. Supervisor 原样传递 Arm_A 预设指令；
+3. π0.5 用视觉和语言决定零件最多的区域、姿态和抓放动作；
+4. Arm_A 完成后，Supervisor 根据传感事实而不是 NLP 切换生命周期；
+5. Arm_B 使用另一条冻结协作指令，由 OpenVLA-OFT 执行。
 
-| kind | 必要字段 | 语义 |
+因此“VLA 负责语言理解”与“Supervisor 管理生命周期”并不冲突。
+
+## 9. YOLO 与 VLA 的关系
+
+VLA 的视觉编码器用于视觉—语言—动作推理；YOLO 用于输出可量化检测框。
+二者读取同一阶段、同一图像 SHA，但职责不同：
+
+| 模块 | 主要目的 | 是否控制机械臂 |
 |---|---|---|
-| `field_equals` | `path`, `expected` | 传感器字段等于期望 |
-| `numeric_range` | `path`, minimum/maximum | 数值在区间内 |
-| `object_detected` | `object_id` | 目标被高置信检测 |
-| `object_in_zone` | `object_id`, `zone_id` | 目标在语义区域内 |
+| VLA | 根据图像和语言生成动作 | 是 |
+| YOLO | 输出 bbox、类别、置信度，形成 mAP 证据 | 否 |
 
-每帧先检查 `quality.confidence >= min_confidence`。字段缺失、类型错误、低
-置信度（含帧质量与目标检测置信度）或 `numeric_range` 输入为
-布尔/NaN/Inf 等非有限数时计为 `UNCERTAIN`，不是成功。默认收集 3 帧、
-每个条件需要 2 票：
+YOLO 必须保存：
 
-- PASS 票达到 `required_votes` 且 FAIL 票未达阈值：该条件 PASS；
-- FAIL 票达到 `required_votes`：该条件 FAIL；PASS/FAIL 同时达到阈值时也
-  按 FAIL 处理；
-- 其余：UNCERTAIN；
-- 所有条件 PASS 才能推进子任务。
-- 帧 ID 必须互不相同且时间不得倒退；重复同一帧不能重复投票。
-
-Verifier 不接收 GT。若 F 将 Verifier 独立部署，使用
-`POST /v1/verify` 契约，语义必须保持一致。
-
-## 11. 路由和真实模型接入
-
-路由优先级：
-
-1. `Subtask.assigned_executor`；
-2. 父任务 `preferred_executor`；
-3. 注册顺序中第一个同时满足 task type、健康、未被排除的执行器。
-
-OpenVLA-OFT 服务由 D 维护，模型输入包含 `full_image`、可选
-`wrist_image`、`state`、`task_description`，服务将连续动作 chunk
-归一化成统一合同。
-
-π0.5/openpi 服务由 E 维护，内部可使用 `policy.infer(...)["actions"]`、
-policy server、LeRobot 与独立 norm stats，服务边界同样只返回统一合同。
-
-两个服务必须分别固定：
-
-- 独立运行环境和锁文件；
-- `checkpoint_sha`；
-- `norm_stats_sha`；
-- 服务镜像 digest；
-- 本服务支持的 action contract 主版本。
-
-总 Agent 不导入两边框架，也不假设两边归一化统计相同。详细 HTTP/WebSocket
-约定见 `interface-contracts.md`。
-
-## 12. 结构化事件与记忆
-
-每条事件包含 `schema_version`、`event_id`、run 内单调 `sequence`、
-`timestamp_ms`、`run_id`、`task_id`、`event_type`、FSM `state` 和
-`payload`。
-
-关键事件：
-
-- `run.started/succeeded/failed/safe_stopped`
-- `task_plan.created`
-- `fsm.transition`
-- `executor.selected`
-- `action_chunk.accepted`
-- `safety.action_limited`
-- `verification.completed`
-- `subtask.iteration_incomplete/subtask.verified`
-- `recovery.replan/recovery.switch`
-- `action_queue.cleared`
-- `closed_loop.redecision`
-
-`RunMemory` 只保存恢复需要的确定性事实：当前计划/子任务/执行器、执行器
-历史、重规划和切换计数、最后错误码、最后 observation ID、完成的 chunk
-ID。它不保存模型隐藏推理或未经筛选的图像。
-
-## 13. 配置与启动
-
-核心依赖仅 Python 3.10+ 标准库。运行 Mock：
-
-```powershell
-python -m pip install -e ".[test]"
-python scripts/run_mock_demo.py
+```text
+trace_id + observation_id + camera_id + image_sha256
+checkpoint_sha + class_map_sha + config_sha
+bbox + class + confidence + latency
 ```
 
-运行单元测试：
+零检测、超时和坏包也要保存，不能只挑“好看的框”。离线使用冻结 GT
+计算 AP50、AP75、mAP50:95、Precision、Recall 和 P50/P95 时延。
 
-```powershell
-python -m unittest discover -s tests -v
+## 10. 交接核验
+
+Supervisor 在 `HANDOFF_VERIFY` 采集三个不同 observation。采用整帧复合投票：
+
+```text
+一帧通过 = 该帧所有必需条件同时成立
+最终通过 = 三帧中至少两帧通过
 ```
 
-`configs/agent.default.json` 的部署 URL 通过
-`build_executors_from_config(config, transport_factory)` 绑定到独立进程 transport；
-随后由 `IndustrialAgent.from_config(executors, config)` 加载核心参数并精确比对
-执行器名称、动作合同、checkpoint SHA 与 norm stats SHA。其机器约束见
-`schemas/agent-config.schema.json`。代码会拒绝未固定摘要、执行器身份漂移、打开
-回切、增加切换次数或关闭恢复清队列等破坏冻结不变量的配置。
+不得从不同帧拼条件。
 
-配置中的 `enabled` 是单/双执行器拓扑的唯一开关：所有启用项必须被工厂构建并
-传入 Agent，集合缺失、多传或全部禁用都会在启动阶段失败。G4 若降级为单主模型，
-必须显式关闭另一项并保存该配置作为实验依据。
+Arm_A 交接条件：
 
-Mock 的预期结果：
+- `packed_part_count == 4`；
+- `Bin_01` 在 `HANDOFF_CENTER`，不在 `FINISHED_01`；
+- 料箱速度 `<= 0.02 m/s`；
+- Arm_A 夹爪已打开且已退避；
+- Arm_B 已退避；
+- 两臂静止；
+- 无急停、保护停和系统故障。
 
-| scenario | 预期 |
+通过后先 fsync 持久化 `handoff.verified`，然后授予 `B_ONLY`。
+
+最终完成条件：
+
+- 同一 `Bin_01` 在 `FINISHED_01`，不在 `HANDOFF_CENTER`；
+- 料箱速度 `<= 0.02 m/s`；
+- Arm_B 夹爪已打开且已退避；
+- Arm_A 已退避；
+- 两臂静止。
+
+## 11. 安全与执行一致性
+
+每个动作必须同时通过：
+
+1. canonical ActionChunk 契约；
+2. 7 维有限数和轴限幅；
+3. VLA、机械臂和控制令牌绑定；
+4. 该机械臂自己的 `robot_base` 工作空间；
+5. 对侧机械臂退避互锁；
+6. 推理后新观测的状态再检查；
+7. 控制器端 `observation_id + state_digest + command_id` 原子再校验。
+
+同一个 `chunk_id` 或 `command_id` 不得重复执行。
+
+完整接口见 [接口契约](interface-contracts.md)。
+
+## 12. 有界恢复与安全停止
+
+| 故障 | 处理 |
 |---|---|
-| success | OpenVLA 一次成功 |
-| recovery | OpenVLA 失败后只重规划一次并成功 |
-| switch | OpenVLA 重规划仍失败，切 π0.5 成功，不切回 |
-| system_fault（测试） | 动作后立即 SAFE_STOPPED，不进入 VERIFYING |
+| 普通 VLA 可恢复错误 | 清队列、刷新观测、当前同一 VLA 最多重规划一次 |
+| VLA 硬超时 | 隔离该 executor，不重入，清队列并 safe-stop |
+| 物体区域在推理期间变化 | 丢弃旧 chunk，同一 VLA 用新观测重规划 |
+| 对侧臂/安全/令牌在推理期间变化 | 立即 safe-stop |
+| YOLO 空检测/超时/坏包 | 留失败证据；VLA 控制链继续 |
+| step 超时 | 动作结果未知；走独立 safe-stop |
+| 相机、急停、保护停、控制器故障 | 不发新动作，立即 safe-stop |
+| 停机回执或停后传感确认失败 | `SAFE_STOP_FAILED` |
 
-## 14. 集成 Definition of Done
+只有控制器 `SafeStopReceipt` 和停后传感器都确认两臂静止，才能进入
+`SAFE_STOPPED`。软件令牌切为 `NONE` 只代表撤销命令权限，不等于物理停止证明。
 
-真实系统合并前至少满足：
+任何恢复都禁止：
 
-- D/E 服务 `/health` 返回实际加载的 checkpoint/norm SHA；
-- 固定请求在固定权重与 seed 下可复现；
-- 返回动作全部通过 `action-chunk.schema.json`；
-- B 的环境适配器对 `safe_stop` 和控制器缓冲清空有集成测试；
-- C 的场景只通过在线白名单提供数据；
-- F 能证明评测 GT 没有进入 Agent 进程；
-- 成功、同策略恢复、策略切换、故障停止各保存一条完整事件链；
-- 使用真实工作空间、速度/增量上限替换 Mock 默认值；
-- 接口契约测试、回放测试和至少一次端到端演练通过。
+- 把 Arm_A 任务交给 OpenVLA-OFT；
+- 把 Arm_B 任务交给 π0.5；
+- 复用旧 ActionChunk；
+- 两臂同时进入交接区；
+- 用 GT 帮助在线控制；
+- 用 YOLO 结果直接改写 VLA 动作。
+
+## 13. 服务与 Docker
+
+建议服务：
+
+| 服务 | 端口 | 容器职责 |
+|---|---:|---|
+| Supervisor | 8000 | FSM、安全、核验、遥测 |
+| π0.5 | 8101 | Arm_A VLA 推理 |
+| OpenVLA-OFT | 8102 | Arm_B VLA 推理 |
+| YOLO | 8103 | 检测和证据 |
+| Isaac Adapter | 8200 | 仿真循环、控制器 ACK、独立急停 |
+
+启动顺序：
+
+1. Isaac Sim 场景、物理、双臂和三相机；
+2. 受控仿真循环与独立急停通道；
+3. YOLO；
+4. π0.5；
+5. OpenVLA-OFT；
+6. Supervisor 做 health、版本、SHA 和契约预检；
+7. reset 到 `A_ONLY`；
+8. 提交冻结任务。
+
+退出时必须先撤销控制权并确认双臂安全停止，再结束模型与仿真服务。
+SIGINT、SIGTERM、异常和容器关闭都不得绕过急停；外部 watchdog 是生产必需项。
+
+## 14. 最小验收
+
+- [ ] 一个 episode 中 π0.5 先执行，OpenVLA-OFT 后执行；
+- [ ] π0.5 只控制 Arm_A，OpenVLA-OFT 只控制 Arm_B；
+- [ ] Arm_A 装入 P01–P04，并将 `Bin_01` 放到中央交接位；
+- [ ] 三个不同帧至少两个整帧 PASS 后才出现 `B_ONLY`；
+- [ ] `handoff.verified` 在令牌切换前已 durable；
+- [ ] Arm_B 搬运同一个 `Bin_01` 到 `FINISHED_01`；
+- [ ] 每个物理动作后都有新 observation 和新 VLA 决策；
+- [ ] 两臂从未同时拥有共享区控制权；
+- [ ] YOLO 保存检测框、空预测、失败、时延和全部摘要；
+- [ ] 冻结 GT 只出现在离线 mAP 评测器；
+- [ ] 成功、普通恢复、VLA 超时、step 超时、急停成功和急停确认失败均可回放；
+- [ ] Docker 中所有服务使用固定版本和可追溯权重。

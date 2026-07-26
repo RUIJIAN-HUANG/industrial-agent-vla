@@ -69,16 +69,14 @@ class ContractAlignmentTests(unittest.TestCase):
                     FailureCode.UNSUPPORTED_TASK_VERSION,
                 )
 
-    def test_preferred_executor_matches_published_enum(self) -> None:
-        for executor in (None, "openvla_oft", "pi05"):
-            with self.subTest(executor=executor):
-                self._task(preferred_executor=executor).validate()
-
-        for executor in ("not_a_vla", "", 7):
-            with self.subTest(executor=executor):
-                with self.assertRaises(ContractError) as caught:
-                    self._task(preferred_executor=executor).validate()
-                self.assertEqual(caught.exception.code, FailureCode.INVALID_TASK)
+    def test_obsolete_executor_preference_is_rejected_at_contract_boundary(
+        self,
+    ) -> None:
+        raw = self._task().to_dict()
+        raw["preferred_executor"] = "openvla_oft"
+        with self.assertRaises(ContractError) as caught:
+            TaskSchema.from_dict(raw)
+        self.assertEqual(caught.exception.code, FailureCode.INVALID_TASK)
 
     def test_numeric_range_bounds_must_be_finite_numbers(self) -> None:
         Postcondition(kind="numeric_range", path="robot.load", minimum=0).validate()

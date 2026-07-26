@@ -41,12 +41,6 @@
     "target_location": {
       "type": "string"
     },
-    "preferred_executor": {
-      "enum": [
-        "openvla_oft",
-        "pi05"
-      ]
-    },
     "constraints": {
       "type": "object"
     },

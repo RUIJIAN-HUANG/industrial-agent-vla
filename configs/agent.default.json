@@ -1,20 +1,74 @@
 {
-  "config_version": "1.0",
+  "config_version": "1.2",
   "verification_frames": 3,
   "executor_timeout_ms": 15000,
+  "lifecycle": {
+    "mode": "FIXED_DUAL_VLA_SERIAL",
+    "supervisor_nlp": false,
+    "token_sequence": [
+      "A_ONLY",
+      "HANDOFF_VERIFY",
+      "B_ONLY",
+      "NONE"
+    ],
+    "task_profile": {
+      "profile_id": "single_bin_pack_handoff_v1",
+      "primary_executor": "pi05",
+      "collaborative_executor": "openvla_oft",
+      "arm_a_id": "Arm_A",
+      "arm_b_id": "Arm_B",
+      "bin_id": "Bin_01",
+      "handoff_zone": "HANDOFF_CENTER",
+      "finished_zone": "FINISHED_01",
+      "expected_part_count": 4,
+      "handoff_verification_frames": 3,
+      "handoff_required_votes": 2,
+      "stable_bin_speed_m_s": 0.02,
+      "arm_a_instruction": "将工作区中的四个红色零件依次装入料箱；倒放零件先调整为正向。装箱完成后，将料箱放到中央交接位并返回 HOME_A。失败时重新观察后继续。",
+      "arm_b_instruction": "收到 handoff_ready 后，观察中央交接位，抓稳 Bin_01 并保持水平，将其搬到 FINISHED_01，松开夹爪并返回 HOME_B。"
+    }
+  },
   "recovery": {
-    "max_replans_per_subtask_strategy": 1,
-    "max_switches_per_run": 1,
-    "allow_switch_back": false,
+    "max_replans_per_phase": 1,
+    "max_switches_per_run": 0,
     "clear_action_queue_on_recovery": true,
-    "max_decisions_per_strategy_attempt": 8
+    "max_decisions_per_strategy_attempt": 32
   },
   "safety": {
     "action_contract_version": "1.0",
     "axis_abs_limits": [0.05, 0.05, 0.05, 0.25, 0.25, 0.25, 1.0],
-    "workspace_min_m": [-1.0, -1.0, 0.0],
-    "workspace_max_m": [1.0, 1.0, 1.5],
-    "max_chunk_steps": 32
+    "workspace_by_arm": {
+      "Arm_A": {
+        "frame": "robot_base",
+        "min_m": [0.0, -0.6, 0.0],
+        "max_m": [0.7, 0.45, 1.0]
+      },
+      "Arm_B": {
+        "frame": "robot_base",
+        "min_m": [0.0, -0.25, 0.0],
+        "max_m": [0.7, 0.6, 1.0]
+      }
+    },
+    "max_chunk_steps": 32,
+    "safe_stop_timeout_ms": 2000
+  },
+  "telemetry": {
+    "event_jsonl_path": "artifacts/events/agent-events.jsonl",
+    "require_durable_handoff": true
+  },
+  "perception": {
+    "required": true,
+    "mode": "SHADOW_SCORE",
+    "base_url": "http://127.0.0.1:8103",
+    "evidence_jsonl_path": "artifacts/detection/yolo-evidence.jsonl",
+    "detection_contract_version": "1.0",
+    "checkpoint_sha": "REPLACE_WITH_PINNED_SHA",
+    "class_map_sha": "REPLACE_WITH_PINNED_SHA",
+    "config_sha": "REPLACE_WITH_PINNED_SHA",
+    "timeout_ms": 5000,
+    "max_attempts": 1,
+    "confidence_threshold": 0.25,
+    "iou_threshold": 0.45
   },
   "executors": {
     "openvla_oft": {

@@ -2,9 +2,50 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+import hashlib
+import json
 from typing import Any, Mapping, Protocol, runtime_checkable
 
 from .contracts import ActionStep
+
+
+def execution_guard_digest(observation_data: Mapping[str, Any]) -> str:
+    """Hash all state that can invalidate a VLA action before compare-and-execute."""
+
+    guarded = {
+        key: observation_data.get(key)
+        for key in ("robot", "safety", "task", "objects", "quality")
+    }
+    payload = json.dumps(
+        guarded,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(payload).hexdigest()}"
+
+
+@dataclass(frozen=True)
+class SafeStopReceipt:
+    """Controller acknowledgement required before claiming physical stop."""
+
+    controller_ack: bool
+    buffers_cleared: bool
+    arm_a_stopped: bool
+    arm_b_stopped: bool
+    stop_epoch: str
+
+    @property
+    def confirmed(self) -> bool:
+        return (
+            self.controller_ack
+            and self.buffers_cleared
+            and self.arm_a_stopped
+            and self.arm_b_stopped
+            and bool(self.stop_epoch)
+        )
 
 
 @runtime_checkable
@@ -12,8 +53,24 @@ class ExecutionEnvironment(Protocol):
     def observe(self) -> Mapping[str, Any]:
         """Return a raw online observation for allowlist ingestion."""
 
-    def step(self, action: ActionStep) -> Mapping[str, Any]:
-        """Execute exactly one already-safety-checked physical action."""
+    def step(
+        self,
+        action: ActionStep,
+        *,
+        arm_id: str,
+        control_token: str,
+        command_id: str,
+        expected_observation_id: str,
+        expected_state_digest: str,
+    ) -> Mapping[str, Any]:
+        """Atomically execute one action for the authorized arm/token.
 
-    def safe_stop(self, reason: str) -> None:
-        """Stop motion, clear controller buffers, and hold a safe state."""
+        The real dual-arm adapter must reject a mismatched arm/token, a stale
+        observation id/state digest, a duplicate command id, or a violated
+        opposite-arm retreat interlock at the controller boundary before
+        writing any command. The controller must persist command ids for
+        exactly-once acknowledgement within a run.
+        """
+
+    def safe_stop(self, reason: str) -> SafeStopReceipt:
+        """Stop both arms and return a controller-backed confirmation receipt."""

@@ -2,6 +2,9 @@
 
 本文件定义代码、配置、数据说明、模型服务、仿真、实验和比赛材料的唯一归属。
 新成员上传文件前，应先按下表确定位置；不要在仓库根目录临时堆放文件。
+当前冻结主线为 Supervisor、π0.5、OpenVLA-OFT、YOLO 四 Agent，以及双 Franka
+固定串行协作。目录调整不得产生第二套生命周期、第二个同职责服务或其他仿真
+平台主线。
 
 ## 1. 规范目录
 
@@ -24,7 +27,8 @@ industrial-agent-vla/
 ├── scripts/                   # 项目级维护、校验和演示脚本
 ├── services/
 │   ├── openvla_oft/           # D：独立 OpenVLA-OFT 服务
-│   └── pi05/                  # E：独立 π0.5/openpi 服务
+│   ├── pi05/                  # E：独立 π0.5/openpi 服务
+│   └── yolo/                  # F：同步调用、失败非门控的 YOLO 评分 sidecar
 ├── simulation/                # B：仿真环境、控制器、场景配置和环境适配
 ├── src/industrial_agent/      # A：轻量总 Agent 核心
 └── tests/                     # 单元、契约、回归测试
@@ -41,6 +45,7 @@ industrial-agent-vla/
 | 总 Agent Python 代码 | `src/industrial_agent/` | 是 | A |
 | OpenVLA-OFT 服务代码 | `services/openvla_oft/` | 是 | D |
 | π0.5/openpi 服务代码 | `services/pi05/` | 是 | E |
+| YOLO Agent 服务代码 | `services/yolo/` | 是 | F |
 | 仿真/机器人适配代码 | `simulation/` | 是 | B |
 | 跨模块 JSON Schema | `schemas/` | 是 | A + 接口方 |
 | 默认或示例配置 | `configs/` 或模块内 `configs/` | 是，不含私密值 | 模块负责人 |

@@ -150,9 +150,36 @@ def task() -> TaskSchema:
 class ExecutorAdapterTests(unittest.TestCase):
     def setUp(self) -> None:
         raw = raw_observation()
+
+        def image(camera_id: str, digest_char: str) -> dict[str, object]:
+            digest = digest_char * 64
+            return {
+                "uri": f"cas://sha256/{digest}",
+                "image_sha256": f"sha256:{digest}",
+                "camera_id": camera_id,
+                "width": 640,
+                "height": 480,
+            }
+
         raw["camera"] = {
-            "full_image": "shm://full",
-            "wrist_image": "shm://wrist",
+            "full_image": image("CAM_HANDOFF", "a"),
+            "arm_a_rgb": image("CAM_A_TOP", "b"),
+            "arm_b_rgb": image("CAM_B_TOP", "c"),
+            "wrist_image": image("CAM_WRIST", "d"),
+        }
+        robot = raw["robot"]
+        assert isinstance(robot, dict)
+        base_pose = list(robot["tcp_pose_m_rad"])
+        base_state = [*base_pose, 0.5]
+        robot["arm_a"] = {
+            "tcp_pose_m_rad": base_pose,
+            "state": base_state,
+            "retreated": False,
+        }
+        robot["arm_b"] = {
+            "tcp_pose_m_rad": [0.4, *base_pose[1:]],
+            "state": [0.4, *base_state[1:]],
+            "retreated": True,
         }
         self.observation = ObservationGateway().ingest_online(raw)
         self.context = ExecutionContext(
@@ -175,7 +202,10 @@ class ExecutorAdapterTests(unittest.TestCase):
         self.assertEqual(payload["observation_id"], self.observation.observation_id)
         model_input = payload["model_input"]
         assert isinstance(model_input, Mapping)
-        self.assertEqual(model_input["full_image"], "shm://full")
+        self.assertEqual(
+            model_input["full_image"],
+            self.observation.data["camera"]["arm_b_rgb"],
+        )
         self.assertIn("task_description", model_input)
 
     def test_cancel_reuses_run_and_subtask_correlation(self) -> None:
