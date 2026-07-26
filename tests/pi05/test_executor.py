@@ -501,3 +501,66 @@ def test_cancel_pending_chunk_clears_queue(clean_pi05_env, monkeypatch):
     assert ex._pending_chunk is None
     assert ex._pending_generated_step == -1
     fake_policy.clear_cache.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# 用例 8：descriptor 属性（体系B ExecutorDescriptor 对齐）
+# ---------------------------------------------------------------------------
+def test_descriptor_dummy_without_sha_env(clean_pi05_env, monkeypatch):
+    """用例8：dummy 模式缺少 SHA 环境变量时 descriptor 使用占位 SHA 不崩溃。
+
+    方案书 interface-contracts.md §4：checkpoint_sha/norm_stats_sha 必须为
+    sha256:<64hex> 格式。dummy 模式允许占位值，real 模式必须拒绝。
+    """
+    monkeypatch.setenv("PI05_MODE", "dummy")
+    with patch.object(pi05_mod, "make_policy_client", return_value=None):
+        ex = Pi05Executor()
+
+    desc = ex.descriptor
+    assert desc.name == "pi05"
+    assert desc.action_contract_version == "1.0"
+    assert "pick_place" in desc.task_types
+    # 占位 SHA 必须符合 sha256:<64hex> 格式
+    from src.industrial_agent.executor import is_pinned_artifact_digest
+
+    assert is_pinned_artifact_digest(desc.checkpoint_sha), (
+        f"占位 checkpoint_sha 格式不符：{desc.checkpoint_sha}"
+    )
+    assert is_pinned_artifact_digest(desc.norm_stats_sha), (
+        f"占位 norm_stats_sha 格式不符：{desc.norm_stats_sha}"
+    )
+
+
+def test_descriptor_real_mode_requires_sha(clean_pi05_env, monkeypatch):
+    """用例8补充：real 模式缺少 SHA 环境变量时 descriptor 抛 ValueError。
+
+    生产 real 模式必须配置 PI05_CHECKPOINT_SHA / PI05_NORM_STATS_SHA。
+    """
+    monkeypatch.setenv("PI05_MODE", "real")
+    fake_policy = MagicMock()
+    fake_policy.client_type = "local"
+    fake_policy.checkpoint_dir = None
+    with patch.object(pi05_mod, "make_policy_client", return_value=fake_policy):
+        ex = Pi05Executor()
+
+    with pytest.raises(ValueError, match="PI05_CHECKPOINT_SHA"):
+        _ = ex.descriptor
+
+
+def test_descriptor_with_valid_sha_env(clean_pi05_env, monkeypatch):
+    """用例8补充：设置合规 SHA 环境变量后 descriptor 正常返回。"""
+    monkeypatch.setenv("PI05_MODE", "dummy")
+    monkeypatch.setenv(
+        "PI05_CHECKPOINT_SHA",
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    )
+    monkeypatch.setenv(
+        "PI05_NORM_STATS_SHA",
+        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    )
+    with patch.object(pi05_mod, "make_policy_client", return_value=None):
+        ex = Pi05Executor()
+
+    desc = ex.descriptor
+    assert "aaaa" in desc.checkpoint_sha
+    assert "bbbb" in desc.norm_stats_sha

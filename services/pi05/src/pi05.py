@@ -628,16 +628,33 @@ class Pi05Executor(BaseExecutor):
         - checkpoint_sha / norm_stats_sha 从环境变量 PI05_CHECKPOINT_SHA /
           PI05_NORM_STATS_SHA 读取，必须为完整 sha256:<64hex>。
         - ★禁止使用 self._checkpoint_sha（hexdigest()[:16] 截断值，不符合契约）。
+        - 环境变量缺失或格式不符时，dummy 模式使用占位 SHA（不抛异常），
+          real 模式抛出 ValueError（必须配置）。
         """
         checkpoint_sha = os.environ.get("PI05_CHECKPOINT_SHA", "")
         norm_stats_sha = os.environ.get("PI05_NORM_STATS_SHA", "")
-        if not is_pinned_artifact_digest(
-            checkpoint_sha
-        ) or not is_pinned_artifact_digest(norm_stats_sha):
-            raise ValueError(
-                "必须设置 PI05_CHECKPOINT_SHA / PI05_NORM_STATS_SHA 环境变量为 "
-                "sha256:<64hex> 格式"
+        if not is_pinned_artifact_digest(checkpoint_sha):
+            if self.mode == "real":
+                raise ValueError(
+                    "real 模式必须设置 PI05_CHECKPOINT_SHA 为 sha256:<64hex> 格式，"
+                    f"当前值：{checkpoint_sha!r}"
+                )
+            logger.warning(
+                "PI05_CHECKPOINT_SHA 未设置或格式不符（%r），dummy 模式使用占位值",
+                checkpoint_sha,
             )
+            checkpoint_sha = "sha256:" + "0" * 64
+        if not is_pinned_artifact_digest(norm_stats_sha):
+            if self.mode == "real":
+                raise ValueError(
+                    "real 模式必须设置 PI05_NORM_STATS_SHA 为 sha256:<64hex> 格式，"
+                    f"当前值：{norm_stats_sha!r}"
+                )
+            logger.warning(
+                "PI05_NORM_STATS_SHA 未设置或格式不符（%r），dummy 模式使用占位值",
+                norm_stats_sha,
+            )
+            norm_stats_sha = "sha256:" + "0" * 64
         return ExecutorDescriptor(
             name="pi05",
             task_types=frozenset(

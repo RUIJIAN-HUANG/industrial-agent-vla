@@ -127,6 +127,26 @@ except Exception as _e:
     ObsPacket = None  # type: ignore
     logger.error("Pi05Executor 导入失败：%s；服务将以错误状态启动", _e)
 
+# 统一 ImageReference 工具（与 pi05_contract_adapter.py 共享）
+try:
+    from services.pi05.src.observation import (  # type: ignore
+        image_reference_to_placeholder,
+        is_image_reference,
+    )
+except Exception:
+    # 回退（不应发生；observation.py 与 openpi_service.py 同包）
+    def is_image_reference(value: Any) -> bool:  # type: ignore[no-redef]
+        return isinstance(value, dict) and all(
+            value.get(key)
+            for key in ("uri", "image_sha256", "camera_id", "width", "height")
+        )
+
+    def image_reference_to_placeholder(image_ref: dict[str, Any]) -> np.ndarray:  # type: ignore[no-redef]
+        w = max(1, min(int(image_ref.get("width", 640)), 4096))
+        h = max(1, min(int(image_ref.get("height", 480)), 4096))
+        return np.zeros((h, w, 3), dtype=np.uint8)
+
+
 # 稳定错误码枚举（方案书 §13；src/industrial_agent/errors.py 为冻结文件，仅 import）
 try:
     from src.industrial_agent.errors import FailureCode  # type: ignore
@@ -402,10 +422,20 @@ def _make_infer_error_body(
 def _build_obs_from_model_input(
     model_input: dict[str, Any], req: dict[str, Any]
 ) -> Any:
-    """从 model_input 构造 ObsPacket（方案书 §7.3 π0.5 model_input）。
+    """从 model_input 构造 ObsPacket（对齐 Pi05Adapter 发出的 pi05ModelInput）。
 
-    model_input.observation 为 canonical Observation（含 camera/robot/safety）。
-    真实部署图像经共享内存 URI 传递；dummy 模式不依赖像素内容，缺图时用零图占位。
+    Pi05Adapter（src/industrial_agent/executor.py §A）发送的 model_input 结构：
+      - prompt: str
+      - observation:
+          camera:
+            full_image: ImageReference {uri, image_sha256, camera_id, width, height}
+            wrist_image: ImageReference | null
+          robot:
+            state: [float, ...]           # arm_a.state（_phase_vla_inputs 已提取）
+            tcp_pose_m_rad: [float x6+]   # arm_a.tcp_pose_m_rad
+
+    ImageReference 不含原始像素；dummy 模式按尺寸创建零图占位（Pi05Executor._infer_mock
+    不依赖像素内容）。真实部署需在调用前将 ImageReference 解析为像素后注入。
     """
     if ObsPacket is None:
         raise RuntimeError("ObsPacket 不可用（执行器未导入）")
@@ -421,45 +451,64 @@ def _build_obs_from_model_input(
     camera = observation.get("camera", {}) or {}
     if not isinstance(camera, dict):
         raise ValueError("observation.camera 必须是对象")
+
+    # ---- full_image（Pi05Adapter 发送 ImageReference，不含原始像素）----
     full_image = camera.get("full_image", {}) or {}
     if not isinstance(full_image, dict):
         full_image = {}
 
-    # 优先解析直接像素（pixels/data/list）；URI 共享内存场景由部署方解析后注入
-    rgb_front: Any = None
-    for key in ("pixels", "data", "rgb_front"):
-        if key in full_image and full_image[key] is not None:
-            try:
-                rgb_front = np.array(full_image[key], dtype=np.uint8)
-                break
-            except Exception as e:
-                raise ValueError(
-                    f"observation.camera.full_image.{key} 无法转为 uint8 数组：{e}"
-                )
-    if rgb_front is None:
-        # dummy 模式零图占位（Pi05Executor._infer_mock 不依赖像素内容）
-        rgb_front = np.zeros((4, 4, 3), dtype=np.uint8)
-
-    rgb_wrist: Any = None
-    wrist_image = camera.get("wrist_image", {}) or {}
-    if isinstance(wrist_image, dict):
-        for key in ("pixels", "data", "rgb_wrist"):
-            if key in wrist_image and wrist_image[key] is not None:
+    if is_image_reference(full_image):
+        rgb_front = image_reference_to_placeholder(full_image)
+    else:
+        # 旧版兼容：尝试直接像素（pixels/data 键）
+        rgb_front = None
+        for key in ("pixels", "data", "rgb_front"):
+            if key in full_image and full_image[key] is not None:
                 try:
-                    rgb_wrist = np.array(wrist_image[key], dtype=np.uint8)
-                except Exception:
-                    rgb_wrist = None
-                break
+                    rgb_front = np.array(full_image[key], dtype=np.uint8)
+                    break
+                except Exception as e:
+                    raise ValueError(
+                        f"observation.camera.full_image.{key} 无法转为 uint8 数组：{e}"
+                    )
+        if rgb_front is None:
+            rgb_front = np.zeros((4, 4, 3), dtype=np.uint8)
 
+    # ---- wrist_image（ImageReference / null / pixels dict）----
+    rgb_wrist: Any = None
+    wrist_image = camera.get("wrist_image")  # 直接取值，不 || {} 以免 None→{}
+    if wrist_image is None:
+        rgb_wrist = None
+    elif isinstance(wrist_image, dict):
+        if is_image_reference(wrist_image):
+            rgb_wrist = image_reference_to_placeholder(wrist_image)
+        else:
+            for key in ("pixels", "data", "rgb_wrist"):
+                if key in wrist_image and wrist_image[key] is not None:
+                    try:
+                        rgb_wrist = np.array(wrist_image[key], dtype=np.uint8)
+                        break
+                    except Exception:
+                        rgb_wrist = None
+
+    # ---- robot state（Pi05Adapter 已提取 arm_a.state → 顶层 state）----
     robot = observation.get("robot", {}) or {}
     if not isinstance(robot, dict):
         raise ValueError("observation.robot 必须是对象")
-    state_src = robot.get("state", robot.get("tcp_pose_m_rad", []))
+    # state 和 tcp_pose_m_rad 语义不同（state 可含关节角+TCP位姿，
+    # tcp_pose 仅为 6 维 TCP 位姿），不回退混用。
+    state_src = robot.get("state")
+    if state_src is None:
+        raise ValueError(
+            "observation.robot.state 是必填字段（Pi05Adapter 从 arm_a.state 提取）"
+        )
     try:
         robot_state = np.array(state_src, dtype=np.float32)
     except Exception as e:
         raise ValueError(f"observation.robot.state 无法转为 float32 数组：{e}")
 
+    # safety / timestamp_ms 在 pi05ModelInput 的 observation 中不存在
+    # （Pi05Adapter 不注入这些字段），使用默认值。
     safety = observation.get("safety", {}) or {}
     if not isinstance(safety, dict):
         safety = {}

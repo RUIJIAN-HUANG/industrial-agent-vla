@@ -55,7 +55,11 @@ from starlette.testclient import TestClient
 
 from services.pi05.src import openpi_service
 from services.pi05.src.action import CanonicalActionChunk
-from services.pi05.src.observation import ObsPacket
+from services.pi05.src.observation import (
+    ObsPacket,
+    image_reference_to_placeholder,
+    is_image_reference,
+)
 
 # ---------------------------------------------------------------------------
 # 常量（严格对齐方案书 §3.4 / openpi_service.py 模块常量）
@@ -645,3 +649,354 @@ def test_service_stress(ws_context, mock_executor: MagicMock):
         # 过期 chunk 被新 chunk 覆盖（timestamp 更新，证明旧 chunk 被丢弃）
         new_ts = openpi_service.pending_chunks["timeout-ep"]["timestamp"]
         assert new_ts > old_ts, "过期 chunk 应被丢弃并替换"
+
+
+# ---------------------------------------------------------------------------
+# 8. ImageReference 辅助函数测试（openpi_service._is_image_reference /
+#    _zero_placeholder_from_image_ref / _build_obs_from_model_input）
+# ---------------------------------------------------------------------------
+def test_is_image_reference_detects_valid():
+    """is_image_reference 识别合规 ImageReference 字典。"""
+    assert (
+        is_image_reference(
+            {
+                "uri": "cas://sha256/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "image_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "camera_id": "CAM_A_TOP",
+                "width": 640,
+                "height": 480,
+            }
+        )
+        is True
+    )
+
+
+def test_is_image_reference_rejects_legacy_pixels():
+    """is_image_reference 拒绝旧版 pixels dict（不含 uri/image_sha256）。"""
+    assert is_image_reference({"pixels": [1, 2, 3]}) is False
+    assert is_image_reference({"data": b"fake"}) is False
+    assert is_image_reference({}) is False
+
+
+def test_is_image_reference_rejects_non_dict():
+    """is_image_reference 拒绝非 dict 输入。"""
+    assert is_image_reference(None) is False
+    assert is_image_reference("not a dict") is False
+    assert is_image_reference([]) is False
+
+
+def test_is_image_reference_rejects_missing_field():
+    """is_image_reference 缺少任一字段时返回 False（严格 5 字段校验）。"""
+    base = {
+        "uri": "cas://sha256/" + "a" * 64,
+        "image_sha256": "sha256:" + "a" * 64,
+        "camera_id": "CAM_A_TOP",
+        "width": 640,
+        "height": 480,
+    }
+    for field in list(base):
+        partial = dict(base)
+        del partial[field]
+        assert is_image_reference(partial) is False, f"缺少 {field} 应判为 False"
+    # 字段值为空/None 也判 False
+    for field in list(base):
+        partial = dict(base)
+        partial[field] = ""
+        assert is_image_reference(partial) is False, f"{field}='' 应判为 False"
+
+
+def test_zero_placeholder_uses_image_ref_dimensions():
+    """image_reference_to_placeholder 按 ImageReference 尺寸创建零图。"""
+    ref = {
+        "uri": "cas://sha256/" + "b" * 64,
+        "image_sha256": "sha256:" + "b" * 64,
+        "camera_id": "CAM_A_TOP",
+        "width": 320,
+        "height": 240,
+    }
+    img = image_reference_to_placeholder(ref)
+    assert img.dtype == np.uint8
+    assert img.shape == (240, 320, 3)
+    assert np.all(img == 0)
+
+
+def test_zero_placeholder_fallback_dimensions():
+    """image_reference_to_placeholder 在尺寸非法时回退默认 640x480。"""
+    ref_bad = {
+        "uri": "cas://sha256/" + "c" * 64,
+        "image_sha256": "sha256:" + "c" * 64,
+        "camera_id": "CAM_A_TOP",
+        "width": -1,
+        "height": 0,
+    }
+    img = image_reference_to_placeholder(ref_bad)
+    assert img.shape == (480, 640, 3)
+
+
+def test_zero_placeholder_clamps_oversized():
+    """image_reference_to_placeholder 尺寸超过 4096 时钳制。"""
+    ref_huge = {
+        "uri": "cas://sha256/" + "d" * 64,
+        "image_sha256": "sha256:" + "d" * 64,
+        "camera_id": "CAM_A_TOP",
+        "width": 8192,
+        "height": 5000,
+    }
+    img = image_reference_to_placeholder(ref_huge)
+    assert img.shape[0] == 4096  # 钳制
+    assert img.shape[1] == 4096  # 钳制
+
+
+# ---------------------------------------------------------------------------
+# 9. HTTP /v1/infer 端点测试（新 pi05ModelInput 格式，ImageReference + arm_a）
+# ---------------------------------------------------------------------------
+TEST_CKPT_SHA_HTTP = (
+    "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+)
+TEST_NORM_SHA_HTTP = (
+    "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+)
+
+
+def _make_http_infer_body(
+    task_id: str = "job-1:S01_ARM_A_PACK_HANDOFF",
+    prompt: str = "将工作区中的四个红色零件依次装入料箱",
+    full_image: dict | None = None,
+    wrist_image: dict | None = None,
+    robot_state: list | None = None,
+) -> dict[str, Any]:
+    """构造 HTTP /v1/infer 请求体（对齐 Pi05Adapter.plan() 发出的新格式）。
+
+    Pi05Adapter 发送的 model_input 符合 schemas/executor-infer.schema.json
+    #$defs/pi05ModelInput：prompt + observation{camera{full_image,wrist_image},
+    robot{state,tcp_pose_m_rad}}。
+    """
+    if full_image is None:
+        full_image = {
+            "uri": "cas://sha256/" + "a" * 64,
+            "image_sha256": "sha256:" + "a" * 64,
+            "camera_id": "CAM_A_TOP",
+            "width": 640,
+            "height": 480,
+        }
+    if robot_state is None:
+        robot_state = [0.51, -0.03, 0.42, 0.01, 0.02, -0.01, 0.0]
+    # tcp_pose_m_rad 至少 6 维（schemas/executor-infer.schema.json minItems=6）
+    tcp_pose = [0.51, -0.03, 0.42, 0.01, 0.02, -0.01]
+
+    return {
+        "schema_version": "1.0",
+        "request_id": "req-http-001",
+        "trace_id": "trace-9001",
+        "episode_id": "episode-17",
+        "task_id": task_id,
+        "subtask_id": "S01_ARM_A_PACK_HANDOFF",
+        "step_id": 0,
+        "observation_id": "obs-1029",
+        "deadline_ms": 15000,
+        "executor": "pi05",
+        "checkpoint_sha": TEST_CKPT_SHA_HTTP,
+        "norm_stats_sha": TEST_NORM_SHA_HTTP,
+        "expected_action_contract": "1.0",
+        "model_input": {
+            "prompt": prompt,
+            "observation": {
+                "camera": {
+                    "full_image": full_image,
+                    "wrist_image": wrist_image,
+                },
+                "robot": {
+                    "state": robot_state,
+                    "tcp_pose_m_rad": tcp_pose,
+                },
+            },
+        },
+    }
+
+
+def test_http_infer_with_image_reference(test_client, mock_executor):
+    """HTTP /v1/infer 接收 ImageReference 格式 model_input 并返回合规 action_chunk。
+
+    Pi05Adapter 新契约发送 ImageReference 而非原始像素；服务端按尺寸创建零图占位。
+    """
+    body = _make_http_infer_body()
+
+    resp = test_client.post("/v1/infer", json=body)
+    assert resp.status_code == 200, f"HTTP {resp.status_code}: {resp.json()}"
+
+    data = resp.json()
+    assert data["status"] == "ok"
+    assert data["schema_version"] == "1.0"
+    assert data["executor"] == "pi05"
+    assert data["request_id"] == "req-http-001"
+    assert data["task_id"] == "job-1:S01_ARM_A_PACK_HANDOFF"
+    assert data["subtask_id"] == "S01_ARM_A_PACK_HANDOFF"
+    assert data["checkpoint_sha"] == TEST_CKPT_SHA_HTTP
+    assert data["norm_stats_sha"] == TEST_NORM_SHA_HTTP
+
+    # action_chunk 符合 schemas/action-chunk.schema.json
+    ac = data["action_chunk"]
+    assert ac["contract_version"] == "1.0"
+    assert ac["executor"] == "pi05"
+    assert ac["action_space"] == "ee_delta_pose_gripper"
+    assert ac["frame"] == "robot_base"
+    assert ac["translation_unit"] == "m"
+    assert ac["rotation_unit"] == "rad"
+    assert ac["gripper_unit"] == "normalized"
+    assert len(ac["steps"]) >= 1
+    for step in ac["steps"]:
+        assert len(step["values"]) == 7
+        assert 1 <= step["duration_ms"] <= 10000
+
+    # timing 字段存在且非负
+    assert "timing" in data
+    assert data["timing"]["total_ms"] >= 0
+
+    # executor.infer 被调用，传入 ObsPacket
+    mock_executor.infer.assert_called_once()
+    obs = mock_executor.infer.call_args.args[0]
+    assert isinstance(obs, ObsPacket)
+    assert obs.instruction == body["model_input"]["prompt"]
+
+
+def test_http_infer_with_wrist_image_null(test_client, mock_executor):
+    """HTTP /v1/infer 接受 wrist_image=null。"""
+    body = _make_http_infer_body(wrist_image=None)
+    resp = test_client.post("/v1/infer", json=body)
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+
+
+def test_http_infer_sha_mismatch_rejected(test_client, mock_executor):
+    """HTTP /v1/infer 在校验 SHA 不匹配时返回 409 EXEC_2105_MODEL_REVISION_MISMATCH。"""
+    body = _make_http_infer_body()
+    body["checkpoint_sha"] = "sha256:" + "f" * 64  # 与服务端 TEST_CKPT_SHA_HTTP 不同
+
+    resp = test_client.post("/v1/infer", json=body)
+    assert resp.status_code == 409
+    assert resp.json()["status"] == "error"
+    assert resp.json()["error"]["code"] == "EXEC_2105_MODEL_REVISION_MISMATCH"
+    # executer.infer 不应该被调用
+    mock_executor.infer.assert_not_called()
+
+
+def test_http_infer_executor_name_mismatch(test_client, mock_executor):
+    """HTTP /v1/infer 在校验 executor 字段不匹配时返回 400 TASK_1001_INVALID。"""
+    body = _make_http_infer_body()
+    body["executor"] = "openvla_oft"  # 应为 pi05
+
+    resp = test_client.post("/v1/infer", json=body)
+    assert resp.status_code == 400
+    assert resp.json()["status"] == "error"
+    assert resp.json()["error"]["code"] == "TASK_1001_INVALID"
+    mock_executor.infer.assert_not_called()
+
+
+def test_http_infer_missing_required_fields(test_client, mock_executor):
+    """HTTP /v1/infer 缺少必填字段时返回 422 TASK_1001_INVALID。"""
+    body = _make_http_infer_body()
+    del body["model_input"]
+
+    resp = test_client.post("/v1/infer", json=body)
+    assert resp.status_code == 422
+    assert resp.json()["status"] == "error"
+    assert resp.json()["error"]["code"] == "TASK_1001_INVALID"
+    mock_executor.infer.assert_not_called()
+
+
+def test_http_infer_executor_unavailable_when_not_initialized(test_client):
+    """HTTP /v1/infer 在执行器未初始化时返回 503 EXEC_2101_UNAVAILABLE。"""
+    # 临时清空 executor 模拟未初始化状态
+    saved = openpi_service.executor
+    openpi_service.executor = None
+    try:
+        body = _make_http_infer_body()
+        resp = test_client.post("/v1/infer", json=body)
+        assert resp.status_code == 503
+        assert resp.json()["status"] == "error"
+        assert resp.json()["error"]["code"] == "EXEC_2101_UNAVAILABLE"
+    finally:
+        openpi_service.executor = saved
+
+
+def test_http_infer_legacy_pixels_fallback(test_client, mock_executor):
+    """HTTP /v1/infer 兼容旧版 pixels dict 格式（非 ImageReference）。"""
+    body = _make_http_infer_body()
+    # 替换为旧版格式：直接像素
+    body["model_input"]["observation"]["camera"]["full_image"] = {
+        "pixels": np.zeros((4, 4, 3), dtype=np.uint8).tolist(),
+    }
+    body["model_input"]["observation"]["camera"]["wrist_image"] = None
+
+    resp = test_client.post("/v1/infer", json=body)
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+    mock_executor.infer.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# 10. HTTP /v1/cancel 端点测试
+# ---------------------------------------------------------------------------
+def test_http_cancel_basic(test_client, mock_executor):
+    """HTTP /v1/cancel 基本流程：先 infer 后 cancel，返回 cancelled。"""
+    # 先发起一次 infer 使 task_id 被记录
+    body = _make_http_infer_body(task_id="job-cancel-1")
+    resp = test_client.post("/v1/infer", json=body)
+    assert resp.status_code == 200
+
+    # 取消
+    cancel_body = {
+        "schema_version": "1.0",
+        "request_id": "cancel-req-001",
+        "trace_id": "trace-9001",
+        "episode_id": "episode-17",
+        "task_id": "job-cancel-1",
+        "subtask_id": "S01_ARM_A_PACK_HANDOFF",
+        "reason": "test cancel",
+    }
+    resp = test_client.post("/v1/cancel", json=cancel_body)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "cancelled"
+    assert data["server_context_cleared"] is True
+    assert data["task_id"] == "job-cancel-1"
+
+
+def test_http_cancel_idempotent(test_client, mock_executor):
+    """HTTP /v1/cancel 幂等：重复 cancel 返回 already_completed。"""
+    body = _make_http_infer_body(task_id="job-cancel-idem")
+    test_client.post("/v1/infer", json=body)
+
+    cancel_body = {
+        "schema_version": "1.0",
+        "request_id": "cancel-req-002",
+        "trace_id": "trace-9001",
+        "episode_id": "episode-17",
+        "task_id": "job-cancel-idem",
+        "subtask_id": "S01_ARM_A_PACK_HANDOFF",
+        "reason": "test cancel",
+    }
+    # 第一次取消
+    resp1 = test_client.post("/v1/cancel", json=cancel_body)
+    assert resp1.json()["status"] == "cancelled"
+
+    # 第二次取消同一 task_id
+    resp2 = test_client.post("/v1/cancel", json=cancel_body)
+    assert resp2.json()["status"] == "already_completed"
+
+
+def test_http_cancel_unknown_task_returns_not_found(test_client):
+    """HTTP /v1/cancel 对未 infer 过的 task_id 返回 not_found。"""
+    cancel_body = {
+        "schema_version": "1.0",
+        "request_id": "cancel-req-003",
+        "trace_id": "trace-9001",
+        "episode_id": "episode-17",
+        "task_id": "never-seen-task",
+        "subtask_id": "S01_ARM_A_PACK_HANDOFF",
+        "reason": "test cancel",
+    }
+    resp = test_client.post("/v1/cancel", json=cancel_body)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "not_found"
