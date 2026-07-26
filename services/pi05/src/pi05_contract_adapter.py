@@ -110,11 +110,18 @@ class Pi05ContractAdapter:
         )
         try:
             canonical = self._executor.infer(obs_packet)
-        except Exception as exc:
-            # FailureCode 无 EXECUTOR_INFERENCE_FAILED；EXECUTOR_RUNTIME 对应模型运行错误
+        except (ValueError, TypeError, KeyError) as exc:
+            # 输入/参数错误（数据非法、维度不匹配等），重试无效
             raise ExecutorError(
                 FailureCode.EXECUTOR_RUNTIME,
-                f"π0.5 inference failed: {exc}",
+                f"π0.5 inference failed (input error): {exc}",
+                retryable=False,
+            ) from exc
+        except Exception as exc:
+            # 运行时错误（网络超时、模型 OOM 等），可重试
+            raise ExecutorError(
+                FailureCode.EXECUTOR_RUNTIME,
+                f"π0.5 inference failed (runtime): {exc}",
                 retryable=True,
             ) from exc
         return self._executor.to_action_chunk(canonical, task.task_id, "pi05")

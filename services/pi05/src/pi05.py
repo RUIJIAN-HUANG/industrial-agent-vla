@@ -26,6 +26,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -257,6 +258,7 @@ class Pi05Executor(BaseExecutor):
         self._current_episode_id: str | None = None
         self._last_latency_ms: int | None = None
         self._last_truncation_count: int = 0
+        self._state_lock = threading.Lock()  # 保护 _pending_chunk 并发读写
 
         # ---- 初始化 ----
         self._load_norm_stats_sha()
@@ -507,8 +509,9 @@ class Pi05Executor(BaseExecutor):
         self._last_latency_ms = latency_ms
 
         # 记录待执行动作队列（切换时清空，方案书 §3.3.1 Para186）
-        self._pending_chunk = actions_7.copy()
-        self._pending_generated_step = obs.step_id
+        with self._state_lock:
+            self._pending_chunk = actions_7.copy()
+            self._pending_generated_step = obs.step_id
 
         logger.info(
             "infer episode=%s step=%d shape=%s latency=%dms mode=%s trunc=%d",
@@ -534,14 +537,15 @@ class Pi05Executor(BaseExecutor):
     # ===================== 失败切换 =====================
     def cancel_pending_chunk(self) -> None:
         """失败切换时清空动作队列与客户端缓存（方案书 §3.3.1 Para186：不得保留旧动作块）。"""
-        if self._pending_chunk is not None:
-            logger.info(
-                "cancel_pending_chunk：丢弃 %d 步待执行动作块（generated_step=%d）",
-                self._pending_chunk.shape[0],
-                self._pending_generated_step,
-            )
-        self._pending_chunk = None
-        self._pending_generated_step = -1
+        with self._state_lock:
+            if self._pending_chunk is not None:
+                logger.info(
+                    "cancel_pending_chunk：丢弃 %d 步待执行动作块（generated_step=%d）",
+                    self._pending_chunk.shape[0],
+                    self._pending_generated_step,
+                )
+            self._pending_chunk = None
+            self._pending_generated_step = -1
         # 清空策略客户端缓存（若 API 暴露）
         if self._policy is not None:
             try:

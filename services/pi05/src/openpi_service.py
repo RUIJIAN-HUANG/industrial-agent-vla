@@ -162,8 +162,8 @@ pending_chunks: dict[str, dict] = {}
 _pending_chunks_lock: asyncio.Lock = (
     asyncio.Lock()
 )  # 并发保护（方案书 §7.1：多 episode 并发安全）
-current_episode_id: str | None = None
-last_step_id: int | None = None
+# current_episode_id / last_step_id 已从模块级全局变量迁移到 ws_infer() 内部
+# per-connection 局部变量，消除多 WebSocket 连接串扰。
 
 
 def _init_executor() -> None:
@@ -239,9 +239,14 @@ def _validate_sha_format(sha: str, field_name: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# /v1/cancel 幂等状态：记录已取消的 task_id（方案书 §8：cancel 幂等）
+# /v1/cancel 幂等状态：记录已取消的 task_id → cancel_timestamp（方案书 §8：cancel 幂等）
+# 改为 dict[str, float]，每次 cancel 时清理超过 _CANCEL_TTL_S 的过期记录，
+# 防止长期运行下 set 无限增长导致内存泄漏。
 # ---------------------------------------------------------------------------
-_cancelled_tasks: set[str] = set()
+_CANCEL_TTL_S: float = 3600.0  # 已取消 task_id 保留 1 小时后自动清理
+_cancelled_tasks: dict[str, float] = {}
+# /v1/infer 提交过的 task_id，用于 cancel 时区分 not_found（方案书 §8：幂等语义）
+_seen_task_ids: dict[str, float] = {}
 _cancelled_tasks_lock: asyncio.Lock = asyncio.Lock()
 
 
@@ -671,6 +676,8 @@ async def http_infer(request: Request) -> JSONResponse:
             "total_ms": round((t_infer_end - t_request_start) * 1000, 3),
         },
     }
+    # 记录见过该 task_id（用于 /v1/cancel 幂等区分 not_found，方案书 §8）
+    _seen_task_ids[req["task_id"]] = time.time()
     return JSONResponse(status_code=200, content=response)
 
 
@@ -747,9 +754,26 @@ async def http_cancel(request: Request) -> JSONResponse:
 
     # ---- 幂等取消（方案书 §8：重复 cancel 返回 already_completed）----
     async with _cancelled_tasks_lock:
+        now = time.time()
+        # 清理超过 _CANCEL_TTL_S 的过期记录，防止长期运行内存泄漏
+        expired_cancel = [
+            k for k, t in _cancelled_tasks.items() if now - t > _CANCEL_TTL_S
+        ]
+        for k in expired_cancel:
+            del _cancelled_tasks[k]
+        expired_seen = [k for k, t in _seen_task_ids.items() if now - t > _CANCEL_TTL_S]
+        for k in expired_seen:
+            del _seen_task_ids[k]
+
         if task_id in _cancelled_tasks:
             status = "already_completed"
             cancelled_ids: list[str] = []
+            context_cleared = False
+        elif task_id not in _seen_task_ids:
+            # 从未见过该 task_id（/v1/infer 未提交过），幂等返回 not_found
+            # 方案书 §8：若从未见过该 ID，返回 200，status=not_found
+            status = "not_found"
+            cancelled_ids = []
             context_cleared = False
         else:
             # 调用 executor.cancel_pending_chunk() 清空待执行动作队列
@@ -761,7 +785,7 @@ async def http_cancel(request: Request) -> JSONResponse:
                         executor.cancel_pending_chunk()
                 except Exception as e:
                     logger.warning("cancel_pending_chunk 异常：%s", e)
-            _cancelled_tasks.add(task_id)
+            _cancelled_tasks[task_id] = now
             status = "cancelled"
             # 服务端未跟踪 infer request_id（无状态），无法列出被取消的具体 request_id
             cancelled_ids = []
@@ -901,39 +925,46 @@ def _validate_request(data: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
-def _check_episode_step(data: dict[str, Any]) -> dict[str, Any] | None:
+def _check_episode_step(
+    data: dict[str, Any],
+    prev_ep: str | None,
+    prev_sid: int | None,
+) -> tuple[dict[str, Any] | None, str | None, int | None]:
     """episode_id / step_id 连续性与动作块过期检查（方案书 §3.4 动作过期）。
 
-    返回值：错误 dict 表示应拒绝请求；None 表示通过。
+    纯函数：接收上一步状态，返回 (error | None, new_ep, new_sid)。
+    调用方 ws_infer() 持有 per-connection 局部变量，消除模块级全局变量的
+    多 WebSocket 连接串扰。
     pending_chunks 的并发读写由 ws_infer 中的 _pending_chunks_lock 保护。
     """
-    global current_episode_id, last_step_id
     ep = data["episode_id"]
     sid = data["step_id"]
+    new_ep = prev_ep
+    new_sid = prev_sid
 
-    # episode 切换：标记（实际清理由 ws_infer 在异步上下文中加锁完成）
-    if ep != current_episode_id:
-        logger.info(
-            "Episode changed, cleared pending chunks (prev=%s new=%s)",
-            current_episode_id,
-            ep,
-        )
-        current_episode_id = ep
-        last_step_id = None
+    # episode 切换：重置 step 追踪
+    if ep != prev_ep:
+        logger.info("Episode changed (prev=%s new=%s)", prev_ep, ep)
+        new_ep = ep
+        new_sid = None
 
     # episode 内 step_id 应递增（方案书 §7.2：防止超时返回的旧动作进入新 episode）
-    if last_step_id is not None and sid != last_step_id + 1:
-        logger.warning("step_id 不连续：期望 %d，收到 %d", last_step_id + 1, sid)
+    if new_sid is not None and sid != new_sid + 1:
+        logger.warning("step_id 不连续：期望 %d，收到 %d", new_sid + 1, sid)
     # 同一 episode 内 step_id 应递增；非递增拒绝执行（方案书 §3.4：step_id 不匹配必须丢弃）
-    if last_step_id is not None and sid <= last_step_id:
-        return {
-            "error": "stale_step_id",
-            "reason": f"step_id 未递增: last={last_step_id}, curr={sid}",
-            "schema_version": SCHEMA_VERSION,
-        }
-    last_step_id = sid
+    if new_sid is not None and sid <= new_sid:
+        return (
+            {
+                "error": "stale_step_id",
+                "reason": f"step_id 未递增: last={new_sid}, curr={sid}",
+                "schema_version": SCHEMA_VERSION,
+            },
+            new_ep,
+            new_sid,
+        )
+    new_sid = sid
 
-    return None
+    return (None, new_ep, new_sid)
 
 
 def _build_obs(data: dict[str, Any]) -> Any:
@@ -998,7 +1029,10 @@ async def ws_infer(ws: WebSocket) -> None:
     await ws.send_text(json.dumps(metadata, ensure_ascii=False))
     logger.info("WebSocket 连接建立，已发送 metadata")
 
-    # 本连接内的 episode 追踪（用于在异步上下文中触发 episode 切换清理）
+    # 本连接内的 episode/step 追踪（per-connection，替代模块级全局变量）
+    _conn_ep: str | None = None
+    _conn_sid: int | None = None
+    # 用于触发 episode 切换时的 pending_chunks 清理 + executor.reset()
     _ws_prev_episode_id: str | None = None
 
     try:
@@ -1032,19 +1066,26 @@ async def ws_infer(ws: WebSocket) -> None:
                 continue
 
             # episode/step 连续性与动作过期检查（方案书 §3.4）
-            # ---- 加锁保护 global current_episode_id / last_step_id / pending_chunks ----
-            # §7.1：多 episode 并发安全，所有全局状态读写必须在锁内完成。
+            # ---- 加锁保护 pending_chunks + per-connection step 追踪 ----
+            # §7.1：多 episode 并发安全，所有共享状态读写必须在锁内完成。
             async with _pending_chunks_lock:
-                step_err = _check_episode_step(data)
+                step_err, _conn_ep, _conn_sid = _check_episode_step(
+                    data, _conn_ep, _conn_sid
+                )
                 if step_err is not None:
                     await _send_error(ws, step_err)
                     continue
 
-                # episode 切换时清空 pending_chunks（方案书 §3.3.1 Para186）
+                # episode 切换时清空 pending_chunks + 重置执行器（方案书 §3.3.1 Para186）
                 ep = data["episode_id"]
                 if ep != _ws_prev_episode_id:
                     pending_chunks.clear()
                     _ws_prev_episode_id = ep
+                    if executor is not None:
+                        try:
+                            executor.reset()
+                        except Exception as e:
+                            logger.warning("执行器 reset 异常：%s", e)
                 # 检查当前 episode 的 pending chunk 是否过期，过期则丢弃
                 expired_chunk = pending_chunks.get(ep)
                 if expired_chunk is not None:
@@ -1060,14 +1101,6 @@ async def ws_infer(ws: WebSocket) -> None:
                             ttl,
                         )
                         pending_chunks.pop(ep, None)
-
-                # episode 切换时重置执行器（reset() 内部已调用 cancel_pending_chunk()）
-                if ep != current_episode_id:
-                    if executor is not None:
-                        try:
-                            executor.reset()
-                        except Exception as e:
-                            logger.warning("执行器 reset 异常：%s", e)
 
             # 构造 ObsPacket
             try:
@@ -1139,6 +1172,13 @@ async def ws_infer(ws: WebSocket) -> None:
     except Exception as e:
         logger.error("WebSocket 异常：%s", e)
     finally:
+        # 清理本连接的 pending_chunk 残留（方案书 §3.3.1 Para186：断开时不留脏数据）
+        if _ws_prev_episode_id is not None:
+            try:
+                async with _pending_chunks_lock:
+                    pending_chunks.pop(_ws_prev_episode_id, None)
+            except Exception:
+                pass
         logger.info("WebSocket 连接关闭")
 
 

@@ -280,7 +280,7 @@ def parse_args() -> argparse.Namespace:
         "--image_size",
         type=int,
         nargs=2,
-        default=list(DEFAULT_IMAGE_HW),
+        default=DEFAULT_IMAGE_HW,
         help="图像 resize 尺寸（H W），默认 256 256。",
     )
     parser.add_argument(

@@ -49,22 +49,16 @@ except Exception:
     OPENPI_AVAILABLE = False
 
 # ---------------------------------------------------------------------------
-# openpi 远程客户端依赖（WebSocket）
-# ---------------------------------------------------------------------------
-try:
-    WS_CLIENT_AVAILABLE = True
-except Exception:
-    WS_CLIENT_AVAILABLE = False
-
-# ---------------------------------------------------------------------------
-# 原生 WebSocket 依赖（用于与 openpi_service.py 协议通信）
+# WebSocket 依赖（用于与 openpi_service.py 协议通信）
+# 原 WS_CLIENT_AVAILABLE 为永真占位（try 块无实际操作），
+# 现已删除，改为真实 import websockets 检测。
 # ---------------------------------------------------------------------------
 try:
     import websockets  # type: ignore
 
-    _NATIVE_WS_AVAILABLE = True
+    WS_CLIENT_AVAILABLE = True
 except Exception:
-    _NATIVE_WS_AVAILABLE = False
+    WS_CLIENT_AVAILABLE = False
 
 try:
     import msgpack as _msgpack  # type: ignore
@@ -118,7 +112,7 @@ class WebsocketPolicyClient:
     """
 
     def __init__(self, host: str, port: int) -> None:
-        if not _NATIVE_WS_AVAILABLE:
+        if not WS_CLIENT_AVAILABLE:
             raise RuntimeError(
                 "websockets 库不可用，无法创建 WebSocket 连接。"
                 "请安装: pip install websockets"

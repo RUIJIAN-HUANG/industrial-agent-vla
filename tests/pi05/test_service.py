@@ -212,9 +212,8 @@ def test_client(mock_executor: MagicMock):
     # ---- 重置全局状态（防止跨测试串扰，方案书 §7.1 多 episode 并发安全）----
     openpi_service.executor = None
     openpi_service.pending_chunks.clear()
-    openpi_service.current_episode_id = None
-    openpi_service.last_step_id = None
     openpi_service._cancelled_tasks.clear()
+    openpi_service._seen_task_ids.clear()
     # 重建 lock：避免绑定到上一个 TestClient 的事件循环（Python 3.10+ _LoopBoundMixin）
     openpi_service._pending_chunks_lock = asyncio.Lock()
     openpi_service._cancelled_tasks_lock = asyncio.Lock()
@@ -227,9 +226,8 @@ def test_client(mock_executor: MagicMock):
     # ---- 清理全局状态 ----
     openpi_service.executor = None
     openpi_service.pending_chunks.clear()
-    openpi_service.current_episode_id = None
-    openpi_service.last_step_id = None
     openpi_service._cancelled_tasks.clear()
+    openpi_service._seen_task_ids.clear()
 
 
 @pytest.fixture
@@ -519,9 +517,10 @@ def test_action_expiry(ws_context, mock_executor: MagicMock):
         assert "expire-ep" not in openpi_service.pending_chunks
         # 新 episode 的 chunk 已存储
         assert "new-ep-after-switch" in openpi_service.pending_chunks
-        # step_id 跟踪已重置：新 episode 内 step_id=0 被接受（last_step_id 已置 None）
-        assert openpi_service.last_step_id == 0
-        assert openpi_service.current_episode_id == "new-ep-after-switch"
+        # step_id 跟踪已重置：新 episode 内 step_id=0 被接受（per-connection 追踪已置 None）
+        assert "step_id 未递增" not in str(resp_new_ep), (
+            "新 episode 的 step_id=0 应被接受（per-connection 状态已重置）"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -612,9 +611,10 @@ def test_service_stress(ws_context, mock_executor: MagicMock):
         f"内存增长过大: {total_growth / 1024 / 1024:.2f} MB（应 < 20MB）"
     )
 
-    # ---- pending_chunks 不累积：同 episode 只有 1 条记录 ----
-    assert len(openpi_service.pending_chunks) == 1
-    assert episode in openpi_service.pending_chunks
+    # ---- pending_chunks 连接断开后已清理（Bug 7 修复：finally 块 pop）----
+    assert len(openpi_service.pending_chunks) == 0, (
+        "WebSocket 断开后 pending_chunks 应被清理（非泄漏）"
+    )
 
     # ---- executor.infer 被调用 100 次 ----
     assert mock_executor.infer.call_count == 100
