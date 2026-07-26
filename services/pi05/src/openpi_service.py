@@ -472,7 +472,7 @@ def _build_obs_from_model_input(
                         f"observation.camera.full_image.{key} 无法转为 uint8 数组：{e}"
                     )
         if rgb_front is None:
-            rgb_front = np.zeros((4, 4, 3), dtype=np.uint8)
+            rgb_front = np.zeros((224, 224, 3), dtype=np.uint8)
 
     # ---- wrist_image（ImageReference / null / pixels dict）----
     rgb_wrist: Any = None

@@ -105,11 +105,22 @@ class Pi05ContractAdapter:
 
         # ---- arm_a_rgb（框架固定 camera_key，不使用 camera.full_image）----
         raw_front = camera.get("arm_a_rgb")
+        if raw_front is None:
+            raise ExecutorError(
+                FailureCode.EXECUTOR_BAD_RESPONSE,
+                "camera.arm_a_rgb is required (Pi05Adapter._phase_vla_inputs "
+                "guarantees this field; observation may be corrupted)",
+            )
         if is_image_reference(raw_front):
             # ImageReference 不含原始像素 → 零图占位（dummy 模式不依赖像素内容）
             rgb_front = image_reference_to_placeholder(raw_front)
         else:
             rgb_front = _decode_image(raw_front)
+        if rgb_front is None:
+            raise ExecutorError(
+                FailureCode.EXECUTOR_BAD_RESPONSE,
+                "camera.arm_a_rgb could not be decoded to uint8[H,W,3]",
+            )
 
         # ---- wrist_image（ImageReference 或 null）----
         raw_wrist = camera.get("wrist_image")
