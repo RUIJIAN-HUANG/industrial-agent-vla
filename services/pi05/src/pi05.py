@@ -28,7 +28,6 @@ import logging
 import os
 import threading
 import time
-from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
@@ -44,64 +43,9 @@ if not logger.handlers:
 logger.setLevel(logging.INFO)
 
 
-# ---------------------------------------------------------------------------
-# 共享 schema / 基类
-# 方案书 §7.3 仓库结构：services/pi05/src/{observation,action,base}.py。
-# A 提供正式版本前，优先 import；import 失败时使用本文件内占位定义，保证可独立运行。
-# 正式 contracts/base 落地后，删除 except 分支即可。
-# ---------------------------------------------------------------------------
-try:  # 正式 contracts（A 提供）
-    from services.pi05.src.action import CanonicalActionChunk  # type: ignore
-    from services.pi05.src.observation import ObsPacket  # type: ignore
-except Exception:  # 占位定义（A 提供 contracts 后删除本分支）
-
-    @dataclass
-    class ObsPacket:
-        """总 Agent → 执行器的观测包（方案书 §3.4 ObsPacket v1）。"""
-
-        episode_id: str
-        step_id: int
-        timestamp_ns: int
-        rgb_front: np.ndarray  # uint8[H,W,3] 原始 RGB，不做预处理
-        rgb_wrist: np.ndarray | None  # uint8[H,W,3]
-        robot_state: np.ndarray  # float32[d] 本体状态
-        instruction: str  # 完整自然语言
-        runtime_flags: dict = field(
-            default_factory=dict
-        )  # {terminated,truncated,camera_ok}
-
-    @dataclass
-    class CanonicalActionChunk:
-        """执行器 → 总 Agent 的统一动作块（方案书 §3.4 CanonicalActionChunk v1）。"""
-
-        actions: np.ndarray  # float32[N,7] [dx,dy,dz,dax,day,daz,gripper]
-        space_id: str = "eef_delta_xyz_axisangle_gripper_v1"
-        frame: str = "robot_base"
-        control_hz: int = 10
-        generated_step: int = 0
-        source_policy: str = "pi05"
-        checkpoint_sha: str = ""
-        expires_after_ms: int = 1000
-
-
-try:  # 正式基类（A 提供）
-    from services.pi05.src.base import BaseExecutor  # type: ignore
-except Exception:  # 占位基类（A 提供 base.py 后删除本分支）
-
-    class BaseExecutor:  # type: ignore[no-redef]
-        """占位基类。A 提供正式 BaseExecutor 后此分支不再生效。"""
-
-        def infer(self, obs: ObsPacket) -> CanonicalActionChunk:  # pragma: no cover
-            raise NotImplementedError
-
-        def cancel_pending_chunk(self) -> None:  # pragma: no cover
-            raise NotImplementedError
-
-        def reset(self) -> None:  # pragma: no cover
-            raise NotImplementedError
-
-        def health_check(self) -> dict:  # pragma: no cover
-            raise NotImplementedError
+from services.pi05.src.action import CanonicalActionChunk
+from services.pi05.src.base import BaseExecutor
+from services.pi05.src.observation import ObsPacket
 
 
 # ---------------------------------------------------------------------------
@@ -148,6 +92,13 @@ GRIPPER_OPEN = 1.0
 GRIPPER_CLOSE = 0.0
 
 ACTION_DIM = 7  # [dx,dy,dz,dax,day,daz,gripper]
+
+
+# 推理专用异常（ValueError 子类，契约适配器 catch block 将其视为不可重试）
+class InferenceError(ValueError):
+    """策略推理返回了不符合协议约定的动作（None / 0维 / 空数组）。"""
+
+
 DIM_NAMES = ["dx", "dy", "dz", "dax", "day", "daz", "gripper"]
 MOCK_CHUNK_LEN = 10  # Mock 动作块长度（LIBERO 配置常用 10，方案书 §3.3）
 CONTROL_HZ = 10  # 方案书 §3.4 control_hz
@@ -494,6 +445,8 @@ class Pi05Executor(BaseExecutor):
 
         # ---- 动作块适配（方案书 §3.3.1 Para185）----
         raw = np.asarray(raw, dtype=np.float32)
+        if raw.size == 0 or raw.ndim == 0:
+            raise InferenceError("Policy returned empty or invalid actions")
         if raw.ndim == 1:
             raw = raw[None, :]
         if raw.shape[1] < ACTION_DIM:
@@ -600,6 +553,16 @@ class Pi05Executor(BaseExecutor):
             return int(out.decode().strip().splitlines()[0])
         except Exception:
             return None
+
+    @property
+    def checkpoint_sha(self) -> str:
+        """返回 checkpoint SHA（对齐 ExecutorDescriptor.checkpoint_sha）。"""
+        return self._checkpoint_sha
+
+    @property
+    def norm_stats_sha(self) -> str:
+        """返回 norm_stats SHA（对齐 ExecutorDescriptor.norm_stats_sha）。"""
+        return self._norm_stats_sha
 
     def health_check(self) -> dict:
         """返回健康状态（方案书 §7.1）。"""

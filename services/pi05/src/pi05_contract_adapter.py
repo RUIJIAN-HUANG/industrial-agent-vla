@@ -25,6 +25,11 @@ from src.industrial_agent.contracts import ActionChunk, Observation, TaskSchema
 from src.industrial_agent.errors import ExecutorError, FailureCode
 from src.industrial_agent.executor import ExecutionContext, ExecutorDescriptor
 
+try:
+    from configs.pi05.train_config import STATE_DIM  # type: ignore
+except Exception:
+    STATE_DIM = 8  # Franka 7-DOF + 1 gripper
+
 logger = logging.getLogger("pi05.contract_adapter")
 
 
@@ -138,15 +143,16 @@ class Pi05ContractAdapter:
         robot_raw = arm_a.get("state", arm_a.get("tcp_pose_m_rad"))
         if robot_raw is None:
             logger.warning(
-                "robot.arm_a 缺失 state/tcp_pose_m_rad，使用零状态占位 "
-                "(task_id=%s step=%d)",
+                "robot.arm_a state is missing, falling back to zero state "
+                "vector of dim %d (task_id=%s step=%d)",
+                STATE_DIM,
                 task.task_id,
                 context.step_id,
             )
         robot_state = (
             np.asarray(robot_raw, dtype=np.float32)
             if robot_raw is not None
-            else np.zeros(0, dtype=np.float32)
+            else np.zeros(STATE_DIM, dtype=np.float32)
         )
 
         # 优先使用 context.original_instruction（FixedDualVLAPlanner 设定的冻结指令）

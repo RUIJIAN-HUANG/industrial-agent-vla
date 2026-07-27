@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 import json
 import logging
 import os
@@ -203,7 +204,7 @@ def _init_executor() -> None:
 def _checkpoint_sha() -> str:
     if executor is not None:
         try:
-            return getattr(executor, "_checkpoint_sha", "") or ""
+            return executor.checkpoint_sha or ""
         except Exception:
             return ""
     return ""
@@ -212,7 +213,7 @@ def _checkpoint_sha() -> str:
 def _norm_stats_sha() -> str:
     if executor is not None:
         try:
-            return getattr(executor, "_norm_stats_sha", "") or ""
+            return executor.norm_stats_sha or ""
         except Exception:
             return ""
     return ""
@@ -273,11 +274,10 @@ _cancelled_tasks_lock: asyncio.Lock = asyncio.Lock()
 # ---------------------------------------------------------------------------
 # FastAPI app
 # ---------------------------------------------------------------------------
-app = FastAPI(title="openpi π0.5 Service", version="1.0.0")
 
 
-@app.on_event("startup")
-async def _on_startup() -> None:
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     """启动时初始化执行器并打印自测日志。"""
     _init_executor()
     logger.info("===== openpi_service 启动自检 =====")
@@ -304,6 +304,10 @@ async def _on_startup() -> None:
     logger.info("推理端点：http://%s:%d/v1/infer", SERVICE_HOST, SERVICE_PORT)
     logger.info("取消端点：http://%s:%d/v1/cancel", SERVICE_HOST, SERVICE_PORT)
     logger.info("====================================")
+    yield
+
+
+app = FastAPI(title="openpi π0.5 Service", version="1.0.0", lifespan=lifespan)
 
 
 @app.get("/health")

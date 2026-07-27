@@ -264,7 +264,7 @@ def test_arm_a_missing_logs_warning_and_falls_back_to_zeros(caplog):
         adapter = Pi05ContractAdapter()
         adapter.plan(_make_task(), observation, _make_context())
 
-    warnings = [r for r in caplog.records if "零状态" in r.message]
+    warnings = [r for r in caplog.records if "state is missing" in r.message]
     assert len(warnings) >= 1, "arm_a 缺失应记录 WARNING 日志"
 
 

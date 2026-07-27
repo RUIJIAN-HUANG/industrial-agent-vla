@@ -181,9 +181,12 @@ def mock_executor() -> MagicMock:
     - _checkpoint_sha / _norm_stats_sha 属性供服务层 _checkpoint_sha() 读取
     """
     ex = MagicMock()
-    # 属性（_checkpoint_sha / _norm_stats_sha 被 openpi_service._checkpoint_sha() 读取）
+    # 属性（_checkpoint_sha / _norm_stats_sha 被 openpi_service._checkpoint_sha() 读取，
+    # 现通过 executor.checkpoint_sha / executor.norm_stats_sha 公共 property 访问）
     ex._checkpoint_sha = TEST_CHECKPOINT_SHA
     ex._norm_stats_sha = TEST_NORM_STATS_SHA
+    ex.checkpoint_sha = TEST_CHECKPOINT_SHA
+    ex.norm_stats_sha = TEST_NORM_STATS_SHA
     # health_check 返回合法字典（方案书 §7.1）
     ex.health_check.return_value = {
         "mode": "dummy",
