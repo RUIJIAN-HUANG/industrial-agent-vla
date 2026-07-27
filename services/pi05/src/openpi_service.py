@@ -27,11 +27,14 @@ from contextlib import asynccontextmanager
 import json
 import logging
 import os
+from pathlib import Path
 import re
 import sys
 import time
 from typing import Any
 from uuid import uuid4
+
+from jsonschema import Draft202012Validator, ValidationError as _SchemaValidationError
 
 # ---------------------------------------------------------------------------
 # 第三方依赖：FastAPI / uvicorn 必需；msgpack 可选（fallback JSON）
@@ -100,6 +103,42 @@ SUPPORTED_TASK_TYPES: list[str] = [
 SUPPORTED_ACTION_CONTRACTS: list[str] = [CONTRACT_SCHEMA_VERSION]
 
 # ---------------------------------------------------------------------------
+# 冻结 Schema 校验器（E-02：加载 executor-infer.schema.json / executor-cancel.schema.json）
+# ---------------------------------------------------------------------------
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+_INFER_SCHEMA_PATH = _PROJECT_ROOT / "schemas" / "executor-infer.schema.json"
+_CANCEL_SCHEMA_PATH = _PROJECT_ROOT / "schemas" / "executor-cancel.schema.json"
+
+
+def _load_request_validator(schema_path: Path) -> Draft202012Validator:
+    """从 $defs/request 提取并编译 JSON Schema 校验器。"""
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    request_schema: dict[str, Any] = {
+        "$schema": schema["$schema"],
+        "$defs": schema.get("$defs", {}),
+        "$ref": "#/$defs/request",
+    }
+    Draft202012Validator.check_schema(request_schema)
+    return Draft202012Validator(request_schema)
+
+
+_INFER_REQUEST_VALIDATOR = _load_request_validator(_INFER_SCHEMA_PATH)
+_CANCEL_REQUEST_VALIDATOR = _load_request_validator(_CANCEL_SCHEMA_PATH)
+
+# ---------------------------------------------------------------------------
+# CAS resolver gate（E-04：全仓缺少 CAS resolver，real 模式拒绝零图占位）
+# ---------------------------------------------------------------------------
+
+
+def _raise_cas_resolver_pending() -> None:
+    raise ExecutorError(
+        FailureCode.EXECUTOR_UNAVAILABLE,
+        "CAS resolver pending implementation by Role A — "
+        "真实模式禁止使用零图占位替代 CAS 图像下载",
+        retryable=True,
+    )
+
+# ---------------------------------------------------------------------------
 # 日志
 # ---------------------------------------------------------------------------
 logger = logging.getLogger("openpi_service")
@@ -133,6 +172,7 @@ try:
     from services.pi05.src.observation import (  # type: ignore
         image_reference_to_placeholder,
         is_image_reference,
+        validate_image_reference,
     )
 except Exception:
     # 回退（不应发生；observation.py 与 openpi_service.py 同包）
@@ -147,10 +187,36 @@ except Exception:
         h = max(1, min(int(image_ref.get("height", 480)), 4096))
         return np.zeros((h, w, 3), dtype=np.uint8)
 
+    def validate_image_reference(  # type: ignore[no-redef]
+        value: Any,
+        *,
+        expected_camera_id: str | None = None,
+    ) -> dict[str, Any]:
+        """回退版 ImageReference 校验（严格模式）。"""
+        if not isinstance(value, dict):
+            raise ValueError("ImageReference 必须是对象")
+        required = {"uri", "image_sha256", "camera_id", "width", "height"}
+        if set(value) != required:
+            raise ValueError(f"ImageReference 必须恰好包含 {required}")
+        _sha_pat = re.compile(r"^sha256:[0-9a-fA-F]{64}$")
+        if not isinstance(value["uri"], str) or not value["uri"].startswith("cas://sha256/"):
+            raise ValueError("ImageReference.uri 格式非法")
+        if not _sha_pat.fullmatch(value.get("image_sha256", "")):
+            raise ValueError("ImageReference.image_sha256 格式非法")
+        if expected_camera_id is not None and value.get("camera_id") != expected_camera_id:
+            raise ValueError(
+                f"ImageReference.camera_id 必须为 {expected_camera_id!r}"
+            )
+        for k in ("width", "height"):
+            v = value.get(k)
+            if isinstance(v, bool) or not isinstance(v, int) or v < 1:
+                raise ValueError(f"ImageReference.{k} 必须是正整数")
+        return value
+
 
 # 稳定错误码枚举（方案书 §13；src/industrial_agent/errors.py 为冻结文件，仅 import）
 try:
-    from src.industrial_agent.errors import FailureCode  # type: ignore
+    from src.industrial_agent.errors import ExecutorError, FailureCode  # type: ignore
 
     _FAILURE_CODE_AVAILABLE = True
 except Exception as _e:  # 退化：错误码用字符串常量兜底
@@ -167,6 +233,12 @@ except Exception as _e:  # 退化：错误码用字符串常量兜底
         INVALID_TASK = "TASK_1001_INVALID"
 
     FailureCode = _FailureCodeFallback  # type: ignore[assignment, misc]
+
+    class ExecutorError(Exception):  # type: ignore[no-redef]
+        def __init__(self, code: Any, message: str, *, retryable: bool = False):
+            super().__init__(message)
+            self.code = code
+            self.retryable = retryable
 
 # ---------------------------------------------------------------------------
 # 全局执行器实例 + 运行时状态
@@ -298,6 +370,7 @@ async def lifespan(app: FastAPI):
     _validate_sha_format(ckpt_sha, "checkpoint_sha")
     _validate_sha_format(norm_sha, "norm_stats_sha")
     logger.info("checkpoint_sha=%s norm_stats_sha=%s", ckpt_sha, norm_sha)
+    logger.info("Schema 校验器：infer=%s", _INFER_SCHEMA_PATH)
     logger.info("HTTP 契约 schema_version=%s", CONTRACT_SCHEMA_VERSION)
     logger.info("WebSocket 路径：ws://%s:%d/", SERVICE_HOST, SERVICE_PORT)
     logger.info("健康检查：http://%s:%d/health", SERVICE_HOST, SERVICE_PORT)
@@ -426,101 +499,95 @@ def _make_infer_error_body(
 def _build_obs_from_model_input(
     model_input: dict[str, Any], req: dict[str, Any]
 ) -> Any:
-    """从 model_input 构造 ObsPacket（对齐 Pi05Adapter 发出的 pi05ModelInput）。
+    """从 model_input 构造 ObsPacket。
 
-    Pi05Adapter（src/industrial_agent/executor.py §A）发送的 model_input 结构：
-      - prompt: str
-      - observation:
-          camera:
-            full_image: ImageReference {uri, image_sha256, camera_id, width, height}
-            wrist_image: ImageReference | null
-          robot:
-            state: [float, ...]           # arm_a.state（_phase_vla_inputs 已提取）
-            tcp_pose_m_rad: [float x6+]   # arm_a.tcp_pose_m_rad
+    输入格式由 executor-infer.schema.json $defs/pi05ModelInput 冻结（E-02）：
+      - additionalProperties: false（拒绝 pixels/data 等非契约字段）
+      - full_image: ImageReference {uri, image_sha256, camera_id=CAM_A_TOP, width, height}
+      - wrist_image: ImageReference | null
+      - robot.state: non-empty float array（isfinite 必检，E-03）
+      - robot.tcp_pose_m_rad: non-empty float array (minItems=6, isfinite 必检，E-03)
+      - prompt: non-empty string (minLength=1)
 
-    ImageReference 不含原始像素；dummy 模式按尺寸创建零图占位（Pi05Executor._infer_mock
-    不依赖像素内容）。真实部署需在调用前将 ImageReference 解析为像素后注入。
+    E-04：调用 validate_image_reference(expected_camera_id="CAM_A_TOP") 校验
+    full_image；real 模式下缺少 CAS resolver 直接拒绝，禁止零图占位。
     """
     if ObsPacket is None:
         raise RuntimeError("ObsPacket 不可用（执行器未导入）")
 
-    prompt = model_input.get("prompt", "")
-    if not isinstance(prompt, str):
-        raise ValueError("model_input.prompt 必须是字符串")
+    # ---- prompt（schema 要求 minLength≥1）----
+    prompt = model_input.get("prompt")
+    if not isinstance(prompt, str) or not prompt.strip():
+        raise ValueError("model_input.prompt 必须是非空字符串")
 
-    observation = model_input.get("observation", {}) or {}
+    observation = model_input.get("observation")
     if not isinstance(observation, dict):
         raise ValueError("model_input.observation 必须是对象")
 
-    camera = observation.get("camera", {}) or {}
+    camera = observation.get("camera")
     if not isinstance(camera, dict):
         raise ValueError("observation.camera 必须是对象")
 
-    # ---- full_image（Pi05Adapter 发送 ImageReference，不含原始像素）----
-    full_image = camera.get("full_image", {}) or {}
-    if not isinstance(full_image, dict):
-        full_image = {}
+    # ---- full_image：E-04 显式调用 validate_image_reference + CAM_A_TOP 强制校验 ----
+    full_image = camera.get("full_image")
+    try:
+        validate_image_reference(full_image, expected_camera_id="CAM_A_TOP")
+    except Exception as exc:
+        raise ValueError(
+            f"observation.camera.full_image 校验失败（必须为 ImageReference "
+            f"camera_id=CAM_A_TOP）：{exc}"
+        ) from exc
 
-    if is_image_reference(full_image):
-        rgb_front = image_reference_to_placeholder(full_image)
-    else:
-        # 旧版兼容：尝试直接像素（pixels/data 键）
-        rgb_front = None
-        for key in ("pixels", "data", "rgb_front"):
-            if key in full_image and full_image[key] is not None:
-                try:
-                    rgb_front = np.array(full_image[key], dtype=np.uint8)
-                    break
-                except Exception as e:
-                    raise ValueError(
-                        f"observation.camera.full_image.{key} 无法转为 uint8 数组：{e}"
-                    )
-        if rgb_front is None:
-            rgb_front = _ZERO_224
+    # E-04：CAS resolver gate —— real 模式禁止零图占位
+    if SERVICE_MODE == "real":
+        _raise_cas_resolver_pending()
 
-    # ---- wrist_image（ImageReference / null / pixels dict）----
+    rgb_front = image_reference_to_placeholder(full_image)
+
+    # ---- wrist_image —— ImageReference 或 null（E-04 同款校验）----
     rgb_wrist: Any = None
-    wrist_image = camera.get("wrist_image")  # 直接取值，不 || {} 以免 None→{}
-    if wrist_image is None:
-        rgb_wrist = None
-    elif isinstance(wrist_image, dict):
-        if is_image_reference(wrist_image):
-            rgb_wrist = image_reference_to_placeholder(wrist_image)
-        else:
-            for key in ("pixels", "data", "rgb_wrist"):
-                if key in wrist_image and wrist_image[key] is not None:
-                    try:
-                        rgb_wrist = np.array(wrist_image[key], dtype=np.uint8)
-                        break
-                    except Exception:
-                        rgb_wrist = None
+    wrist_image = camera.get("wrist_image")
+    if wrist_image is not None:
+        try:
+            validate_image_reference(wrist_image)
+        except Exception as exc:
+            raise ValueError(
+                f"observation.camera.wrist_image 必须为 ImageReference 或 null：{exc}"
+            ) from exc
+        if SERVICE_MODE == "real":
+            _raise_cas_resolver_pending()
+        rgb_wrist = image_reference_to_placeholder(wrist_image)
 
-    # ---- robot state（Pi05Adapter 已提取 arm_a.state → 顶层 state）----
-    robot = observation.get("robot", {}) or {}
+    # ---- robot state（E-03：isfinite 必检）----
+    robot = observation.get("robot")
     if not isinstance(robot, dict):
         raise ValueError("observation.robot 必须是对象")
-    # state 和 tcp_pose_m_rad 语义不同（state 可含关节角+TCP位姿，
-    # tcp_pose 仅为 6 维 TCP 位姿），不回退混用。
+
     state_src = robot.get("state")
     if state_src is None:
-        raise ValueError(
-            "observation.robot.state 是必填字段（Pi05Adapter 从 arm_a.state 提取）"
-        )
-    try:
-        robot_state = np.array(state_src, dtype=np.float32)
-    except Exception as e:
-        raise ValueError(f"observation.robot.state 无法转为 float32 数组：{e}")
+        raise ValueError("observation.robot.state 是必填字段")
+    robot_state = np.array(state_src, dtype=np.float32)
+    if not np.all(np.isfinite(robot_state)):
+        raise ValueError("observation.robot.state 包含 NaN 或 Infinity（E-03 拒绝）")
 
-    # safety / timestamp_ms 在 pi05ModelInput 的 observation 中不存在
-    # （Pi05Adapter 不注入这些字段），使用默认值。
-    safety = observation.get("safety", {}) or {}
-    if not isinstance(safety, dict):
-        safety = {}
+    # tcp_pose_m_rad 虽不用于 ObsPacket 构造，但 schema 要求必填且为有限数值（E-03）
+    tcp_src = robot.get("tcp_pose_m_rad")
+    if tcp_src is None:
+        raise ValueError("observation.robot.tcp_pose_m_rad 是必填字段")
+    tcp_pose = np.array(tcp_src, dtype=np.float32)
+    if not np.all(np.isfinite(tcp_pose)):
+        raise ValueError("observation.robot.tcp_pose_m_rad 包含 NaN 或 Infinity（E-03 拒绝）")
 
+    # ---- 时间戳 ----
     ts_ms = observation.get("timestamp_ms")
     if ts_ms is None or not isinstance(ts_ms, (int, float)):
         ts_ms = int(time.time() * 1000)
     timestamp_ns = int(ts_ms) * 1_000_000
+
+    # ---- safety（可选字段）----
+    safety = observation.get("safety", {}) or {}
+    if not isinstance(safety, dict):
+        safety = {}
 
     return ObsPacket(
         episode_id=str(req.get("episode_id", "")),
@@ -612,6 +679,22 @@ async def http_infer(request: Request) -> JSONResponse:
         )
         return JSONResponse(status_code=422, content=err_body)
 
+    # ---- E-02：冻结 JSON Schema 校验（additionalProperties / type / enum / pattern）----
+    try:
+        _INFER_REQUEST_VALIDATOR.validate(req)
+    except _SchemaValidationError as exc:
+        err_body = _make_infer_error_body(
+            req,
+            code=_failure_code_value(FailureCode.INVALID_TASK),
+            message=f"请求 Schema 校验失败：{exc.message}",
+            retryable=False,
+            details={
+                "schema_path": list(exc.absolute_schema_path),
+                "instance_path": list(exc.absolute_path),
+            },
+        )
+        return JSONResponse(status_code=400, content=err_body)
+
     # ---- executor 必须为 pi05（方案书 §14.2：executor name exact match）----
     if req["executor"] != POLICY_ID:
         err_body = _make_infer_error_body(
@@ -664,9 +747,29 @@ async def http_infer(request: Request) -> JSONResponse:
         )
         return JSONResponse(status_code=503, content=err_body)
 
+    # ---- deadline 检查（方案书 §6.5：deadline_ms 为相对超时毫秒数）----
+    deadline_ms = int(req["deadline_ms"])
+    deadline_at = time.monotonic() + deadline_ms / 1000.0
+    if time.monotonic() >= deadline_at:
+        err_body = _make_infer_error_body(
+            req,
+            code=_failure_code_value(FailureCode.EXECUTOR_TIMEOUT),
+            message=f"deadline 已过期：deadline_ms={deadline_ms} 在排队中耗尽",
+            retryable=False,
+        )
+        return JSONResponse(status_code=408, content=err_body)
+
     # ---- 构造 ObsPacket ----
     try:
         obs = _build_obs_from_model_input(req["model_input"], req)
+    except ExecutorError as e:
+        err_body = _make_infer_error_body(
+            req,
+            code=_failure_code_value(e.code),
+            message=str(e),
+            retryable=e.retryable,
+        )
+        return JSONResponse(status_code=503, content=err_body)
     except Exception as e:
         err_body = _make_infer_error_body(
             req,
@@ -675,6 +778,9 @@ async def http_infer(request: Request) -> JSONResponse:
             retryable=False,
         )
         return JSONResponse(status_code=400, content=err_body)
+
+    # ---- E-05：推理前登记 task_id（修复 in-flight cancel 竞态）----
+    _seen_task_ids[req["task_id"]] = time.time()
 
     # ---- 推理（同步调用放线程池，避免阻塞事件循环）----
     t_infer_start = time.time()
@@ -695,6 +801,21 @@ async def http_infer(request: Request) -> JSONResponse:
         return JSONResponse(status_code=500, content=err_body)
     t_infer_end = time.time()
 
+    # ---- 推理完成后 deadline 过期检查 ----
+    if time.monotonic() >= deadline_at:
+        logger.warning(
+            "推理结果已过期 deadline_ms=%d elapsed=%.0fms",
+            deadline_ms,
+            (t_infer_end - t_request_start) * 1000,
+        )
+        err_body = _make_infer_error_body(
+            req,
+            code=_failure_code_value(FailureCode.EXECUTOR_TIMEOUT),
+            message=f"推理完成时 deadline 已过期：deadline_ms={deadline_ms}",
+            retryable=False,
+        )
+        return JSONResponse(status_code=408, content=err_body)
+
     # ---- CanonicalActionChunk → action_chunk dict ----
     try:
         action_chunk = _canonical_chunk_to_action_chunk_dict(chunk, req["task_id"])
@@ -707,6 +828,19 @@ async def http_infer(request: Request) -> JSONResponse:
             retryable=False,
         )
         return JSONResponse(status_code=500, content=err_body)
+
+    # ---- E-05：推理完成后检查取消状态（防止迟到结果覆盖 cancel）----
+    if req["task_id"] in _cancelled_tasks:
+        logger.info(
+            "task_id=%s 在推理期间被取消，丢弃结果", req["task_id"]
+        )
+        err_body = _make_infer_error_body(
+            req,
+            code=_failure_code_value(FailureCode.EXECUTOR_CANCELLED),
+            message="推理结果已因 cancel 请求而丢弃",
+            retryable=False,
+        )
+        return JSONResponse(status_code=200, content=err_body)
 
     # ---- 构造成功响应信封（13 必填 + action_chunk + timing）----
     response: dict[str, Any] = {
@@ -729,8 +863,6 @@ async def http_infer(request: Request) -> JSONResponse:
             "total_ms": round((t_infer_end - t_request_start) * 1000, 3),
         },
     }
-    # 记录见过该 task_id（用于 /v1/cancel 幂等区分 not_found，方案书 §8）
-    _seen_task_ids[req["task_id"]] = time.time()
     return JSONResponse(status_code=200, content=response)
 
 
@@ -797,6 +929,28 @@ async def http_cancel(request: Request) -> JSONResponse:
                     "message": f"缺少必填字段：{missing}",
                     "retryable": False,
                     "details": {"missing": missing},
+                },
+                "cancelled_request_ids": [],
+                "server_context_cleared": False,
+            },
+        )
+
+    # ---- E-02：冻结 JSON Schema 校验 ----
+    try:
+        _CANCEL_REQUEST_VALIDATOR.validate(req)
+    except _SchemaValidationError as exc:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "schema_version": CONTRACT_SCHEMA_VERSION,
+                "request_id": req.get("request_id", ""),
+                "trace_id": req.get("trace_id", ""),
+                "task_id": req.get("task_id", ""),
+                "status": "error",
+                "error": {
+                    "code": _failure_code_value(FailureCode.INVALID_TASK),
+                    "message": f"请求 Schema 校验失败：{exc.message}",
+                    "retryable": False,
                 },
                 "cancelled_request_ids": [],
                 "server_context_cleared": False,
@@ -1020,23 +1174,39 @@ def _check_episode_step(
     return (None, new_ep, new_sid)
 
 
-# 预分配零图占位，避免 _build_obs / _build_obs_from_model_input 每帧 np.zeros
-_ZERO_224 = np.zeros((224, 224, 3), dtype=np.uint8)
-_ZERO_640x480 = np.zeros((480, 640, 3), dtype=np.uint8)
 
 
 def _decode_obs_image(raw: Any) -> np.ndarray:
     """将 WS 请求中的图像字段解码为 uint8[H,W,3]。
 
-    支持：bytes dict（{"bytes","shape","dtype"}）、嵌套 list（旧版兼容）。
+    支持：bytes dict（{"bytes","shape","dtype"}）、嵌套 list（仅限旧版 WS 兼容）。
+    E-03：严格校验 shape（3 维 HWC）和 dtype；畸形图像直接拒绝。
     """
+    MAX_IMAGE_DIM = 4096
     if isinstance(raw, dict) and "bytes" in raw:
-        return np.frombuffer(raw["bytes"], dtype=raw["dtype"]).reshape(raw["shape"])
-    return np.array(raw, dtype=np.uint8)
+        arr = np.frombuffer(raw["bytes"], dtype=raw["dtype"]).reshape(raw["shape"])
+    else:
+        arr = np.array(raw, dtype=np.uint8)
+    # E-03：shape/dtype 严格校验
+    if arr.ndim != 3 or arr.shape[2] != 3:
+        raise ValueError(
+            f"图像 shape 非法：{arr.shape}，期望 [H,W,3] uint8 RGB（E-03）"
+        )
+    if arr.dtype != np.uint8:
+        raise ValueError(f"图像 dtype 非法：{arr.dtype}，期望 uint8（E-03）")
+    if arr.shape[0] < 1 or arr.shape[0] > MAX_IMAGE_DIM:
+        raise ValueError(
+            f"图像高度 {arr.shape[0]} 超限（1..{MAX_IMAGE_DIM}，E-03）"
+        )
+    if arr.shape[1] < 1 or arr.shape[1] > MAX_IMAGE_DIM:
+        raise ValueError(
+            f"图像宽度 {arr.shape[1]} 超限（1..{MAX_IMAGE_DIM}，E-03）"
+        )
+    return arr
 
 
 def _build_obs(data: dict[str, Any]) -> Any:
-    """从请求字典构造 ObsPacket。"""
+    """从请求字典构造 ObsPacket（WS 路径）。"""
     if ObsPacket is None:
         raise RuntimeError("ObsPacket 不可用（执行器未导入）")
 
@@ -1045,6 +1215,9 @@ def _build_obs(data: dict[str, Any]) -> Any:
     if data.get("rgb_wrist") is not None:
         rgb_wrist = _decode_obs_image(data["rgb_wrist"])
     robot_state = np.array(data.get("robot_state", []), dtype=np.float32)
+    # E-03：WS 路径 robot_state 必须全有限
+    if not np.all(np.isfinite(robot_state)):
+        raise ValueError("robot_state 包含 NaN 或 Infinity（E-03 拒绝）")
 
     ts = data.get("timestamp_ns")
     if ts is None:
@@ -1100,7 +1273,9 @@ async def ws_infer(ws: WebSocket) -> None:
     # 本连接内的 episode/step 追踪（per-connection，替代模块级全局变量）
     _conn_ep: str | None = None
     _conn_sid: int | None = None
-    # 用于触发 episode 切换时的 pending_chunks 清理 + executor.reset()
+    # E-07：pending_chunks 改为 per-connection dict，消除跨连接全局状态干扰
+    _conn_pending: dict[str, dict] = {}
+    # 用于触发 episode 切换时的本连接 pending 清理
     _ws_prev_episode_id: str | None = None
 
     try:
@@ -1134,41 +1309,34 @@ async def ws_infer(ws: WebSocket) -> None:
                 continue
 
             # episode/step 连续性与动作过期检查（方案书 §3.4）
-            # ---- 加锁保护 pending_chunks + per-connection step 追踪 ----
-            # §7.1：多 episode 并发安全，所有共享状态读写必须在锁内完成。
-            async with _pending_chunks_lock:
-                step_err, _conn_ep, _conn_sid = _check_episode_step(
-                    data, _conn_ep, _conn_sid
-                )
-                if step_err is not None:
-                    await _send_error(ws, step_err)
-                    continue
+            # E-07：per-connection 状态不需要全局锁，_conn_pending 是本连接独享
+            step_err, _conn_ep, _conn_sid = _check_episode_step(
+                data, _conn_ep, _conn_sid
+            )
+            if step_err is not None:
+                await _send_error(ws, step_err)
+                continue
 
-                # episode 切换时清空 pending_chunks + 重置执行器（方案书 §3.3.1 Para186）
-                ep = data["episode_id"]
-                if ep != _ws_prev_episode_id:
-                    pending_chunks.clear()
-                    _ws_prev_episode_id = ep
-                    if executor is not None:
-                        try:
-                            executor.reset()
-                        except Exception as e:
-                            logger.warning("执行器 reset 异常：%s", e)
-                # 检查当前 episode 的 pending chunk 是否过期，过期则丢弃
-                expired_chunk = pending_chunks.get(ep)
-                if expired_chunk is not None:
-                    age_ms = (time.time() - expired_chunk["timestamp"]) * 1000.0
-                    ttl = expired_chunk.get(
-                        "expires_after_ms", DEFAULT_EXPIRES_AFTER_MS
+            # episode 切换时仅清空本连接的 pending（E-07：禁止全局 pending_chunks.clear()）
+            ep = data["episode_id"]
+            if ep != _ws_prev_episode_id:
+                _conn_pending.clear()
+                _ws_prev_episode_id = ep
+            # 检查当前 episode 的 pending chunk 是否过期，过期则丢弃
+            expired_chunk = _conn_pending.get(ep)
+            if expired_chunk is not None:
+                age_ms = (time.time() - expired_chunk["timestamp"]) * 1000.0
+                ttl = expired_chunk.get(
+                    "expires_after_ms", DEFAULT_EXPIRES_AFTER_MS
+                )
+                if age_ms > ttl:
+                    logger.warning(
+                        "Action chunk expired (episode=%s age_ms=%.0f > %dms)",
+                        ep,
+                        age_ms,
+                        ttl,
                     )
-                    if age_ms > ttl:
-                        logger.warning(
-                            "Action chunk expired (episode=%s age_ms=%.0f > %dms)",
-                            ep,
-                            age_ms,
-                            ttl,
-                        )
-                        pending_chunks.pop(ep, None)
+                    _conn_pending.pop(ep, None)
 
             # 构造 ObsPacket
             try:
@@ -1205,13 +1373,12 @@ async def ws_infer(ws: WebSocket) -> None:
                 )
                 continue
 
-            # 记录 pending chunk，用于后续请求的过期判断（加锁保护并发写入）
-            async with _pending_chunks_lock:
-                pending_chunks[data["episode_id"]] = {
-                    "generated_step": chunk.generated_step,
-                    "timestamp": time.time(),
-                    "expires_after_ms": chunk.expires_after_ms,
-                }
+            # 记录 pending chunk（E-07：按连接隔离，写入 _conn_pending）
+            _conn_pending[data["episode_id"]] = {
+                "generated_step": chunk.generated_step,
+                "timestamp": time.time(),
+                "expires_after_ms": chunk.expires_after_ms,
+            }
 
             # 序列化返回（方案书 §3.4 CanonicalActionChunk v1）
             actions_list = chunk.actions.tolist()
@@ -1240,13 +1407,9 @@ async def ws_infer(ws: WebSocket) -> None:
     except Exception as e:
         logger.error("WebSocket 异常：%s", e)
     finally:
-        # 清理本连接的 pending_chunk 残留（方案书 §3.3.1 Para186：断开时不留脏数据）
+        # 清理本连接的 pending 残留（E-07：仅清理本连接，不影响其他连接）
         if _ws_prev_episode_id is not None:
-            try:
-                async with _pending_chunks_lock:
-                    pending_chunks.pop(_ws_prev_episode_id, None)
-            except Exception:
-                pass
+            _conn_pending.pop(_ws_prev_episode_id, None)
         logger.info("WebSocket 连接关闭")
 
 
