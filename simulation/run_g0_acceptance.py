@@ -186,9 +186,24 @@ def _robot_state(arm: Any, arm_id: str) -> dict[str, Any]:
         raise RuntimeError(f"{arm_id} joint positions contain NaN/Inf")
     if not _all_finite(velocities):
         raise RuntimeError(f"{arm_id} joint velocities contain NaN/Inf")
+    joint_names = getattr(arm, "dof_names", None)
+    if joint_names is None:
+        # Older Isaac Sim wrappers exposed the same information under this
+        # name. Isaac Sim 5.1 SingleArticulation uses ``dof_names``.
+        joint_names = getattr(arm, "joint_names", None)
+    if joint_names is None:
+        raise RuntimeError(f"{arm_id} articulation exposes no DOF names")
+    joint_names = [str(name) for name in joint_names]
+    position_count = len(positions)
+    velocity_count = len(velocities)
+    if len(joint_names) != position_count or position_count != velocity_count:
+        raise RuntimeError(
+            f"{arm_id} joint-state size mismatch: {len(joint_names)} names, "
+            f"{position_count} positions, {velocity_count} velocities"
+        )
     return {
         "arm_id": arm_id,
-        "joint_names": list(arm.joint_names),
+        "joint_names": joint_names,
         "joint_positions_rad": positions,
         "joint_velocities_rad_s": velocities,
     }
