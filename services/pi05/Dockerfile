@@ -113,9 +113,9 @@ RUN /workspace/openpi/.venv/bin/pip install --no-cache-dir \
 #        生产推理通过 `docker run -e PI05_SERVICE_MODE=real` 切换
 #    PI05_SERVICE_HOST=0.0.0.0:
 #        容器内必须监听 0.0.0.0，否则宿主无法访问映射端口
-#    PI05_SERVICE_PORT=8102:
-#        HTTP 主路径（POST /v1/infer、GET /health、POST /v1/cancel）走 8102，
-#        与 configs/agent.default.json 的 pi05.base_url=http://127.0.0.1:8102 对齐
+#    PI05_SERVICE_PORT=8101:
+#        HTTP 主路径（POST /v1/infer、GET /health、POST /v1/cancel）走 8101，
+#        与冻结架构文档中的 π0.5 服务端口对齐。
 #    PI05_CHECKPOINT_SHA / PI05_NORM_STATS_SHA:
 #        权重与归一化统计的不可变摘要（方案书 §4 / 契约 §6.2）。
 #        默认值为 64 个 0 的占位 sha256，仅用于 dummy 联调；
@@ -127,7 +127,7 @@ RUN /workspace/openpi/.venv/bin/pip install --no-cache-dir \
 # -----------------------------------------------------------------------------
 ENV PI05_SERVICE_MODE=dummy \
     PI05_SERVICE_HOST=0.0.0.0 \
-    PI05_SERVICE_PORT=8102 \
+    PI05_SERVICE_PORT=8101 \
     PI05_CHECKPOINT_SHA=sha256:0000000000000000000000000000000000000000000000000000000000000000 \
     PI05_NORM_STATS_SHA=sha256:0000000000000000000000000000000000000000000000000000000000000000 \
     XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 \
@@ -139,13 +139,13 @@ ENV PI05_SERVICE_MODE=dummy \
 #    探测 HTTP 主路径 GET /health（与契约 §6 一致）
 # -----------------------------------------------------------------------------
 HEALTHCHECK --interval=30s --timeout=3s --retries=3 --start-period=30s \
-    CMD curl -f http://localhost:8102/health || exit 1
+    CMD curl -f http://localhost:8101/health || exit 1
 
 # -----------------------------------------------------------------------------
 # 10. 暴露服务端口
-#    HTTP 主路径（POST /v1/infer、GET /health、POST /v1/cancel）走 8102
+#    HTTP 主路径（POST /v1/infer、GET /health、POST /v1/cancel）走 8101
 # -----------------------------------------------------------------------------
-EXPOSE 8102
+EXPOSE 8101
 
 # -----------------------------------------------------------------------------
 # 11. 声明 volume（运行时挂载，绝不打包进镜像）
@@ -159,8 +159,8 @@ VOLUME ["/workspace/openpi_data", "/workspace/project/data", "/workspace/openpi/
 # -----------------------------------------------------------------------------
 # 12. 启动命令：openpi_service HTTP 服务
 #     契约 §2 / §6 / §7 / §8：HTTP 主路径 POST /v1/infer、GET /health、POST /v1/cancel
-#     通过 uvicorn CLI 显式指定 --port 8102，覆盖源码默认端口；
+#     通过 uvicorn CLI 显式指定 --port 8101，覆盖源码默认端口；
 #     使用 openpi venv 的 python -m uvicorn，确保使用已安装 uvicorn 的解释器。
 #     默认 dummy 模式启动；真实推理时 `docker run -e PI05_SERVICE_MODE=real`
 # -----------------------------------------------------------------------------
-CMD ["/workspace/openpi/.venv/bin/python", "-m", "uvicorn", "services.pi05.src.openpi_service:app", "--host", "0.0.0.0", "--port", "8102"]
+CMD ["/workspace/openpi/.venv/bin/python", "-m", "uvicorn", "services.pi05.src.openpi_service:app", "--host", "0.0.0.0", "--port", "8101"]

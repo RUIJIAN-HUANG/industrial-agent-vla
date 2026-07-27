@@ -74,11 +74,11 @@ if SERVICE_MODE not in ("dummy", "real"):
 os.environ["PI05_MODE"] = SERVICE_MODE
 
 SERVICE_HOST = os.environ.get("PI05_SERVICE_HOST", "0.0.0.0")
-# 默认 8102，对齐 configs/agent.default.json 的 pi05.base_url（方案书 §2 进程拓扑）
+# 默认 8101，对齐冻结架构文档中的 π0.5 服务端口。
 try:
-    SERVICE_PORT = int(os.environ.get("PI05_SERVICE_PORT", "8102"))
+    SERVICE_PORT = int(os.environ.get("PI05_SERVICE_PORT", "8101"))
 except ValueError:
-    SERVICE_PORT = 8102
+    SERVICE_PORT = 8101
 
 # SCHEMA_VERSION 保留 "v1" 仅供现有 WebSocket 端点使用（不影响历史 WS 契约）
 SCHEMA_VERSION = "v1"
