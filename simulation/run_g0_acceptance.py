@@ -407,7 +407,19 @@ def _run(args: argparse.Namespace, result: dict[str, Any]) -> None:
                 "online_gt_included": False,
             }
         )
+    except BaseException as exc:
+        # Isaac Sim/Kit can raise SystemExit during extension startup or
+        # shutdown. Persist the real cause before close(), because some Kit
+        # builds terminate the interpreter from close() and never return to
+        # main().
+        result["status"] = "FAIL"
+        result["error_type"] = type(exc).__name__
+        result["error"] = str(exc)
+        result["traceback"] = traceback.format_exc()
+        raise
     finally:
+        result["finished_at_local"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+        _write_json(args.evidence_dir / "run_result.json", result)
         simulation_app.close()
 
 

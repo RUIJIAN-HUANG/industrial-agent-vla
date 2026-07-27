@@ -133,6 +133,10 @@ bash scripts/run_g0_linux.sh
 G0 AUTOMATED CHECKS PASSED.
 ```
 
+这个 PASS 不只检查 Isaac Sim 进程退出码，还必须同时存在
+`run_result.json`，且第一次运行的 Reset、机器人观测、相机清单和三张图均为
+非空文件。缺少任一证据时脚本必须返回 FAIL。
+
 证据位于：
 
 ```text

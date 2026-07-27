@@ -86,7 +86,39 @@ for run_number in 1 2 3; do
   printf '\n'
 
   "${command[@]}" >"${run_dir}/console.log" 2>&1
-  exit_code=$?
+  process_exit_code=$?
+  exit_code="${process_exit_code}"
+  result_file="${run_dir}/run_result.json"
+
+  # A Kit process can exit with code 0 even if Python never completed the
+  # requested acceptance work. The evidence file and its explicit PASS status
+  # are therefore mandatory; process exit code alone is not a pass criterion.
+  if [[ ! -f "${result_file}" ]]; then
+    printf 'Missing required evidence: %s\n' "${result_file}" \
+      >>"${run_dir}/console.log"
+    exit_code=10
+  elif ! grep -Eq '"status"[[:space:]]*:[[:space:]]*"PASS"' "${result_file}"; then
+    printf 'run_result.json does not contain status PASS.\n' \
+      >>"${run_dir}/console.log"
+    exit_code=11
+  elif [[ "${run_number}" -eq 1 ]]; then
+    required_files=(
+      "${run_dir}/reset_report.json"
+      "${run_dir}/robot_observation.json"
+      "${run_dir}/camera_manifest.json"
+      "${run_dir}/cameras/CAM_A_TOP.ppm"
+      "${run_dir}/cameras/CAM_HANDOFF.ppm"
+      "${run_dir}/cameras/CAM_B_TOP.ppm"
+    )
+    for required_file in "${required_files[@]}"; do
+      if [[ ! -s "${required_file}" ]]; then
+        printf 'Missing or empty required evidence: %s\n' "${required_file}" \
+          >>"${run_dir}/console.log"
+        exit_code=12
+      fi
+    done
+  fi
+
   printf '%s\t%s\t%s\t%s\n' \
     "${run_number}" "${started_at}" "${exit_code}" "${purpose}" >>"${SUMMARY_FILE}"
 
