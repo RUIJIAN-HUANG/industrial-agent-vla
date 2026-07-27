@@ -476,7 +476,7 @@ def _build_obs_from_model_input(
                         f"observation.camera.full_image.{key} 无法转为 uint8 数组：{e}"
                     )
         if rgb_front is None:
-            rgb_front = np.zeros((224, 224, 3), dtype=np.uint8)
+            rgb_front = _ZERO_224
 
     # ---- wrist_image（ImageReference / null / pixels dict）----
     rgb_wrist: Any = None
@@ -1020,15 +1020,30 @@ def _check_episode_step(
     return (None, new_ep, new_sid)
 
 
+# 预分配零图占位，避免 _build_obs / _build_obs_from_model_input 每帧 np.zeros
+_ZERO_224 = np.zeros((224, 224, 3), dtype=np.uint8)
+_ZERO_640x480 = np.zeros((480, 640, 3), dtype=np.uint8)
+
+
+def _decode_obs_image(raw: Any) -> np.ndarray:
+    """将 WS 请求中的图像字段解码为 uint8[H,W,3]。
+
+    支持：bytes dict（{"bytes","shape","dtype"}）、嵌套 list（旧版兼容）。
+    """
+    if isinstance(raw, dict) and "bytes" in raw:
+        return np.frombuffer(raw["bytes"], dtype=raw["dtype"]).reshape(raw["shape"])
+    return np.array(raw, dtype=np.uint8)
+
+
 def _build_obs(data: dict[str, Any]) -> Any:
     """从请求字典构造 ObsPacket。"""
     if ObsPacket is None:
         raise RuntimeError("ObsPacket 不可用（执行器未导入）")
 
-    rgb_front = np.array(data["rgb_front"], dtype=np.uint8)
+    rgb_front = _decode_obs_image(data["rgb_front"])
     rgb_wrist = None
     if data.get("rgb_wrist") is not None:
-        rgb_wrist = np.array(data["rgb_wrist"], dtype=np.uint8)
+        rgb_wrist = _decode_obs_image(data["rgb_wrist"])
     robot_state = np.array(data.get("robot_state", []), dtype=np.float32)
 
     ts = data.get("timestamp_ns")
@@ -1196,15 +1211,15 @@ async def ws_infer(ws: WebSocket) -> None:
                     "generated_step": chunk.generated_step,
                     "timestamp": time.time(),
                     "expires_after_ms": chunk.expires_after_ms,
-                    "actions": chunk.actions.tolist(),
                 }
 
             # 序列化返回（方案书 §3.4 CanonicalActionChunk v1）
+            actions_list = chunk.actions.tolist()
             response = {
                 "schema_version": SCHEMA_VERSION,
                 "episode_id": data["episode_id"],
                 "step_id": data["step_id"],
-                "actions": chunk.actions.tolist(),
+                "actions": actions_list,
                 "space_id": chunk.space_id,
                 "frame": chunk.frame,
                 "control_hz": chunk.control_hz,

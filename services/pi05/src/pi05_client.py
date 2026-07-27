@@ -182,6 +182,11 @@ class WebsocketPolicyClient:
         self._ensure_connected()
 
         # ---- 协议转换：openpi example → ObsPacket（方案书 §3.4） ----
+        _front = example.get(
+            "observation/exterior_image_1_left",
+            np.zeros((480, 640, 3), dtype=np.uint8),
+        )
+        _state = example.get("observation/state", np.zeros(8, dtype=np.float32))
         request: dict[str, Any] = {
             "schema_version": "v1",
             "episode_id": str(example.get("episode_id", "unknown")),
@@ -189,19 +194,16 @@ class WebsocketPolicyClient:
             "timestamp_ns": int(example.get("timestamp_ns", int(time.time() * 1e9))),
             "instruction": str(example.get("prompt", "")),
             "rgb_front": (
-                example.get(
-                    "observation/exterior_image_1_left",
-                    np.zeros((480, 640, 3), dtype=np.uint8),
-                ).tolist()
-                if isinstance(
-                    example.get("observation/exterior_image_1_left"), np.ndarray
-                )
-                else example.get("observation/exterior_image_1_left", [])
+                {
+                    "bytes": _front.tobytes(),
+                    "shape": list(_front.shape),
+                    "dtype": str(_front.dtype),
+                }
+                if isinstance(_front, np.ndarray)
+                else _front
             ),
             "robot_state": (
-                example.get("observation/state", np.zeros(8, dtype=np.float32)).tolist()
-                if isinstance(example.get("observation/state"), np.ndarray)
-                else example.get("observation/state", [])
+                _state.tolist() if isinstance(_state, np.ndarray) else _state
             ),
             "runtime_flags": example.get(
                 "runtime_flags",
@@ -211,7 +213,13 @@ class WebsocketPolicyClient:
         wrist = example.get("observation/wrist_image_left")
         if wrist is not None:
             request["rgb_wrist"] = (
-                wrist.tolist() if isinstance(wrist, np.ndarray) else wrist
+                {
+                    "bytes": wrist.tobytes(),
+                    "shape": list(wrist.shape),
+                    "dtype": str(wrist.dtype),
+                }
+                if isinstance(wrist, np.ndarray)
+                else wrist
             )
 
         # ---- 发送与接收 ----

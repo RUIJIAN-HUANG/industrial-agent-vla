@@ -107,6 +107,9 @@ SPACE_ID = "eef_delta_xyz_axisangle_gripper_v1"
 FRAME_ID = "robot_base"
 EXPIRES_AFTER_MS = 1000  # 动作块超时丢弃（方案书 §3.4 动作过期）
 
+# 预分配零图占位，避免 _build_example 每帧 np.zeros_like
+_BLACK_640x480: np.ndarray = np.zeros((480, 640, 3), dtype=np.uint8)
+
 
 # ---------------------------------------------------------------------------
 # 图像预处理（委托 openpi transform；适配器只保证 RGB/dtype/方向不被破坏）
@@ -301,9 +304,7 @@ class Pi05Executor(BaseExecutor):
             example["observation/wrist_image_left"] = _prep_image(obs.rgb_wrist)
         else:
             logger.warning("rgb_wrist 为空，使用黑图占位（pi05 通常需要腕部图）")
-            example["observation/wrist_image_left"] = np.zeros_like(
-                _prep_image(obs.rgb_front)
-            )
+            example["observation/wrist_image_left"] = _BLACK_640x480
         return example
 
     def _pixel_audit_if_test(self, obs: ObsPacket) -> None:
@@ -365,29 +366,29 @@ class Pi05Executor(BaseExecutor):
         rot_clipped = np.clip(rot, -MAX_ROTATION_RAD, MAX_ROTATION_RAD)
         diff_rot = np.abs(rot - rot_clipped)
 
-        for i in range(arr.shape[0]):
-            for j in range(3):
-                if diff_trans[i, j] > 1e-9:
-                    logger.warning(
-                        "截断[step=%d,%s] 平移 %.5f -> %.5f (限幅±%.3f m)",
-                        i,
-                        DIM_NAMES[j],
-                        trans[i, j],
-                        trans_clipped[i, j],
-                        MAX_TRANSLATION_M,
-                    )
-                    trunc_count += 1
-            for j in range(3):
-                if diff_rot[i, j] > 1e-9:
-                    logger.warning(
-                        "截断[step=%d,%s] 旋转 %.5f -> %.5f (限幅±%.4f rad)",
-                        i,
-                        DIM_NAMES[3 + j],
-                        rot[i, j],
-                        rot_clipped[i, j],
-                        MAX_ROTATION_RAD,
-                    )
-                    trunc_count += 1
+        trans_exceeded = diff_trans > 1e-9
+        rot_exceeded = diff_rot > 1e-9
+        trunc_count = int(trans_exceeded.sum()) + int(rot_exceeded.sum())
+
+        if trunc_count > 0 and logger.isEnabledFor(logging.WARNING):
+            for i, j in np.argwhere(trans_exceeded):
+                logger.warning(
+                    "截断[step=%d,%s] 平移 %.5f -> %.5f (限幅±%.3f m)",
+                    int(i),
+                    DIM_NAMES[int(j)],
+                    float(trans[i, j]),
+                    float(trans_clipped[i, j]),
+                    MAX_TRANSLATION_M,
+                )
+            for i, j in np.argwhere(rot_exceeded):
+                logger.warning(
+                    "截断[step=%d,%s] 旋转 %.5f -> %.5f (限幅±%.4f rad)",
+                    int(i),
+                    DIM_NAMES[3 + int(j)],
+                    float(rot[i, j]),
+                    float(rot_clipped[i, j]),
+                    MAX_ROTATION_RAD,
+                )
 
         clipped[:, 0:3] = trans_clipped
         clipped[:, 3:6] = rot_clipped
@@ -398,13 +399,16 @@ class Pi05Executor(BaseExecutor):
             np.float32
         )
         diff_grip = np.abs(gripper - rounded)
-        for i in range(arr.shape[0]):
-            if diff_grip[i] > 1e-9:
+        grip_exceeded = diff_grip > 1e-9
+        trunc_count += int(grip_exceeded.sum())
+
+        if grip_exceeded.any() and logger.isEnabledFor(logging.WARNING):
+            for i in np.argwhere(grip_exceeded).flat:
                 logger.warning(
                     "夹爪[step=%d,gripper] %.3f -> %.1f (仅允许 0/1)",
-                    i,
-                    gripper[i],
-                    rounded[i],
+                    int(i),
+                    float(gripper[i]),
+                    float(rounded[i]),
                 )
         clipped[:, 6] = rounded
 
