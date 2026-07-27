@@ -301,9 +301,7 @@ def _run(args: argparse.Namespace, result: dict[str, Any]) -> None:
         isaac_compat.wait_for_stage_loading(simulation_app, timeout_seconds=180.0)
 
         missing = [
-            path
-            for path in REQUIRED_PRIMS
-            if not stage.GetPrimAtPath(path).IsValid()
+            path for path in REQUIRED_PRIMS if not stage.GetPrimAtPath(path).IsValid()
         ]
         if missing:
             raise RuntimeError(f"Required scene prims are missing: {missing}")
@@ -371,13 +369,9 @@ def _run(args: argparse.Namespace, result: dict[str, Any]) -> None:
             if step_index % 100 == 0 or step_index == args.steps:
                 runtime_stage = isaac_compat.get_current_stage()
                 snapshot = _dynamic_snapshot(runtime_stage)
-                step_errors = _validate_dynamic_snapshot(
-                    snapshot, expected_positions
-                )
+                step_errors = _validate_dynamic_snapshot(snapshot, expected_positions)
                 if step_errors:
-                    raise RuntimeError(
-                        f"step {step_index}: " + "; ".join(step_errors)
-                    )
+                    raise RuntimeError(f"step {step_index}: " + "; ".join(step_errors))
         elapsed = time.monotonic() - started
 
         observation = {
@@ -418,8 +412,7 @@ def _run(args: argparse.Namespace, result: dict[str, Any]) -> None:
                 "resets_completed": args.resets,
                 "reset_settle_steps": settle_steps,
                 "camera_samples": camera_captures,
-                "robot_observation_file": args.evidence_dir
-                / "robot_observation.json",
+                "robot_observation_file": args.evidence_dir / "robot_observation.json",
                 "reset_report_file": args.evidence_dir / "reset_report.json",
                 "online_gt_included": False,
             }
