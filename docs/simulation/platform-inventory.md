@@ -4,7 +4,7 @@
 >
 > 执行人：成员 B
 >
-> 状态：`AUTOMATED PASS - GUI 场景人工复核待完成`
+> 状态：`B PASS - 自动验收与 GUI 人工复核均通过，待 F/A 签署`
 
 ## 1. 冻结结论
 
@@ -85,12 +85,12 @@
 | 自动盘点 | `artifacts/g0/20260727-210649/platform-inventory.txt` | 已采集 |
 | 三次启动汇总 | `artifacts/g0/20260727-210649/restart-summary.tsv` | 三次退出码均为 `0` |
 | 文件哈希 | `artifacts/g0/20260727-210649/SHA256SUMS.txt` | 已生成 |
-| 原始证据压缩包 | `member-b-g0-20260727-210649.tar.gz`，SHA256 `0eb8806c062e58edb44655f2892ef11760de9eb862ef25048abb3487bb1240c1` | 待上传到 Draft PR |
-| Draft PR | 待创建 | 待填写 |
+| 原始证据压缩包 | `member-b-g0-20260727-210649.tar.gz`，SHA256 `0eb8806c062e58edb44655f2892ef11760de9eb862ef25048abb3487bb1240c1` | 上传到 Draft PR #7 |
+| Draft PR | [#7](https://github.com/RUIJIAN-HUANG/industrial-agent-vla/pull/7) | 待 F/A 复核 |
 | Issue | 未创建 | 可由 A/F 决定是否需要 |
 
 ## 6. B 的签字
 
 - 盘点完成时间：2026-07-27 21:07（Asia/Shanghai）
-- 结论：`AUTOMATED PASS`
-- 阻塞与需要 A/F 协助的事项：请 F 完成 GUI 场景人工复核；请 A/F 确认最终演示的本地资产/断网方案。
+- 结论：`PASS（成员 B）`
+- 阻塞与需要 A/F 协助的事项：请 F 复核本报告与 GUI 截图；请 A/F 确认最终演示的本地资产/断网方案。

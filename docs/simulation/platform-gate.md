@@ -6,7 +6,7 @@
 >
 > 日期：2026-07-27
 >
-> 状态：`AUTOMATED PASS - GUI 人工复核待完成`
+> 状态：`B PASS - 自动验收与 GUI 人工复核均通过，待 F/A 签署`
 
 ## 1. 验收结论
 
@@ -20,9 +20,9 @@
 | 双臂状态 | 关节名、位置、速度均可读 | `robot_observation.json` 已生成 | PASS |
 | 相机样本 | 三台相机各 1 帧 | 3/3 个 PPM 样本已生成 | PASS（自动） |
 | 在线 GT 隔离 | 观测与相机清单不包含 GT | `online_gt_included=false` | PASS |
-| GUI 人工复核 | 无明显穿模、弹飞、空机器人 | 待 F/成员 B 人工检查 | PENDING |
+| GUI 人工复核 | 无明显穿模、弹飞、空机器人 | 两台完整 Franka 与场景正常；播放后稳定 | PASS |
 
-最终结论：`AUTOMATED PASS`；完成人工复核后方可签署最终 `PASS`。
+最终结论：`PASS（成员 B）`；F 复核与 A 的最终 Gate 决策待签署。
 
 ## 2. 冻结配置
 
@@ -94,15 +94,17 @@
 
 自动检查不能代替以下人工观察：
 
-- [ ] `/World/Robots/Arm_A` 和 `/World/Robots/Arm_B` 都显示真实 Franka，
+- [x] `/World/Robots/Arm_A` 和 `/World/Robots/Arm_B` 都显示真实 Franka，
       不是空 Xform。
-- [ ] 两台 Franka 基座位置、朝向正确。
-- [ ] P01-P04、料箱和桌面无初始穿模。
-- [ ] 连续运行至少 30 秒，无零件弹飞和仿真崩溃。
-- [ ] 三个 Camera Prim 的视锥方向正确。
-- [ ] 保存并重新打开 `single_bin_scene_v1.usda` 后资产仍完整。
+- [x] 两台 Franka 基座位置、朝向正确。
+- [x] P01-P04、料箱和桌面无初始穿模。
+- [x] 连续运行至少 30 秒，无零件弹飞和仿真崩溃。
+- [x] 三个 Camera Prim 的视锥方向正确。
+- [x] 自动脚本保存、GUI 重新打开 `single_bin_scene_v1.usda` 后资产仍完整。
 
-GUI 截图/短视频位置：待填写。
+GUI 截图：Draft PR 评论附件 `g0-gui-overview.png` 与
+`g0-gui-stage-tree.png`。播放开始时两臂进入物理初始化后的稳定关节姿态，
+随后保持静止；场景未绑定控制任务，该表现符合 G0 静态场景预期。
 
 ## 7. 失败与处置
 
@@ -120,7 +122,7 @@ GUI 截图/短视频位置：待填写。
 | 证据 SHA 文件 | `artifacts/g0/20260727-210649/SHA256SUMS.txt` |
 | 证据压缩包 | `member-b-g0-20260727-210649.tar.gz`，SHA256 `0eb8806c062e58edb44655f2892ef11760de9eb862ef25048abb3487bb1240c1` |
 | Issue | 未创建 |
-| Draft PR | 待创建并回填链接 |
-| B 结论 | 自动验收通过；GUI 人工复核待完成 |
+| Draft PR | [#7](https://github.com/RUIJIAN-HUANG/industrial-agent-vla/pull/7) |
+| B 结论 | PASS；自动验收与 GUI 人工复核均通过 |
 | F 复核 | 待填写 |
 | A 的 Gate 决策 | 待填写 |
