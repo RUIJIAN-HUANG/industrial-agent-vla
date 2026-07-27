@@ -1,0 +1,35 @@
+{
+  "schema_version": "1.0",
+  "mock_mode": true,
+  "upstream": {
+    "repo": "https://github.com/moojink/openvla-oft",
+    "commit_sha": "UNPINNED_REPLACE_BEFORE_REAL_INFERENCE",
+    "status": "pending real OpenVLA-OFT integration"
+  },
+  "artifacts": {
+    "checkpoint_sha": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "norm_stats_sha": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "checkpoint_kind": "mock-placeholder"
+  },
+  "model": {
+    "architecture": "openvla-oft",
+    "device": "cuda",
+    "torch_dtype": "float16",
+    "input_image_size": [
+      640,
+      480
+    ],
+    "uses_wrist_camera": true,
+    "proprio_dim": 7,
+    "action_dim": 7
+  },
+  "fine_tuning": {
+    "status": "not_started",
+    "dataset_manifest_sha": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "config_sha": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "tuned_checkpoint_sha": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "base_success_rate": null,
+    "tuned_success_rate": null,
+    "failure_distribution": {}
+  }
+}

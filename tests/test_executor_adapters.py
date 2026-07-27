@@ -387,8 +387,8 @@ class ExecutorAdapterTests(unittest.TestCase):
         self.assertEqual(
             calls,
             [
-                ("openvla_oft", "http://127.0.0.1:8101"),
-                ("pi05", "http://127.0.0.1:8102"),
+                ("openvla_oft", "http://127.0.0.1:8102"),
+                ("pi05", "http://127.0.0.1:8101"),
             ],
         )
         self.assertEqual(
@@ -424,7 +424,7 @@ class ExecutorAdapterTests(unittest.TestCase):
 
         executors = build_executors_from_config(config, factory)
         self.assertEqual([item.descriptor.name for item in executors], ["openvla_oft"])
-        self.assertEqual(calls, [("openvla_oft", "http://127.0.0.1:8101")])
+        self.assertEqual(calls, [("openvla_oft", "http://127.0.0.1:8102")])
 
     def test_adapters_and_factory_reject_mutable_artifact_aliases(self) -> None:
         with self.assertRaisesRegex(ValueError, "64 hexadecimal"):
