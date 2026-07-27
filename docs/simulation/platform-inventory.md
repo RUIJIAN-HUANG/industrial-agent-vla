@@ -1,10 +1,10 @@
 # B - Isaac Sim 仿真平台盘点
 
-> 日期：待填写
+> 日期：2026-07-27
 >
 > 执行人：成员 B
 >
-> 状态：`DRAFT - 必须用老师 Linux 电脑的真实输出替换所有“待填写”`
+> 状态：`AUTOMATED PASS - GUI 场景人工复核待完成`
 
 ## 1. 冻结结论
 
@@ -12,11 +12,11 @@
 |---|---|
 | 主仿真平台 | NVIDIA Isaac Sim 5.1.x |
 | 主机用途 | 双 Franka、三 RGB 相机、单箱交接场景的开发与验证 |
-| 主机是否可用 | 待填写 |
-| 回退机 | 待填写；若没有，明确写“暂无回退机” |
+| 主机是否可用 | 可用；G0 自动验收三次独立启动均通过 |
+| 回退机 | 暂无回退机 |
 | 是否保留 Gazebo 生产路径 | 否 |
-| Isaac Sim 根目录 | 待填写，例如 `/home/<user>/isaacsim` |
-| 资产来源 | 待填写：本地 Asset Pack / 在线 NVIDIA Asset Root |
+| Isaac Sim 根目录 | `/home/xyz/isaacsim` |
+| 资产来源 | 在线 NVIDIA Asset Root |
 
 ## 2. 主机硬件与系统
 
@@ -24,26 +24,26 @@
 
 | 项目 | 实际值 | 验证命令 |
 |---|---|---|
-| 主机名 | 待填写 | `hostname` |
-| Linux 发行版 | 待填写 | `cat /etc/os-release` |
-| 内核 | 待填写 | `uname -a` |
-| CPU | 待填写 | `lscpu` |
-| 内存 | 待填写 | `free -h` |
-| GPU | 待填写 | `nvidia-smi --query-gpu=name --format=csv,noheader` |
-| 显存 | 待填写 | `nvidia-smi --query-gpu=memory.total --format=csv,noheader` |
-| NVIDIA 驱动 | 待填写 | `nvidia-smi --query-gpu=driver_version --format=csv,noheader` |
-| 可用磁盘 | 待填写 | `df -h .` |
-| CPU 架构 | 待填写 | `uname -m` |
+| 主机名 | `xyz` | `hostname` |
+| Linux 发行版 | Ubuntu 22.04.5 LTS (Jammy Jellyfish) | `cat /etc/os-release` |
+| 内核 | Linux 6.8.0-111-generic | `uname -a` |
+| CPU | 13th Gen Intel Core i9-13900K，24 核/32 线程 | `lscpu` |
+| 内存 | 125 GiB（采集时可用 119 GiB） | `free -h` |
+| GPU | NVIDIA GeForce RTX 3090 Ti | `nvidia-smi --query-gpu=name --format=csv,noheader` |
+| 显存 | 24564 MiB | `nvidia-smi --query-gpu=memory.total --format=csv,noheader` |
+| NVIDIA 驱动 | 580.76.05（`nvidia-smi` 显示 CUDA 13.0） | `nvidia-smi --query-gpu=driver_version --format=csv,noheader` |
+| 可用磁盘 | 385 GiB（根分区 984 GiB，已用 59%） | `df -h .` |
+| CPU 架构 | `x86_64` | `uname -m` |
 
 ## 3. Isaac Sim 与项目版本
 
 | 项目 | 实际值/证据 |
 |---|---|
-| Isaac Sim 版本 | 5.1.x，补充完整版本号 |
-| 安装方式 | 待填写：Workstation ZIP / 容器 / Python 包 |
-| `python.sh` | 待填写绝对路径 |
-| Franka USD | 从 `restart-1/run_result.json` 复制 `franka_asset` |
-| 仓库 commit | 从 `platform-inventory.txt` 的 `[git]` 部分复制 |
+| Isaac Sim 版本 | 5.1.0 |
+| 安装方式 | Workstation 独立安装目录（非容器） |
+| `python.sh` | `/home/xyz/isaacsim/python.sh` |
+| Franka USD | `https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Robots/FrankaRobotics/FrankaPanda/franka.usd` |
+| 仓库 commit | `b1e6a05fc52ef95a576442bacff96dbe699920b9` |
 | 场景合同 | `simulation/configs/single_bin_scene_v1.json` |
 | 物理步长 | `1/120 s`，以配置实际值为准 |
 | 渲染步长 | `1/30 s`，以配置实际值为准 |
@@ -53,17 +53,18 @@
 
 请根据真实输出勾选。
 
-- [ ] `nvidia-smi` 正常，未出现驱动通信错误。
+- [x] `nvidia-smi` 正常，未出现驱动通信错误。
 - [ ] `isaac-sim.compatibility_check.sh` 可运行。
-- [ ] Isaac Sim GUI 能启动并打开空 Stage。
-- [ ] `python.sh` 能运行本仓库独立 Python 脚本。
-- [ ] Franka USD 能从本地资产包或 Asset Root 解析。
-- [ ] 运行期间不依赖个人密钥或写入仓库的凭据。
-- [ ] 已记录联网依赖；最终演示前需验证断网加载。
+- [x] Isaac Sim GUI 能启动并进入 `app ready`。
+- [x] `python.sh` 能运行本仓库独立 Python 脚本。
+- [x] Franka USD 能从在线 Asset Root 解析。
+- [x] 运行期间不依赖个人密钥或写入仓库的凭据。
+- [x] 已记录联网依赖；最终演示前需验证断网加载。
 
 已知问题：
 
-1. 待填写；没有则写“本次未发现阻断问题”。
+1. Franka 当前来自在线 NVIDIA Asset Root；最终演示前应准备本地资产并完成断网复测。
+2. Isaac Sim 5.1 启动日志会扫描部分测试扩展并报告缺少 `psutil`，但不影响本次 G0，三个进程均以 `0` 退出且证据状态均为 `PASS`。
 
 回退方法：
 
@@ -81,14 +82,15 @@
 
 | 证据 | 路径/链接 | 结论 |
 |---|---|---|
-| 自动盘点 | `artifacts/g0/<时间>/platform-inventory.txt` | 待填写 |
-| 三次启动汇总 | `artifacts/g0/<时间>/restart-summary.tsv` | 待填写 |
-| 文件哈希 | `artifacts/g0/<时间>/SHA256SUMS.txt` | 待填写 |
-| Draft PR | 待填写 | 待填写 |
-| Issue | 待填写 | 待填写 |
+| 自动盘点 | `artifacts/g0/20260727-210649/platform-inventory.txt` | 已采集 |
+| 三次启动汇总 | `artifacts/g0/20260727-210649/restart-summary.tsv` | 三次退出码均为 `0` |
+| 文件哈希 | `artifacts/g0/20260727-210649/SHA256SUMS.txt` | 已生成 |
+| 原始证据压缩包 | `member-b-g0-20260727-210649.tar.gz`，SHA256 `0eb8806c062e58edb44655f2892ef11760de9eb862ef25048abb3487bb1240c1` | 待上传到 Draft PR |
+| Draft PR | 待创建 | 待填写 |
+| Issue | 未创建 | 可由 A/F 决定是否需要 |
 
 ## 6. B 的签字
 
-- 盘点完成时间：待填写
-- 结论：`PASS / FAIL / BLOCKED`
-- 阻塞与需要 A/F 协助的事项：待填写
+- 盘点完成时间：2026-07-27 21:07（Asia/Shanghai）
+- 结论：`AUTOMATED PASS`
+- 阻塞与需要 A/F 协助的事项：请 F 完成 GUI 场景人工复核；请 A/F 确认最终演示的本地资产/断网方案。

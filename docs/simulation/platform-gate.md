@@ -4,38 +4,38 @@
 >
 > Owner：B；复核：F
 >
-> 日期：待填写
+> 日期：2026-07-27
 >
-> 状态：`DRAFT - 自动脚本三次均 PASS 且人工检查通过后才能改为 PASS`
+> 状态：`AUTOMATED PASS - GUI 人工复核待完成`
 
 ## 1. 验收结论
 
 | 验收项 | 门槛 | 实际结果 | 结论 |
 |---|---:|---:|---|
-| Isaac Sim 独立启动 | 连续 3 次 | 待填写 | 待填写 |
-| Headless 物理步 | 1000 步 | 待填写 | 待填写 |
-| 场景必要 Prim | 双 Franka、4 零件、1 料箱、3 相机 | 待填写 | 待填写 |
-| Reset | 连续 20 次 | 待填写 | 待填写 |
-| 数值稳定性 | 无 NaN/Inf、物体未离开工作区 | 待填写 | 待填写 |
-| 双臂状态 | 关节名、位置、速度均可读 | 待填写 | 待填写 |
-| 相机样本 | 三台相机各 1 帧 | 待填写 | 待填写 |
-| 在线 GT 隔离 | 观测与相机清单不包含 GT | 待填写 | 待填写 |
-| GUI 人工复核 | 无明显穿模、弹飞、空机器人 | 待填写 | 待填写 |
+| Isaac Sim 独立启动 | 连续 3 次 | 3/3 次启动成功，退出码均为 `0` | PASS |
+| Headless 物理步 | 1000 步 | 1000/1000 | PASS |
+| 场景必要 Prim | 双 Franka、4 零件、1 料箱、3 相机 | 10/10 个必要 Prim | PASS |
+| Reset | 连续 20 次 | 20/20 | PASS |
+| 数值稳定性 | 无 NaN/Inf、物体未离开工作区 | 自动检查无错误 | PASS |
+| 双臂状态 | 关节名、位置、速度均可读 | `robot_observation.json` 已生成 | PASS |
+| 相机样本 | 三台相机各 1 帧 | 3/3 个 PPM 样本已生成 | PASS（自动） |
+| 在线 GT 隔离 | 观测与相机清单不包含 GT | `online_gt_included=false` | PASS |
+| GUI 人工复核 | 无明显穿模、弹飞、空机器人 | 待 F/成员 B 人工检查 | PENDING |
 
-最终结论：`PASS / FAIL / BLOCKED`
+最终结论：`AUTOMATED PASS`；完成人工复核后方可签署最终 `PASS`。
 
 ## 2. 冻结配置
 
 | 项目 | 值 |
 |---|---|
-| Isaac Sim | 5.1.x，完整版本待填写 |
+| Isaac Sim | 5.1.0 |
 | 场景 | `single_bin_scene_v1` |
 | 机器人 | `Arm_A`、`Arm_B`，均为 Franka |
 | 相机 | `CAM_A_TOP`、`CAM_HANDOFF`、`CAM_B_TOP` |
 | 交接 | `A_ONLY -> HANDOFF_VERIFY -> B_ONLY` |
 | 场景配置 | `simulation/configs/single_bin_scene_v1.json` |
 | 生成场景 | `simulation/generated/single_bin_scene_v1.usda` |
-| 证据目录 | `artifacts/g0/<时间>/` |
+| 证据目录 | `artifacts/g0/20260727-210649/` |
 
 ## 3. 三次独立启动
 
@@ -43,9 +43,9 @@
 
 | 次数 | 开始时间 | 退出码 | 用途 | 结论 |
 |---:|---|---:|---|---|
-| 1 | 待填写 | 待填写 | 1000 步、20 Reset、三相机 | 待填写 |
-| 2 | 待填写 | 待填写 | 冷启动 smoke | 待填写 |
-| 3 | 待填写 | 待填写 | 冷启动 smoke | 待填写 |
+| 1 | 2026-07-27T21:06:49+08:00 | 0 | 1000 步、20 Reset、三相机 | PASS |
+| 2 | 2026-07-27T21:07:11+08:00 | 0 | 冷启动 smoke | PASS |
+| 3 | 2026-07-27T21:07:22+08:00 | 0 | 冷启动 smoke | PASS |
 
 通过条件：三个退出码均为 `0`，三个 `run_result.json` 的 `status` 均为
 `PASS`。
@@ -56,35 +56,39 @@
 
 | 字段 | 实际值 |
 |---|---|
-| `headless_steps_completed` | 待填写 |
-| `headless_elapsed_seconds` | 待填写 |
-| `steps_per_second` | 待填写 |
-| `resets_completed` | 待填写 |
-| `reset_settle_steps` | 待填写 |
-| `online_gt_included` | 必须为 `false` |
+| `headless_steps_completed` | `1000` |
+| `headless_elapsed_seconds` | `0.40737210999941453` |
+| `steps_per_second` | `2454.758132561989` |
+| `resets_completed` | `20` |
+| `reset_settle_steps` | `120` |
+| `online_gt_included` | `false` |
 
 检查 `restart-1/reset_report.json`：
 
-- [ ] 共 20 条 Reset 记录。
-- [ ] 每条 `errors` 都是空列表。
-- [ ] Arm_A、Arm_B 关节位置和速度均为有限数。
-- [ ] P01-P04 与 Bin_01 未离开工作区。
+- [x] 共 20 条 Reset 记录。
+- [x] 每条 `errors` 都是空列表。
+- [x] Arm_A、Arm_B 关节位置和速度均为有限数。
+- [x] P01-P04 与 Bin_01 未离开工作区。
 
 ## 5. 三相机与机器人观测
 
 | 相机 | 样本 | 已人工打开 | 画面结论 |
 |---|---|---|---|
-| `CAM_A_TOP` | `restart-1/cameras/CAM_A_TOP.ppm` | [ ] | 待填写 |
-| `CAM_HANDOFF` | `restart-1/cameras/CAM_HANDOFF.ppm` | [ ] | 待填写 |
-| `CAM_B_TOP` | `restart-1/cameras/CAM_B_TOP.ppm` | [ ] | 待填写 |
+| `CAM_A_TOP` | `restart-1/cameras/CAM_A_TOP.ppm` | [x] | 可见 A 区 4 个红色零件、料箱和 Arm_A；机械臂遮挡较大 |
+| `CAM_HANDOFF` | `restart-1/cameras/CAM_HANDOFF.ppm` | [x] | 可见绿色 `HANDOFF_CENTER` 与料箱边缘 |
+| `CAM_B_TOP` | `restart-1/cameras/CAM_B_TOP.ppm` | [x] | 可见交接区、黄色 `FINISHED_01` 和 Arm_B |
 
 人工检查：
 
-- [ ] 三张图不是全黑、纯色或重复画面。
-- [ ] A 区相机能看到零件和装箱区域。
-- [ ] 交接相机能看到 `HANDOFF_CENTER`。
-- [ ] B 区相机能看到交接区和 `FINISHED_01`。
-- [ ] `robot_observation.json` 只有机器人遥测，没有物体 GT、目标坐标或抓取点。
+- [x] 三张图不是全黑、纯色或重复画面。
+- [x] A 区相机能看到零件和装箱区域。
+- [x] 交接相机能看到 `HANDOFF_CENTER`。
+- [x] B 区相机能看到交接区和 `FINISHED_01`。
+- [x] `robot_observation.json` 只有机器人遥测，没有物体 GT、目标坐标或抓取点。
+
+画面风险：三台相机曝光偏高，`CAM_A_TOP` 与 `CAM_B_TOP` 存在明显机械臂
+近景遮挡。当前画面足以通过 G0 场景覆盖检查，但进入感知识别数据采集前应调整
+曝光、灯光和相机位姿。
 
 ## 6. GUI 人工复核
 
@@ -104,7 +108,7 @@ GUI 截图/短视频位置：待填写。
 
 | 时间 | 失败现象 | 日志 | 原因 | 处理 | 是否复测 |
 |---|---|---|---|---|---|
-| 待填写；无失败则写“无” | | | | | |
+| 2026-07-27 | Isaac Sim 5.1 API 兼容错误 | 历次 G0 `run_result.json` | Stage、USD customData 与 articulation API 在 5.1 中有变化 | 增加 5.1 兼容层与回归测试 | 是，最终 3/3 PASS |
 
 若 Gate 未通过，状态必须保持 `FAIL` 或 `BLOCKED`，并按计划删减渲染质量/
 材质，修复唯一 Isaac Sim 路径；不得另开 Gazebo 生产线来规避问题。
@@ -113,9 +117,10 @@ GUI 截图/短视频位置：待填写。
 
 | 项目 | 值 |
 |---|---|
-| 证据 SHA 文件 | `artifacts/g0/<时间>/SHA256SUMS.txt` |
-| Issue | 待填写 |
-| Draft PR | 待填写 |
-| B 结论 | 待填写 |
+| 证据 SHA 文件 | `artifacts/g0/20260727-210649/SHA256SUMS.txt` |
+| 证据压缩包 | `member-b-g0-20260727-210649.tar.gz`，SHA256 `0eb8806c062e58edb44655f2892ef11760de9eb862ef25048abb3487bb1240c1` |
+| Issue | 未创建 |
+| Draft PR | 待创建并回填链接 |
+| B 结论 | 自动验收通过；GUI 人工复核待完成 |
 | F 复核 | 待填写 |
 | A 的 Gate 决策 | 待填写 |
