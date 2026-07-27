@@ -58,7 +58,10 @@ def create_new_stage() -> Any:
     """Create and return a new in-memory USD stage."""
 
     stage = _stage_function("create_new_stage")()
-    if stage is None:
+    # Isaac Sim 5.1 returns a boolean success flag from create_new_stage(),
+    # while some older variants return the stage object itself. Never pass the
+    # 5.1 boolean into USD APIs as though it were a Usd.Stage.
+    if stage is None or isinstance(stage, bool):
         stage = _stage_function("get_current_stage")()
     if stage is None:
         raise RuntimeError("Isaac Sim did not return a current USD stage.")
