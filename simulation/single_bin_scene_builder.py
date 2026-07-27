@@ -8,7 +8,7 @@ import re
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
-from pxr import Gf, PhysxSchema, Sdf, Usd, UsdGeom, UsdLux, UsdPhysics
+from pxr import Gf, PhysxSchema, Sdf, Usd, UsdGeom, UsdLux, UsdPhysics, Vt
 
 
 JsonObject = dict[str, Any]
@@ -292,7 +292,7 @@ def _create_markers(stage: Usd.Stage, config: Mapping[str, Any]) -> None:
         station_root.SetCustomDataByKey("scene:kind", str(station["kind"]))
         station_root.SetCustomDataByKey(
             "scene:footprintM",
-            [float(footprint[0]), float(footprint[1])],
+            Vt.DoubleArray([float(footprint[0]), float(footprint[1])]),
         )
         _cube(
             stage,
@@ -503,7 +503,10 @@ def _create_bin(stage: Usd.Stage, bin_config: Mapping[str, Any]) -> None:
         collision=True,
     )
 
-    root.SetCustomDataByKey("scene:recipePartIds", list(bin_config["recipe_part_ids"]))
+    root.SetCustomDataByKey(
+        "scene:recipePartIds",
+        Vt.StringArray([str(item) for item in bin_config["recipe_part_ids"]]),
+    )
     root.SetCustomDataByKey(
         "scene:emptySlots",
         int(
@@ -565,7 +568,8 @@ def _create_cameras(stage: Usd.Stage, cameras: Iterable[Mapping[str, Any]]) -> N
             "scene:resolutionY", Sdf.ValueTypeNames.Int, custom=True
         ).Set(int(resolution[1]))
         prim.SetCustomDataByKey(
-            "scene:consumers", [str(item) for item in camera_config["consumers"]]
+            "scene:consumers",
+            Vt.StringArray([str(item) for item in camera_config["consumers"]]),
         )
 
 
@@ -652,7 +656,9 @@ def build_scene(
     )
     world.SetCustomDataByKey(
         "scene:tokenSequence",
-        [str(token) for token in workflow.get("token_sequence", [])],
+        Vt.StringArray(
+            [str(token) for token in workflow.get("token_sequence", [])]
+        ),
     )
     world.SetCustomDataByKey(
         "scene:handoffReadyEvent",
