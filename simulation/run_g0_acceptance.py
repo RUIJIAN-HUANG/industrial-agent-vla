@@ -326,7 +326,8 @@ def _run(args: argparse.Namespace, result: dict[str, Any]) -> None:
             world.reset()
             for _ in range(settle_steps):
                 world.step(render=False)
-            snapshot = _dynamic_snapshot(stage)
+            runtime_stage = isaac_compat.get_current_stage()
+            snapshot = _dynamic_snapshot(runtime_stage)
             current_errors = _validate_dynamic_snapshot(snapshot, expected_positions)
             robot_states = [
                 _robot_state(arm_a, "Arm_A"),
@@ -353,7 +354,8 @@ def _run(args: argparse.Namespace, result: dict[str, Any]) -> None:
         for step_index in range(1, args.steps + 1):
             world.step(render=(step_index % 30 == 0))
             if step_index % 100 == 0 or step_index == args.steps:
-                snapshot = _dynamic_snapshot(stage)
+                runtime_stage = isaac_compat.get_current_stage()
+                snapshot = _dynamic_snapshot(runtime_stage)
                 step_errors = _validate_dynamic_snapshot(
                     snapshot, expected_positions
                 )

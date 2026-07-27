@@ -39,6 +39,25 @@ class IsaacCompatibilityTests(unittest.TestCase):
         ):
             self.assertIs(isaac_compat.create_new_stage(), expected_stage)
 
+    def test_get_current_stage_returns_fresh_valid_handle(self) -> None:
+        expected_stage = object()
+
+        with patch.object(
+            isaac_compat,
+            "_stage_function",
+            return_value=lambda: expected_stage,
+        ):
+            self.assertIs(isaac_compat.get_current_stage(), expected_stage)
+
+    def test_get_current_stage_rejects_boolean_result(self) -> None:
+        with patch.object(
+            isaac_compat,
+            "_stage_function",
+            return_value=lambda: True,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "valid current USD stage"):
+                isaac_compat.get_current_stage()
+
 
 if __name__ == "__main__":
     unittest.main()
