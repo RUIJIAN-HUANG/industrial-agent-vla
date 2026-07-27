@@ -129,7 +129,10 @@ try:
         TrainConfig,
     )
     from openpi.training.optimizer import AdamW, CosineDecaySchedule  # type: ignore
-    from openpi.training.weight_loaders import WeightLoader  # type: ignore
+    from openpi.training.weight_loaders import (  # type: ignore
+        CheckpointWeightLoader,
+        WeightLoader,
+    )
 
     # 复用官方 _CONFIGS 注册表（若官方以字典形式导出）。
     # 注意：_CONFIGS 为 openpi 私有 API（前缀下划线），官方可能随时重命名或移除；
@@ -190,6 +193,10 @@ except Exception as _e:  # pragma: no cover
         action_dim: int = 7
         action_horizon: int = 10
         max_token_len: int = 48
+        paligemma_variant: str = ""  # LoRA 变体名（gemma_2b_lora）
+
+        def get_freeze_filter(self) -> Any:
+            return None
 
     class ModelType:  # 占位枚举
         PI05 = "pi05"
@@ -209,6 +216,12 @@ except Exception as _e:  # pragma: no cover
 
     class WeightLoader:
         """占位权重加载器。"""
+
+    class CheckpointWeightLoader:
+        """占位 checkpoint 权重加载器（LoRA 微调时必须配置）。"""
+
+        def __init__(self, path: str) -> None:
+            self.path = path
 
     _CONFIGS = {}
 
@@ -241,6 +254,7 @@ def _build_pi05_industrial_config() -> TrainConfig:
             action_dim=7,  # 7 维动作（方案书 §3.4）
             action_horizon=10,  # 动作块长度（初始候选，D21 后按闭环表现调整）
             max_token_len=48,  # 文本 token 最大长度
+            paligemma_variant="gemma_2b_lora",  # LoRA 变体：冻结 Gemma 2B backbone
         ),
         # ---- 数据配置 ----
         # 方案书 §5.4：canonical → LeRobot 转换由 scripts/pi05/convert_openpi.py 完成。
@@ -257,29 +271,29 @@ def _build_pi05_industrial_config() -> TrainConfig:
         log_interval=100,
         save_interval=1000,
         keep_period=5000,
-        # eval_interval：若 openpi TrainConfig 支持则取消注释；当前由外部验证脚本按 save_interval
-        # 触发评测（方案书 §6.3 要求每个 checkpoint 在独立验证 seed 闭环评测；PI05_EVAL_INTERVAL
-        # 环境变量已定义用于审计，见 W2）。
+        # LoRA 训练禁用 EMA（EMA 与 LoRA 不兼容，ema_decay=None 由 openpi 内部处理）
+        ema_decay=None,
         # ---- 学习率 ----
         # LoRA 微调用较小学习率（方案书 §6.3 首轮微调 1—2 组超参）。
-        # warmup_steps 若 openpi CosineDecaySchedule 支持则传入（取消注释 warmup_steps=WARMUP_STEPS）。
         lr_schedule=CosineDecaySchedule(
             init_value=2e-5,
             # warmup_steps=WARMUP_STEPS,  # 若官方 CosineDecaySchedule 支持则取消注释（C2）
         ),
-        # ---- 优化器（C2 修复） ----
-        # weight_decay / gradient_accumulation_steps 若 openpi AdamW / TrainConfig 支持对应字段则传入。
-        # 实际值见环境变量 PI05_WEIGHT_DECAY / PI05_GRADIENT_ACCUMULATION_STEPS。
-        # mixed_precision：JAX 路径推荐 bf16；若 openpi TrainConfig 支持 mixed_precision 字段则取消注释（C2）。
-        # optimizer=AdamW(weight_decay=WEIGHT_DECAY)  # 若官方 AdamW 支持则取消注释（C2）
-        # ---- LoRA 相关（openpi 机制，非 PEFT） ----
-        # freeze_filter：JAX nnx.filterlib.Filter，冻结 base 参数只让 LoRA 层可训练。
-        #   TODO(D21): 服务器上按官方 LoRA 文档配置 freeze_filter。
-        # weight_loader：LoRAWeightLoader，加载 base 权重并注入 LoRA 适配层。
-        #   TODO(D21): 指向 pi05_base checkpoint（BASE_CHECKPOINT），LoRA rank=LORA_RANK。
-        # 方案书 §3.2.1：LoRA rank=32 为 OpenVLA-OFT 示例候选值；π0.5 暂沿用。
-        # freeze_filter=...,         # 留空，服务器上配置
-        # weight_loader=...,         # 留空，指向 pi05_base checkpoint
+        # ---- LoRA 权重加载（openpi 机制，非 PEFT） ----
+        # CheckpointWeightLoader 加载 pi05_base 权重，_merge_params 自动注入 LoRA 适配层
+        # （rank=LORA_RANK=32，在 weight_loader 或 model_config 中指定；方案书 §3.2.1）。
+        weight_loader=CheckpointWeightLoader(BASE_CHECKPOINT + "/params"),
+        # ---- LoRA 参数冻结（openpi 机制，非 PEFT） ----
+        # freeze_filter：JAX nnx.filterlib.Filter，冻结 Gemma backbone 仅训练 LoRA 层。
+        # get_freeze_filter() 生成的 filter 必须与 model Pi0Config 参数完全匹配，
+        # 否则训练效果会很差（~1-3% success rate）。
+        freeze_filter=Pi0Config(
+            model_type=ModelType.PI05,
+            action_dim=7,
+            action_horizon=10,
+            max_token_len=48,
+            paligemma_variant="gemma_2b_lora",
+        ).get_freeze_filter(),
         # ---- 其他 ----
         overwrite=True,
         wandb_enabled=True,
