@@ -200,6 +200,10 @@ cython_debug/
 #   and can be added to the global gitignore or merged into this file. However, if you prefer, 
 #   you could uncomment the following to ignore the entire vscode folder
 # .vscode/
+
+# Visual Studio
+.vs/
+
 # Temporary file for partial code execution
 tempCodeRunnerFile.py
 
@@ -244,6 +248,14 @@ scratch/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Trae IDE local config
+.trae/
+
+# Claude Code
+CLAUDE.md
+AGENTS.md
+.claude/
 
 # Runtime output, caches, and experiment trackers
 artifacts/
