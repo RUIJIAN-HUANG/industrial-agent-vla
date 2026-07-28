@@ -5,7 +5,6 @@ from pathlib import Path
 
 from jsonschema import Draft202012Validator, RefResolver
 
-
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCHEMA_DIR = REPO_ROOT / "schemas"
 
