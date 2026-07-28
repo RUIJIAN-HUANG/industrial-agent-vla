@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -34,3 +36,16 @@ def test_pi05_policy_projection_rejects_unexpected_model_head(
 ) -> None:
     with pytest.raises(ValueError, match="32 action dimensions"):
         project_policy_actions(np.zeros((2, invalid_dim), dtype=np.float32))
+
+
+def test_pi05_docker_uses_uv_managed_python_instead_of_ubuntu_apt() -> None:
+    dockerfile = (
+        Path(__file__).resolve().parents[2] / "services" / "pi05" / "Dockerfile"
+    ).read_text(encoding="utf-8")
+
+    assert "FROM ghcr.io/astral-sh/uv:0.7.19 AS uv" in dockerfile
+    assert "COPY --from=uv /uv /uvx /bin/" in dockerfile
+    assert "uv python install 3.11" in dockerfile
+    assert "uv sync --frozen --python 3.11" in dockerfile
+    assert "apt-get install" in dockerfile
+    assert "python3.11 \\" not in dockerfile

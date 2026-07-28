@@ -3,8 +3,11 @@
 # 负责人：E（pi0.5 / openpi）
 # 方案书出处：§3.3 / §3.3.1 openpi-service 部署在独立 Ubuntu 22.04 + JAX + uv 环境
 #             不能与角色 D 的 PyTorch 环境混用，通过 Docker 实现环境隔离
-# 构建产物：openpi-service 容器（WebSocket 推理服务）
+# 构建产物：openpi-service 容器（冻结 HTTP 推理服务）
 # =============================================================================
+
+# uv 官方 distroless 镜像只用于提供固定版本的 uv/uvx 二进制。
+FROM ghcr.io/astral-sh/uv:0.7.19 AS uv
 
 # -----------------------------------------------------------------------------
 # 1. 基础镜像：NVIDIA CUDA 12.4.1 + cuDNN + Ubuntu 22.04
@@ -20,7 +23,7 @@ LABEL org.opencontainers.image.openpi-revision="${OPENPI_COMMIT}"
 # -----------------------------------------------------------------------------
 # 2. 系统依赖
 #    - git / git-lfs: clone openpi 仓库与处理大文件指针
-#    - python3.11 / python3.11-venv / python3-pip: uv 安装基础与项目运行时
+#    - Python 3.11 由固定版本 uv 安装，避免 Ubuntu 22.04 默认 apt 源缺包
 #    - ffmpeg: openpi 数据预处理 / 视频解码
 #    - libgl1 / libglib2.0-0: cv2 (opencv-python) 运行时依赖
 #    - ca-certificates / curl: 拉取远端资源与 https 校验
@@ -30,9 +33,6 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git \
         git-lfs \
-        python3.11 \
-        python3.11-venv \
-        python3-pip \
         ffmpeg \
         libgl1 \
         libglib2.0-0 \
@@ -40,17 +40,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         curl \
     && rm -rf /var/lib/apt/lists/*
 
-# 把 python3.11 设为默认 python，保证 uv 与 openpi 使用一致的 3.11 解释器
-RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 \
-    && update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1
-
 # -----------------------------------------------------------------------------
-# 3. 安装 uv（openpi 官方依赖管理器）
-#    官方步骤：pip install uv
-#    uv 用于 uv sync 锁定 openpi 依赖并创建虚拟环境
+# 3. 安装固定 uv 二进制与固定 Python 3.11
 # -----------------------------------------------------------------------------
-RUN pip install --no-cache-dir "pip==25.1.1" \
-    && pip install --no-cache-dir "uv==0.7.19"
+COPY --from=uv /uv /uvx /bin/
+ENV UV_PYTHON_INSTALL_DIR=/opt/uv/python \
+    UV_PROJECT_ENVIRONMENT=/workspace/openpi/.venv \
+    UV_PYTHON=3.11
+RUN uv python install 3.11
 
 # -----------------------------------------------------------------------------
 # 4. clone openpi 仓库（含子模块）
@@ -72,8 +69,8 @@ WORKDIR /workspace/openpi
 #    - uv pip install -e .: 以可编辑模式安装 openpi 本体，便于后续 patch
 #    GIT_LFS_SKIP_SMUDGE=1 已在 ENV 设置，避免安装过程触发 LFS 拉取
 # -----------------------------------------------------------------------------
-RUN uv sync --frozen \
-    && uv pip install -e .
+RUN uv sync --frozen --python 3.11 \
+    && uv pip install --python /workspace/openpi/.venv/bin/python -e .
 
 # -----------------------------------------------------------------------------
 # 7. 复制本项目代码（角色 E 交付物）
