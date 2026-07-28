@@ -1,8 +1,10 @@
 """Demonstrate the frozen π0.5 -> handoff -> OpenVLA pipeline.
 
 This script is intentionally dependency-free. It validates orchestration order,
-token ownership, three-frame handoff voting, and same-role recovery. It does not
-load real VLA weights, YOLO weights, or Isaac Sim.
+token ownership, candidate-precheck versus locked three-frame handoff voting,
+canonical handoff event ordering, and same-role recovery. It does not load real
+VLA weights, YOLO weights, or Isaac Sim, and it models rather than proves fsync
+durability.
 """
 
 from __future__ import annotations
@@ -18,6 +20,11 @@ _TASK_PROFILE = json.loads(
 )["lifecycle"]["task_profile"]
 ARM_A_INSTRUCTION = _TASK_PROFILE["arm_a_instruction"]
 ARM_B_INSTRUCTION = _TASK_PROFILE["arm_b_instruction"]
+HANDOFF_EVENT_SEQUENCE = (
+    "handoff.candidate_checked",
+    "handoff.verified",
+    "handoff.ready",
+)
 
 
 @dataclass
@@ -164,9 +171,34 @@ class FrozenPipelineDemo:
         )
         self.emit("arm_a.retreat_complete", "ADVANCING_SUBTASK", pose="HOME_A")
 
+        candidate_observation_id = "obs-handoff-candidate"
+        self.detect(candidate_observation_id, "CAM_HANDOFF")
+        self.emit(
+            "handoff.candidate_checked",
+            "VERIFYING",
+            observation_id=candidate_observation_id,
+            verdict="PASS",
+            contributes_to_quorum=False,
+            grants_b_only=False,
+        )
         self.set_token("HANDOFF_VERIFY", "VERIFYING")
         handoff_votes = self.verify_handoff()
-        self.emit("handoff.ready", "ADVANCING_SUBTASK", votes=sum(handoff_votes))
+        self.emit(
+            "handoff.verified",
+            "VERIFYING",
+            votes=sum(handoff_votes),
+            frame_count=len(handoff_votes),
+            frames_captured_after_lock=True,
+            grants_b_only=False,
+            persistence="mock_ordering_only",
+        )
+        self.emit(
+            "handoff.ready",
+            "VERIFYING",
+            verified_event_recorded=True,
+            grants_b_only=True,
+            persistence="mock_ordering_only",
+        )
 
         self.set_token("B_ONLY", "OBSERVING")
         self.detect("obs-b-1", "CAM_B_TOP")
@@ -195,9 +227,15 @@ class FrozenPipelineDemo:
         ]
         first_openvla = self.call_order.index("openvla_oft")
         order_is_valid = all(name == "pi05" for name in self.call_order[:first_openvla])
+        handoff_event_types = [
+            event["event_type"]
+            for event in self.events
+            if event["event_type"] in HANDOFF_EVENT_SEQUENCE
+        ]
         success = (
             self.token_history == expected_tokens
             and order_is_valid
+            and handoff_event_types == list(HANDOFF_EVENT_SEQUENCE)
             and bool(self.pi05.calls)
             and bool(self.openvla.calls)
             and sum(handoff_votes) >= 2

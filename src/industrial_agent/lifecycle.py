@@ -12,7 +12,14 @@ from enum import Enum
 from typing import Any, Mapping
 from uuid import uuid4
 
-from .contracts import Postcondition, Subtask, TaskPlan, TaskSchema
+from .contracts import (
+    OPENVLA_OFT_EXECUTOR_NAME,
+    PI05_EXECUTOR_NAME,
+    Postcondition,
+    Subtask,
+    TaskPlan,
+    TaskSchema,
+)
 from .errors import ContractError, FailureCode
 
 
@@ -32,14 +39,34 @@ FROZEN_TOKEN_SEQUENCE = (
     ControlToken.NONE,
 )
 
+HANDOFF_CANDIDATE_CHECKED_EVENT_TYPE = "handoff.candidate_checked"
+HANDOFF_VERIFIED_EVENT_TYPE = "handoff.verified"
+HANDOFF_READY_EVENT_TYPE = "handoff.ready"
+FROZEN_HANDOFF_EVENT_SEQUENCE = (
+    HANDOFF_CANDIDATE_CHECKED_EVENT_TYPE,
+    HANDOFF_VERIFIED_EVENT_TYPE,
+    HANDOFF_READY_EVENT_TYPE,
+)
+
+ARM_A_PACK_HANDOFF_SUBTASK_ID = "S01_ARM_A_PACK_HANDOFF"
+ARM_B_TRANSPORT_SUBTASK_ID = "S02_ARM_B_TRANSPORT"
+FROZEN_SUBTASK_EXECUTOR_ASSIGNMENTS = (
+    (ARM_A_PACK_HANDOFF_SUBTASK_ID, PI05_EXECUTOR_NAME),
+    (ARM_B_TRANSPORT_SUBTASK_ID, OPENVLA_OFT_EXECUTOR_NAME),
+)
+FROZEN_SUBTASK_TOKEN_ASSIGNMENTS = (
+    (ARM_A_PACK_HANDOFF_SUBTASK_ID, ControlToken.A_ONLY),
+    (ARM_B_TRANSPORT_SUBTASK_ID, ControlToken.B_ONLY),
+)
+
 
 @dataclass(frozen=True)
 class FixedTaskProfile:
     """Versioned, non-NLP workcell profile loaded by the supervisor."""
 
     profile_id: str = "single_bin_pack_handoff_v1"
-    primary_executor: str = "pi05"
-    collaborative_executor: str = "openvla_oft"
+    primary_executor: str = PI05_EXECUTOR_NAME
+    collaborative_executor: str = OPENVLA_OFT_EXECUTOR_NAME
     arm_a_id: str = "Arm_A"
     arm_b_id: str = "Arm_B"
     bin_id: str = "Bin_01"
@@ -111,8 +138,8 @@ class FixedTaskProfile:
 
     def executor_for_subtask(self, subtask_id: str) -> str:
         mapping = {
-            "S01_ARM_A_PACK_HANDOFF": self.primary_executor,
-            "S02_ARM_B_TRANSPORT": self.collaborative_executor,
+            ARM_A_PACK_HANDOFF_SUBTASK_ID: self.primary_executor,
+            ARM_B_TRANSPORT_SUBTASK_ID: self.collaborative_executor,
         }
         try:
             return mapping[subtask_id]
@@ -123,10 +150,7 @@ class FixedTaskProfile:
             ) from exc
 
     def required_token_for_subtask(self, subtask_id: str) -> ControlToken:
-        mapping = {
-            "S01_ARM_A_PACK_HANDOFF": ControlToken.A_ONLY,
-            "S02_ARM_B_TRANSPORT": ControlToken.B_ONLY,
-        }
+        mapping = dict(FROZEN_SUBTASK_TOKEN_ASSIGNMENTS)
         try:
             return mapping[subtask_id]
         except KeyError as exc:
@@ -241,7 +265,7 @@ class FixedDualVLAPlanner:
             task_id=task.task_id,
             subtasks=[
                 Subtask(
-                    subtask_id="S01_ARM_A_PACK_HANDOFF",
+                    subtask_id=ARM_A_PACK_HANDOFF_SUBTASK_ID,
                     sequence=1,
                     # π0.5 alone receives and interprets this preset instruction.
                     instruction=profile.arm_a_instruction,
@@ -251,13 +275,13 @@ class FixedDualVLAPlanner:
                     assigned_executor=profile.primary_executor,
                 ),
                 Subtask(
-                    subtask_id="S02_ARM_B_TRANSPORT",
+                    subtask_id=ARM_B_TRANSPORT_SUBTASK_ID,
                     sequence=2,
                     instruction=profile.arm_b_instruction,
                     task_type=second_task_type,
                     preconditions=handoff_conditions,
                     postconditions=transport_conditions + task.postconditions,
-                    depends_on=("S01_ARM_A_PACK_HANDOFF",),
+                    depends_on=(ARM_A_PACK_HANDOFF_SUBTASK_ID,),
                     assigned_executor=profile.collaborative_executor,
                 ),
             ],

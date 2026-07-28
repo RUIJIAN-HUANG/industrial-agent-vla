@@ -656,6 +656,6 @@ def build_scene(
     )
     world.SetCustomDataByKey(
         "scene:handoffReadyEvent",
-        str(workflow.get("handoff_ready_event", "handoff_ready")),
+        str(workflow.get("handoff_ready_event", "handoff.ready")),
     )
     return stage

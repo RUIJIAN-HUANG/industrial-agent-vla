@@ -25,7 +25,7 @@ G0 后只能保留一个主仿真平台；不要同时维护重复的 Isaac/Gaze
 
 - Arm A（π0.5）完成 4 个零件装箱，并把满箱放到中央固定交接位；
 - Supervisor 完成 `A_ONLY → HANDOFF_VERIFY → B_ONLY` 令牌切换；
-- Arm B（OpenVLA）在收到 `handoff_ready` 后把同一料箱搬到成品位；
+- Arm B（OpenVLA）只在 durable `handoff.ready` 事件确认后把同一料箱搬到成品位；
 - 三台固定相机同时服务 VLA 观测、YOLO 检测证据和闭环验证。
 
 本目录的第一版场景工具如下：
@@ -45,6 +45,11 @@ RenderProduct。创建 RGB Annotator 后，必须把其 `uint8 H×W×3/4` 输出
 `IsaacRgbCasPublisher.publish()`；该桥会严格校验冻结相机分辨率、移除 alpha、
 编码 RGB PNG、原子写入共享 CAS 并返回 `ImageReference`。不得在仿真适配器中
 另写一套路径或 SHA 逻辑。
+
+场景 JSON 只保存几何、物理、相机和场景事件名。交接稳定帧数属于 Supervisor
+生命周期配置，机械臂正常工作空间属于控制器安全配置，两者的机器真源均为
+`configs/agent.default.json`；不得在场景 JSON 中重复维护
+`handoff_verify_stable_cycles` 或 `normal_workspace_limits`。
 
 主开发与最终 Docker 建议冻结 **Isaac Sim 5.1.x**。代码兼容 4.5，并为 4.2
 保留最低限度的导入回退；不要把多个 Isaac Sim 版本混入同一个正式镜像。
@@ -131,7 +136,7 @@ simulation/generated/single_bin_scene_v1.usda
 
 1. A 臂对 P01～P04 的预抓取、抓取、抬升和箱内放置位逐点 IK；
 2. A 臂把满箱搬到 `HANDOFF_CENTER`，然后完全退出共享区；
-3. B 臂只在 `handoff_ready` 后抓取前侧把手并搬到 `FINISHED_01`；
+3. B 臂只在 durable `handoff.ready` 事件确认后抓取前侧把手并搬到 `FINISHED_01`；
 4. 完整机械臂碰撞体不能同时进入共享区；
 5. 连续 Reset 20 次无穿模、弹飞和 NaN；
 6. 教师策略完整闭环至少连续 3 次成功，再接入双 VLA。

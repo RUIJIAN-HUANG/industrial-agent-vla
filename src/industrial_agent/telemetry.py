@@ -95,7 +95,11 @@ class EventSink:
 
 @dataclass
 class RunMemory:
-    """Small deterministic memory; no free-form hidden reasoning is stored."""
+    """Runtime-only deterministic memory; no hidden reasoning is stored.
+
+    Persistence uses :meth:`snapshot` inside the versioned memory-store format;
+    this mutable working object is not a standalone JSON exchange contract.
+    """
 
     run_id: str
     task_id: str

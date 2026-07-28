@@ -213,6 +213,25 @@ class ImageCasTests(unittest.TestCase):
         )
         self.assertEqual(configured.root, Path("D:/container/cas"))
         self.assertEqual(configured.max_pixels, 4_194_304)
+        self.assertEqual(configured.LAYOUT, "sha256-v1")
+        self.assertEqual(configured.ENCODING, "png")
+        self.assertEqual(configured.DIGEST_SCOPE, "encoded_bytes")
+
+    def test_protocol_constants_cannot_be_reconfigured(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        baseline = json.loads(
+            (root / "configs" / "agent.default.json").read_text(encoding="utf-8")
+        )["image_cas"]
+        for field, value in (
+            ("layout", "flat"),
+            ("encoding", "jpeg"),
+            ("digest_scope", "decoded_pixels"),
+        ):
+            with self.subTest(field=field):
+                raw = dict(baseline)
+                raw[field] = value
+                with self.assertRaisesRegex(ValueError, field):
+                    ImageCasConfig.from_mapping(raw, environ={})
 
     def test_isaac_bridge_removes_alpha_without_changing_rgb(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

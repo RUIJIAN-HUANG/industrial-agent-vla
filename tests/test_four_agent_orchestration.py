@@ -22,7 +22,12 @@ from industrial_agent.executor import (
     Pi05Adapter,
 )
 from industrial_agent.fsm import AgentState
-from industrial_agent.lifecycle import FixedTaskProfile
+from industrial_agent.lifecycle import (
+    FROZEN_HANDOFF_EVENT_SEQUENCE,
+    HANDOFF_READY_EVENT_TYPE,
+    HANDOFF_VERIFIED_EVENT_TYPE,
+    FixedTaskProfile,
+)
 from industrial_agent.mock import (
     FixedDualArmMockSimulator,
     MockExecutor,
@@ -223,7 +228,7 @@ class FourAgentOrchestrationTests(unittest.TestCase):
         handoff_index = next(
             index
             for index, event in enumerate(result.events)
-            if event.event_type == "handoff_ready"
+            if event.event_type == HANDOFF_READY_EVENT_TYPE
         )
         openvla_index = next(
             index
@@ -232,6 +237,14 @@ class FourAgentOrchestrationTests(unittest.TestCase):
             and event.payload["executor"] == "openvla_oft"
         )
         self.assertLess(handoff_index, openvla_index)
+        self.assertEqual(
+            tuple(
+                event.event_type
+                for event in result.events
+                if event.event_type in FROZEN_HANDOFF_EVENT_SEQUENCE
+            ),
+            FROZEN_HANDOFF_EVENT_SEQUENCE,
+        )
         handoff_start_index = next(
             index
             for index, event in enumerate(result.events)
@@ -258,7 +271,9 @@ class FourAgentOrchestrationTests(unittest.TestCase):
 
         self.assertTrue(result.success)
         handoff = next(
-            event for event in result.events if event.event_type == "handoff.verified"
+            event
+            for event in result.events
+            if event.event_type == HANDOFF_VERIFIED_EVENT_TYPE
         )
         self.assertEqual(handoff.payload["stable_frames"], 3)
         self.assertEqual(handoff.payload["required_frames"], 3)
@@ -298,7 +313,7 @@ class FourAgentOrchestrationTests(unittest.TestCase):
         self.assertEqual(simulator.illegal_arm_b_attempts, 0)
         self.assertNotIn("B_ONLY", result.control_token_history)
         self.assertFalse(
-            any(event.event_type == "handoff_ready" for event in result.events)
+            any(event.event_type == HANDOFF_READY_EVENT_TYPE for event in result.events)
         )
 
     def test_contradictory_arm_retreat_evidence_safe_stops_before_arm_b(self) -> None:
@@ -580,7 +595,7 @@ class FourAgentOrchestrationTests(unittest.TestCase):
     def test_handoff_event_must_persist_before_b_only_is_granted(self) -> None:
         class FailingHandoffEventSink(EventSink):
             def emit(self, **kwargs: Any):
-                if kwargs.get("event_type") == "handoff_ready":
+                if kwargs.get("event_type") == HANDOFF_READY_EVENT_TYPE:
                     raise OSError("event store unavailable")
                 return super().emit(**kwargs)
 

@@ -95,6 +95,8 @@ ALLOWED_TRANSITIONS: dict[AgentState, frozenset[AgentState]] = {
 
 @dataclass(frozen=True)
 class StateTransition:
+    """Supervisor-local history item emitted through the versioned event envelope."""
+
     previous: AgentState
     current: AgentState
     reason: str

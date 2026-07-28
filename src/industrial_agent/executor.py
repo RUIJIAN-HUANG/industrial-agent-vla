@@ -15,6 +15,8 @@ from uuid import uuid4
 
 from .contracts import (
     ACTION_CONTRACT_VERSION,
+    OPENVLA_OFT_EXECUTOR_NAME,
+    PI05_EXECUTOR_NAME,
     ActionChunk,
     ActionStep,
     Observation,
@@ -24,10 +26,42 @@ from .errors import ContractError, ExecutorError, FailureCode
 
 ARTIFACT_DIGEST_PATTERN = re.compile(r"sha256:[0-9a-fA-F]{64}")
 CAS_IMAGE_URI_PATTERN = re.compile(r"cas://sha256/([0-9a-fA-F]{64})")
+OPENVLA_OFT_TASK_TYPES = frozenset(
+    {"pick_place", "object_localization", "visual_manipulation"}
+)
+PI05_TASK_TYPES = frozenset(
+    {"pick_place", "visual_manipulation", "instruction_interaction"}
+)
+EXECUTOR_CONFIG_FIELDS = frozenset(
+    {
+        "enabled",
+        "base_url",
+        "checkpoint_sha",
+        "norm_stats_sha",
+    }
+)
+EXECUTOR_HEALTH_RESPONSE_FIELDS = frozenset(
+    {
+        "schema_version",
+        "service",
+        "service_version",
+        "status",
+        "uptime_ms",
+        "checkpoint_sha",
+        "norm_stats_sha",
+        "supported_task_types",
+        "supported_action_contracts",
+        "queue",
+        "device",
+        "time_ms",
+    }
+)
 
 
 @dataclass(frozen=True)
 class ExecutorDescriptor:
+    """Runtime capability identity; `/health` is the JSON transport contract."""
+
     name: str
     task_types: frozenset[str]
     action_contract_version: str
@@ -41,6 +75,8 @@ class ExecutorDescriptor:
 
 @dataclass(frozen=True)
 class ExecutionContext:
+    """Supervisor-local call context assembled into `/v1/infer` envelopes."""
+
     run_id: str
     strategy_attempt: int
     replan_index: int
@@ -270,6 +306,13 @@ def _finite_numeric_vector(
 def _validate_health_response(
     response: Mapping[str, Any], descriptor: ExecutorDescriptor
 ) -> None:
+    unknown_keys = set(response) - EXECUTOR_HEALTH_RESPONSE_FIELDS
+    if unknown_keys:
+        raise ExecutorError(
+            FailureCode.EXECUTOR_BAD_RESPONSE,
+            "executor health response contains unknown fields: "
+            f"{sorted(unknown_keys, key=str)}",
+        )
     version = response.get("schema_version")
     if not _is_compatible_version(version, "1.0"):
         raise ExecutorError(
@@ -604,9 +647,8 @@ class OpenVLAOFTAdapter:
         )
         self.transport = transport
         self.descriptor = ExecutorDescriptor(
-            name="openvla_oft",
-            task_types=task_types
-            or frozenset({"pick_place", "object_localization", "visual_manipulation"}),
+            name=OPENVLA_OFT_EXECUTOR_NAME,
+            task_types=task_types or OPENVLA_OFT_TASK_TYPES,
             action_contract_version=ACTION_CONTRACT_VERSION,
             checkpoint_sha=checkpoint_sha,
             norm_stats_sha=norm_stats_sha,
@@ -735,11 +777,8 @@ class Pi05Adapter:
         )
         self.transport = transport
         self.descriptor = ExecutorDescriptor(
-            name="pi05",
-            task_types=task_types
-            or frozenset(
-                {"pick_place", "visual_manipulation", "instruction_interaction"}
-            ),
+            name=PI05_EXECUTOR_NAME,
+            task_types=task_types or PI05_TASK_TYPES,
             action_contract_version=ACTION_CONTRACT_VERSION,
             checkpoint_sha=checkpoint_sha,
             norm_stats_sha=norm_stats_sha,
@@ -857,7 +896,8 @@ def build_executors_from_config(
 
     The transport factory receives ``(executor_name, base_url)``. This keeps
     deployment-specific HTTP/WebSocket code outside the supervisor while ensuring
-    that ``config.executors.*.base_url`` is actually consumed.
+    that ``config.executors.*.base_url`` is actually consumed. Supported task
+    types are frozen adapter capabilities, not deployment configuration.
     """
 
     raw_executors = config.get("executors")
@@ -865,14 +905,19 @@ def build_executors_from_config(
         raise ValueError("executors config must be an object")
 
     adapter_types = {
-        "openvla_oft": OpenVLAOFTAdapter,
-        "pi05": Pi05Adapter,
+        OPENVLA_OFT_EXECUTOR_NAME: OpenVLAOFTAdapter,
+        PI05_EXECUTOR_NAME: Pi05Adapter,
     }
     built: list[Executor] = []
     for name, adapter_type in adapter_types.items():
         raw = raw_executors.get(name)
         if not isinstance(raw, Mapping):
             raise ValueError(f"config.executors.{name} must be an object")
+        if set(raw) != EXECUTOR_CONFIG_FIELDS:
+            raise ValueError(
+                f"config.executors.{name} must contain exactly "
+                f"{sorted(EXECUTOR_CONFIG_FIELDS)}; task_types are frozen in code"
+            )
         enabled = raw.get("enabled")
         if not isinstance(enabled, bool):
             raise ValueError(f"config.executors.{name}.enabled must be a boolean")

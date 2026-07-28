@@ -262,6 +262,7 @@ class ExecutorAdapterTests(unittest.TestCase):
             ("checkpoint_sha", "wrong-checkpoint"),
             ("norm_stats_sha", "wrong-norm"),
             ("supported_action_contracts", ["2.0"]),
+            ("unexpected_health_field", True),
         )
         for adapter_type, service in adapter_cases:
             with self.subTest(adapter=service, field="valid"):
@@ -403,6 +404,18 @@ class ExecutorAdapterTests(unittest.TestCase):
         )
         config = deepcopy(config)
         with self.assertRaisesRegex(ValueError, "64 hexadecimal"):
+            build_executors_from_config(
+                config,
+                lambda name, base_url: EchoTransport(service=name),
+            )
+
+    def test_executor_factory_rejects_configurable_task_types(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        config = json.loads(
+            (root / "configs" / "agent.default.json").read_text(encoding="utf-8")
+        )
+        config["executors"]["openvla_oft"]["task_types"] = ["pick_place"]
+        with self.assertRaisesRegex(ValueError, "task_types are frozen"):
             build_executors_from_config(
                 config,
                 lambda name, base_url: EchoTransport(service=name),

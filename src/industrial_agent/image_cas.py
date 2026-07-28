@@ -17,7 +17,7 @@ import re
 import tempfile
 from threading import RLock
 from time import sleep
-from typing import Any, Mapping
+from typing import Any, ClassVar, Mapping
 
 import numpy as np
 from PIL import Image, UnidentifiedImageError
@@ -33,7 +33,16 @@ CAS_ROOT_ENV = "INDUSTRIAL_AGENT_CAS_ROOT"
 
 @dataclass(frozen=True)
 class ImageCasConfig:
-    """Frozen local CAS layout and resource limits."""
+    """Frozen local CAS layout and resource limits.
+
+    Layout, encoding, and digest scope are protocol constants rather than
+    deployment-tunable dataclass fields. ``from_mapping`` still validates their
+    serialized config values fail-closed.
+    """
+
+    LAYOUT: ClassVar[str] = "sha256-v1"
+    ENCODING: ClassVar[str] = "png"
+    DIGEST_SCOPE: ClassVar[str] = "encoded_bytes"
 
     root: Path
     max_blob_bytes: int = 16 * 1024 * 1024
@@ -74,12 +83,12 @@ class ImageCasConfig:
             raise ValueError(
                 f"image_cas.root or {CAS_ROOT_ENV} must be a non-empty path"
             )
-        if value.get("layout") != "sha256-v1":
-            raise ValueError("image_cas.layout must be sha256-v1")
-        if value.get("encoding") != "png":
-            raise ValueError("image_cas.encoding must be png")
-        if value.get("digest_scope") != "encoded_bytes":
-            raise ValueError("image_cas.digest_scope must be encoded_bytes")
+        if value.get("layout") != cls.LAYOUT:
+            raise ValueError(f"image_cas.layout must be {cls.LAYOUT}")
+        if value.get("encoding") != cls.ENCODING:
+            raise ValueError(f"image_cas.encoding must be {cls.ENCODING}")
+        if value.get("digest_scope") != cls.DIGEST_SCOPE:
+            raise ValueError(f"image_cas.digest_scope must be {cls.DIGEST_SCOPE}")
         integer_fields = {
             "max_blob_bytes": (1, 128 * 1024 * 1024),
             "max_pixels": (1, 100_000_000),

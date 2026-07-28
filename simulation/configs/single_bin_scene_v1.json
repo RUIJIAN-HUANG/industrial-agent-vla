@@ -243,20 +243,11 @@
       "x_m": [-0.16, 0.16],
       "y_m": [-0.12, 0.12],
       "z_m": [0.74, 1.15]
-    },
-    "normal_workspace_limits": {
-      "Arm_A": {
-        "max_x_m": -0.16
-      },
-      "Arm_B": {
-        "min_x_m": 0.16
-      }
     }
   },
   "workflow": {
     "token_sequence": ["A_ONLY", "HANDOFF_VERIFY", "B_ONLY", "NONE"],
-    "handoff_ready_event": "handoff_ready",
-    "handoff_verify_stable_cycles": 3,
+    "handoff_ready_event": "handoff.ready",
     "handoff_owner_by_token": {
       "A_ONLY": "Arm_A",
       "HANDOFF_VERIFY": null,

@@ -31,14 +31,27 @@ TaskProfile ID 和接口契约版本，不能原地修改 v1。
 ```text
 A_ONLY
   -> π0.5 / Arm_A
+  -> handoff.candidate_checked（仅预检）
   -> HANDOFF_VERIFY
-  -> handoff.ready 持久化
+  -> handoff.verified 持久化（锁臂后三帧 2/3）
+  -> handoff.ready 持久化（唯一就绪事件）
   -> B_ONLY
   -> OpenVLA-OFT / Arm_B
   -> NONE
 ```
 
 禁止动态切换两个 VLA，禁止任一 VLA接管另一机械臂。
+
+事件类型统一使用点号风格：
+
+| `event_type` | 固定语义 | 是否允许授予 `B_ONLY` |
+|---|---|---|
+| `handoff.candidate_checked` | `A_ONLY` 下的单帧候选预检已经完成 | 否 |
+| `handoff.verified` | 双臂锁定后，三张新鲜帧的 2/3 复合投票证据已 durable | 否 |
+| `handoff.ready` | 已满足全部交接条件，可以让 Arm_B 开始协作 | 是，事件 durable 后 |
+
+`handoff_ready` 只允许作为冻结 Arm_B 自然语言中的业务信号名称；它不是
+`event_type`。事件生产者和消费者必须拒绝下划线形式的交接事件类型。
 
 ## 2. 通用规则
 
@@ -169,7 +182,7 @@ task
 quality
 ```
 
-四路引用必须同时存在：
+四个逻辑引用必须同时存在：
 
 | 键 | 固定 `camera_id` | 用途 |
 |---|---|---|
@@ -177,6 +190,11 @@ quality
 | `camera.arm_a_rgb` | `CAM_A_TOP` | π0.5 与 A 阶段 YOLO |
 | `camera.handoff_rgb` | `CAM_HANDOFF` | 交接核验与 YOLO |
 | `camera.arm_b_rgb` | `CAM_B_TOP` | OpenVLA 与 B 阶段 YOLO |
+
+这四个键只引用 **3 台物理相机**：`CAM_A_TOP`、`CAM_HANDOFF`、
+`CAM_B_TOP`；`full_image` 是当前阶段已有顶视帧的逻辑引用，不代表第四台相机。
+冻结场景没有腕部相机 Prim。统一 VLA 请求中的 `wrist_image` 字段必须存在且值为
+JSON `null`；不得用 `full_image` 或其他顶视图伪装腕部视角。
 
 禁止相机回退。例如缺少 `arm_b_rgb` 时，不得改用 `full_image`。
 
@@ -257,8 +275,8 @@ YOLO 只能收到 `PerceptionContext`，不得收到完整 TaskSchema 或完整 
     "uri": "cas://sha256/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "image_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "camera_id": "CAM_A_TOP",
-    "width": 640,
-    "height": 480
+    "width": 1280,
+    "height": 720
   },
   "allowed_class_names": ["part", "bin"],
   "confidence_threshold": 0.25,
@@ -327,10 +345,10 @@ AP50、AP75、mAP50:95、Precision、Recall 和时延。
 
 ### 6.1 固定所有权
 
-| Agent | 机械臂 | 输入图像 | 指令 |
-|---|---|---|---|
-| `pi05` | `Arm_A` | `CAM_A_TOP` | Arm_A 冻结原始自然语言 |
-| `openvla_oft` | `Arm_B` | `CAM_B_TOP` | Arm_B 冻结协作指令 |
+| Agent | 机械臂 | `full_image` | `wrist_image` | 指令 |
+|---|---|---|---|---|
+| `pi05` | `Arm_A` | `CAM_A_TOP` | `null` | Arm_A 冻结原始自然语言 |
+| `openvla_oft` | `Arm_B` | `CAM_B_TOP` | `null` | Arm_B 冻结协作指令 |
 
 两个 VLA 都在独立进程/容器加载模型，不得在 Supervisor 进程内加载权重。
 
@@ -358,6 +376,7 @@ VLA 请求包含：
 - 全部关联 ID；
 - 固定 executor 名称和部署 SHA；
 - 当前机械臂专属 RGB；
+- `wrist_image=null`；当前冻结场景没有腕部相机；
 - 当前机械臂状态和 TCP 位姿；
 - 当前阶段冻结指令；
 - `timeout_ms`。
@@ -526,7 +545,11 @@ VLA 推理完成后，Supervisor 必须重新采集观测：
 
 ## 10. 交接核验
 
-三个不同 `observation_id` 组成一组，采用“整帧复合投票”：
+Arm_A 释放并退避后，Supervisor 先在 `A_ONLY` 下对当前新鲜帧做一次候选预检，
+并记录 `handoff.candidate_checked`。该帧只决定是否进入锁臂阶段，不进入最终
+投票，也不能授权 Arm_B。候选通过后必须清空旧动作、撤销 A 的运动权限并进入
+`HANDOFF_VERIFY`；随后重新采集恰好三个不同 `observation_id`，采用“整帧复合
+投票”：
 
 ```text
 一帧 PASS = 该帧内全部必需条件同时成立
@@ -534,6 +557,8 @@ VLA 推理完成后，Supervisor 必须重新采集观测：
 ```
 
 禁止从不同帧拼接不同条件形成成功。
+候选帧及所有锁臂前帧必须丢弃；最终 2/3 只统计锁臂后新采的三帧，不能把预检
+描述成七帧投票。
 
 Arm_A 交接帧必须同时满足：
 
@@ -545,8 +570,10 @@ Arm_A 交接帧必须同时满足：
 - 两臂均静止；
 - 质量字段有效。
 
-通过后先将 `handoff.verified` 事件 fsync 到 durable JSONL，再允许
-`HANDOFF_VERIFY -> B_ONLY`。内存 EventSink 只可用于单元测试，不能作为生产持久化证明。
+通过后先将 `handoff.verified` 事件 fsync 到 durable JSONL，再发布并 fsync
+唯一就绪事件 `handoff.ready`；只有 `handoff.ready` 的 durable ACK 到达后才允许
+`HANDOFF_VERIFY -> B_ONLY`。内存 EventSink 只可用于单元测试，不能作为生产
+持久化证明。
 
 最终完成帧必须同时满足：
 
@@ -633,6 +660,7 @@ SIGINT、SIGTERM、`KeyboardInterrupt` 或未处理异常均不得绕过 safe-st
 ### D：OpenVLA-OFT
 
 - [ ] 只接收 Arm_B 指令、相机和状态；
+- [ ] `full_image=CAM_B_TOP`，`wrist_image=null`；
 - [ ] 自己的 checkpoint/norm stats SHA 可追溯；
 - [ ] 输出 canonical ActionChunk；
 - [ ] cancel、超时、坏包和 base/tuned 对照可复现。
@@ -640,6 +668,7 @@ SIGINT、SIGTERM、`KeyboardInterrupt` 或未处理异常均不得绕过 safe-st
 ### E：π0.5
 
 - [ ] 只接收 Arm_A 原始冻结指令、相机和状态；
+- [ ] `full_image=CAM_A_TOP`，`wrist_image=null`；
 - [ ] LeRobot/openpi 映射、norm stats 与动作单位有测试；
 - [ ] 输出 canonical ActionChunk；
 - [ ] cancel、超时、坏包和 base/tuned 对照可复现。
@@ -669,6 +698,8 @@ SIGINT、SIGTERM、`KeyboardInterrupt` 或未处理异常均不得绕过 safe-st
 | 推理期间物体区域变化 | 丢弃 chunk，同角色有界重规划 |
 | step 写后丢 ACK | 状态未知，独立 safe-stop |
 | 交接 3 帧中 2 个整帧 PASS | durable handoff 后授予 `B_ONLY` |
+| 只有 `handoff.candidate_checked` 或 `handoff.verified` | 不得授予 `B_ONLY` |
+| durable `handoff.ready` 到达且交接证据有效 | 才可授予 `B_ONLY` |
 | 不同帧分别满足不同条件 | 不得通过 |
 | safe-stop receipt 缺项 | `SAFE_STOP_FAILED` |
 | receipt 成功但传感器仍在运动 | `SAFE_STOP_FAILED` |

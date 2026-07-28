@@ -6,7 +6,13 @@ from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
 
-from industrial_agent.lifecycle import FixedTaskProfile
+from industrial_agent.contracts import Postcondition, SubtaskStatus, TaskSchema
+from industrial_agent.lifecycle import (
+    FROZEN_SUBTASK_EXECUTOR_ASSIGNMENTS,
+    FROZEN_TOKEN_SEQUENCE,
+    FixedDualVLAPlanner,
+    FixedTaskProfile,
+)
 from industrial_agent.mock import MockExecutor
 from industrial_agent.orchestrator import IndustrialAgent
 from industrial_agent.perception import MockPerceptionAgent
@@ -73,6 +79,38 @@ class ConfigTests(unittest.TestCase):
         self.assertGreaterEqual(image_cas["max_pixels"], 1280 * 720)
         self.assertEqual(image_cas["missing_retry_count"], 1)
 
+    def test_planner_and_config_share_frozen_lifecycle_constants(self) -> None:
+        profile = FixedTaskProfile()
+        expected_token_sequence = [token.value for token in FROZEN_TOKEN_SEQUENCE]
+        self.assertEqual(
+            self.config["lifecycle"]["token_sequence"],
+            expected_token_sequence,
+        )
+
+        task = TaskSchema(
+            task_id="task-frozen-plan",
+            instruction=profile.arm_a_instruction,
+            task_type="pick_place",
+            postconditions=(
+                Postcondition(
+                    kind="field_equals",
+                    path="task.bin_at_finished",
+                    expected=True,
+                ),
+            ),
+        )
+        plan = FixedDualVLAPlanner(profile).plan(task, "episode-frozen-plan")
+        self.assertEqual(
+            tuple(
+                (subtask.subtask_id, subtask.assigned_executor)
+                for subtask in plan.subtasks
+            ),
+            FROZEN_SUBTASK_EXECUTOR_ASSIGNMENTS,
+        )
+        self.assertTrue(
+            all(subtask.status is SubtaskStatus.PENDING for subtask in plan.subtasks)
+        )
+
     def test_frozen_role_instruction_truth_sources_are_aligned(self) -> None:
         root = Path(__file__).resolve().parents[1]
         profile = FixedTaskProfile()
@@ -122,6 +160,15 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(agent.task_profile.handoff_required_votes, 2)
         self.assertIn("HOME_A", agent.task_profile.arm_a_instruction)
         self.assertIn("FINISHED_01", agent.task_profile.arm_b_instruction)
+
+    def test_invalid_perception_mode_is_reported_before_mode_policy(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unsupported perception_mode"):
+            IndustrialAgent(
+                self._executors(),
+                perception=self._perception(),
+                perception_mode="NOT_A_MODE",
+                max_perception_attempts=2,
+            )
 
     def test_legacy_routing_and_switch_fields_are_rejected(self) -> None:
         executors = self._executors()

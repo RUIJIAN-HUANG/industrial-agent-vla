@@ -83,6 +83,8 @@ Stage：Z-up，metersPerUnit=1
 | `CAM_B_TOP` | `(+0.60,-0.18,1.45)` | `(+0.48,+0.18,0.75)` | OpenVLA、YOLO |
 
 统一使用 `1280×720`，HFOV 建议 `65°～72°`。
+冻结 MVP 恰好只有这三台物理 RGB 相机，不设置腕部相机。两个 VLA 请求中的
+`wrist_image` 均固定为 JSON `null`。
 
 ## 4. 共享交接区安全规则
 
@@ -124,7 +126,11 @@ A_ONLY
 7. 料箱帧间中心移动 `<3 px`；
 8. 料箱偏航误差 `<5°`。
 
-全部通过后，Supervisor 才发布 `handoff_ready` 并将令牌切为 `B_ONLY`。
+进入 `HANDOFF_VERIFY` 前，Supervisor 先用当前新鲜帧做候选预检并记录
+`handoff.candidate_checked`；该帧不计入最终投票。锁定双臂后重新采集恰好三帧，
+2/3 通过时依次持久化 `handoff.verified`、`handoff.ready`。只有 durable
+`handoff.ready` 才允许把令牌切为 `B_ONLY`。自然语言中的 `handoff_ready`
+仍是业务信号名称，不是事件类型。
 
 ## 5. 两个 VLA 的指令
 
@@ -157,8 +163,10 @@ RESET
 → BIN_READY（配方 4/4）
 → A 将箱放到 HANDOFF_CENTER
 → A 退出并回 HOME_A
-→ HANDOFF_VERIFY
-→ handoff_ready + B_ONLY
+→ handoff.candidate_checked（A_ONLY 下预检，不计票）
+→ HANDOFF_VERIFY（锁臂后新采 3 帧，至少 2 帧复合 PASS）
+→ handoff.verified
+→ handoff.ready + B_ONLY
 → OpenVLA 控制 B 抓箱
 → 搬到 FINISHED_01
 → VERIFY_B

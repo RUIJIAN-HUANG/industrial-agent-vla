@@ -24,6 +24,22 @@ from .observation import find_forbidden_online_path
 
 PERCEPTION_SCHEMA_VERSION = "1.0"
 DETECTION_CONTRACT_VERSION = "1.0"
+PERCEPTION_CONFIG_FIELDS = frozenset(
+    {
+        "required",
+        "mode",
+        "base_url",
+        "evidence_jsonl_path",
+        "detection_contract_version",
+        "checkpoint_sha",
+        "class_map_sha",
+        "config_sha",
+        "timeout_ms",
+        "max_attempts",
+        "confidence_threshold",
+        "iou_threshold",
+    }
+)
 
 
 class PerceptionMode(str, Enum):
@@ -634,7 +650,11 @@ class DetectionPacket:
 
 @dataclass(frozen=True)
 class CocoExportManifest:
-    """Frozen bridge from online identities to COCO dataset identities."""
+    """Runtime-only bridge from online identities to exported COCO identities.
+
+    The resulting COCO files are the JSON boundary; this tuple-keyed lookup is
+    deliberately not a standalone wire contract.
+    """
 
     class_map_sha: str
     image_id_by_frame_key: Mapping[tuple[str, str, str], int]
@@ -1432,11 +1452,17 @@ def build_perception_from_config(
 
     The transport factory receives ``("yolo", base_url)``. Artifact placeholders
     are accepted by the JSON template but are rejected here before a run starts.
+    Supported task types are a frozen YOLO adapter capability, not configuration.
     """
 
     raw = config.get("perception")
     if not isinstance(raw, Mapping):
         raise ValueError("config.perception must be an object")
+    if set(raw) != PERCEPTION_CONFIG_FIELDS:
+        raise ValueError(
+            "config.perception must contain exactly "
+            f"{sorted(PERCEPTION_CONFIG_FIELDS)}; task_types are frozen in code"
+        )
     if raw.get("required") is not True:
         raise ValueError("config.perception.required must remain true")
     base_url = raw.get("base_url")

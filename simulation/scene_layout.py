@@ -121,6 +121,24 @@ _CAMERAS = {
         "consumers": ["openvla_oft", "yolo"],
     },
 }
+_BIN_BUILD_PARAMETERS = {
+    "mass_kg": 0.35,
+    "wall_thickness_m": 0.006,
+    "divider_thickness_m": 0.004,
+    "bottom_thickness_m": 0.006,
+    "handle": {
+        "side": "negative_y",
+        "size_m": [0.08, 0.012, 0.022],
+        "offset_m": [0.0, -0.066, 0.015],
+    },
+}
+_PHYSICS = {
+    "gravity_m_s2": [0.0, 0.0, -9.81],
+    "physics_dt_s": 1.0 / 120.0,
+    "rendering_dt_s": 1.0 / 30.0,
+    "control_frequency_hz": 60,
+    "reset_settle_steps": 120,
+}
 _REACH_TARGETS = (
     ("Arm_A", "station", "PACK_STATION"),
     ("Arm_A", "part", "P01"),
@@ -527,6 +545,13 @@ def validate_scene_config(config: Mapping[str, Any]) -> list[str]:
     )
     _expect(errors, "bin.size_m", bin_config.get("size_m"), [0.18, 0.12, 0.07])
     _expect(errors, "bin.grid", bin_config.get("grid"), {"rows": 2, "columns": 3})
+    for key, expected in _BIN_BUILD_PARAMETERS.items():
+        _expect(
+            errors,
+            f"bin.{key}",
+            bin_config.get(key),
+            expected,
+        )
     recipe = bin_config.get("recipe_part_ids")
     _expect(errors, "bin.recipe_part_ids", recipe, ["P01", "P02", "P03", "P04"])
     _expect(
@@ -600,8 +625,13 @@ def validate_scene_config(config: Mapping[str, Any]) -> list[str]:
         errors,
         "workflow.handoff_ready_event",
         workflow.get("handoff_ready_event"),
-        "handoff_ready",
+        "handoff.ready",
     )
+    if "handoff_verify_stable_cycles" in workflow:
+        errors.append(
+            "workflow.handoff_verify_stable_cycles is Supervisor-owned and must "
+            "not be stored in the scene config"
+        )
     _expect(
         errors,
         "workflow.handoff_owner_by_token",
@@ -628,6 +658,23 @@ def validate_scene_config(config: Mapping[str, Any]) -> list[str]:
             "z_m": [0.74, 1.15],
         },
     )
+    if "normal_workspace_limits" in safety:
+        errors.append(
+            "safety.normal_workspace_limits is controller-owned and must not be "
+            "stored in the scene config"
+        )
+
+    physics = config.get("physics")
+    if not isinstance(physics, Mapping):
+        errors.append("physics must be an object")
+        physics = {}
+    for key, expected in _PHYSICS.items():
+        _expect(
+            errors,
+            f"physics.{key}",
+            physics.get(key),
+            expected,
+        )
 
     all_entity_ids = ["TABLE", "Bin_01"]
     for collection in (robots, stations, zones, parts, cameras):
