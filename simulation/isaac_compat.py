@@ -145,6 +145,23 @@ def validate_stage_contract(
         raise RuntimeError("Invalid frozen USD stage contract: " + "; ".join(errors))
 
 
+def configure_and_validate_stage_contract(stage: Any) -> None:
+    """Write the frozen Z-up/SI metadata and require an exact readback."""
+
+    require_usd_stage(stage, context="stage contract configuration")
+    try:
+        from pxr import UsdGeom, UsdPhysics
+    except ImportError as exc:
+        raise RuntimeError(
+            "pxr.UsdGeom/UsdPhysics are unavailable after SimulationApp startup."
+        ) from exc
+
+    UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
+    UsdGeom.SetStageMetersPerUnit(stage, 1.0)
+    UsdPhysics.SetStageKilogramsPerUnit(stage, 1.0)
+    validate_stage_contract(stage)
+
+
 def wait_for_stage_loading(
     simulation_app: Any,
     *,

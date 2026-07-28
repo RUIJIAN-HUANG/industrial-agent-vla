@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from simulation.run_g0_acceptance import _robot_state
+from simulation.run_g0_acceptance import REQUIRED_PRIMS, _robot_state
 
 
 class FakeArticulation:
@@ -20,6 +20,15 @@ class FakeArticulation:
 
 
 class G0AcceptanceTests(unittest.TestCase):
+    def test_frozen_station_prims_are_required(self) -> None:
+        self.assertTrue(
+            {
+                "/World/Stations/PACK_STATION",
+                "/World/Stations/HANDOFF_CENTER",
+                "/World/Stations/FINISHED_01",
+            }.issubset(REQUIRED_PRIMS)
+        )
+
     def test_robot_state_uses_isaac_51_dof_names(self) -> None:
         arm = FakeArticulation(dof_names=["joint_a", "joint_b"])
 
