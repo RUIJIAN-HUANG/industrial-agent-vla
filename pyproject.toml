@@ -7,7 +7,10 @@ name = "industrial-agent-vla"
 version = "0.1.0"
 description = "Lightweight industrial supervisor agent with dual-VLA executors"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = [
+    "numpy>=1.26,<3",
+    "Pillow>=10,<13",
+]
 
 [project.optional-dependencies]
 test = [

@@ -94,6 +94,67 @@ class FrozenSceneLayoutTests(unittest.TestCase):
         self.assertTrue(any("zone A contains 3 parts" in error for error in errors))
         self.assertTrue(any("zone B contains 0 parts" in error for error in errors))
 
+    def test_rejects_missing_builder_required_bin_and_physics_fields(self) -> None:
+        mutations = {
+            "bin.mass_kg": lambda config: config["bin"].pop("mass_kg"),
+            "bin.wall_thickness_m": lambda config: config["bin"].pop(
+                "wall_thickness_m"
+            ),
+            "bin.divider_thickness_m": lambda config: config["bin"].pop(
+                "divider_thickness_m"
+            ),
+            "bin.bottom_thickness_m": lambda config: config["bin"].pop(
+                "bottom_thickness_m"
+            ),
+            "bin.handle": lambda config: config["bin"].pop("handle"),
+            "physics.gravity_m_s2": lambda config: config["physics"].pop(
+                "gravity_m_s2"
+            ),
+            "physics.physics_dt_s": lambda config: config["physics"].pop(
+                "physics_dt_s"
+            ),
+            "physics.rendering_dt_s": lambda config: config["physics"].pop(
+                "rendering_dt_s"
+            ),
+            "physics.control_frequency_hz": lambda config: config["physics"].pop(
+                "control_frequency_hz"
+            ),
+        }
+
+        for expected_label, mutation in mutations.items():
+            config = deepcopy(self.config)
+            mutation(config)
+            with self.subTest(field=expected_label):
+                errors = validate_scene_config(config)
+                self.assertTrue(
+                    any(expected_label in error for error in errors),
+                    errors,
+                )
+
+    def test_rejects_agent_owned_policy_fields_and_legacy_event_name(self) -> None:
+        config = deepcopy(self.config)
+        config["safety"]["normal_workspace_limits"] = {
+            "Arm_A": {"max_x_m": -0.16},
+            "Arm_B": {"min_x_m": 0.16},
+        }
+        config["workflow"]["handoff_verify_stable_cycles"] = 3
+        config["workflow"]["handoff_ready_event"] = "handoff_ready"
+
+        errors = validate_scene_config(config)
+
+        self.assertTrue(
+            any("safety.normal_workspace_limits" in error for error in errors),
+            errors,
+        )
+        self.assertTrue(
+            any("workflow.handoff_verify_stable_cycles" in error for error in errors),
+            errors,
+        )
+        self.assertTrue(
+            any("workflow.handoff_ready_event" in error for error in errors),
+            errors,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -6,12 +6,28 @@ from industrial_agent.errors import FailureCode, ObservationError
 from industrial_agent.observation import ObservationGateway
 
 
+def image_reference(camera_id: str, digest_char: str) -> dict[str, object]:
+    digest = digest_char * 64
+    return {
+        "uri": f"cas://sha256/{digest}",
+        "image_sha256": f"sha256:{digest}",
+        "camera_id": camera_id,
+        "width": 1280,
+        "height": 720,
+    }
+
+
 def raw_observation() -> dict[str, object]:
     return {
         "observation_version": "1.0",
         "observation_id": "obs-security-1",
         "timestamp_ms": 1,
-        "camera": {},
+        "camera": {
+            "full_image": image_reference("CAM_HANDOFF", "a"),
+            "arm_a_rgb": image_reference("CAM_A_TOP", "b"),
+            "handoff_rgb": image_reference("CAM_HANDOFF", "c"),
+            "arm_b_rgb": image_reference("CAM_B_TOP", "d"),
+        },
         "objects": [],
         "robot": {"tcp_pose_m_rad": [0.5, 0.0, 0.5, 0.0, 0.0, 0.0]},
         "safety": {

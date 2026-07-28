@@ -17,6 +17,12 @@ class FailureCode(str, Enum):
     ACTION_CONTRACT_INVALID = "ACT_1201_CONTRACT_INVALID"
     ACTION_NON_FINITE = "ACT_1202_NON_FINITE"
     ACTION_WORKSPACE_BREACH = "ACT_1203_WORKSPACE_BREACH"
+    CAS_NOT_FOUND = "CAS_1301_NOT_FOUND"
+    CAS_DIGEST_MISMATCH = "CAS_1302_DIGEST_MISMATCH"
+    CAS_DECODE_FAILED = "CAS_1303_DECODE_FAILED"
+    CAS_METADATA_MISMATCH = "CAS_1304_METADATA_MISMATCH"
+    CAS_LIMIT_EXCEEDED = "CAS_1305_LIMIT_EXCEEDED"
+    CAS_UNAVAILABLE = "CAS_1306_UNAVAILABLE"
 
     # 2xxx: routing and executor failures
     NO_COMPATIBLE_EXECUTOR = "ROUTE_2001_NO_COMPATIBLE_EXECUTOR"
@@ -78,6 +84,20 @@ class ContractError(AgentError):
 
 class ObservationError(AgentError):
     pass
+
+
+class ImageCasError(AgentError):
+    """Stable fail-closed error raised by shared image CAS consumers."""
+
+    def __init__(
+        self,
+        code: FailureCode,
+        message: str,
+        *,
+        retryable: bool = False,
+    ):
+        super().__init__(code, message)
+        self.retryable = retryable
 
 
 class ExecutorError(AgentError):

@@ -15,19 +15,54 @@ from uuid import uuid4
 
 from .contracts import (
     ACTION_CONTRACT_VERSION,
+    OPENVLA_OFT_EXECUTOR_NAME,
+    PI05_EXECUTOR_NAME,
     ActionChunk,
     ActionStep,
     Observation,
     TaskSchema,
 )
 from .errors import ContractError, ExecutorError, FailureCode
+from .observation import FROZEN_IMAGE_HEIGHT, FROZEN_IMAGE_WIDTH
 
 ARTIFACT_DIGEST_PATTERN = re.compile(r"sha256:[0-9a-fA-F]{64}")
 CAS_IMAGE_URI_PATTERN = re.compile(r"cas://sha256/([0-9a-fA-F]{64})")
+OPENVLA_OFT_TASK_TYPES = frozenset(
+    {"pick_place", "object_localization", "visual_manipulation"}
+)
+PI05_TASK_TYPES = frozenset(
+    {"pick_place", "visual_manipulation", "instruction_interaction"}
+)
+EXECUTOR_CONFIG_FIELDS = frozenset(
+    {
+        "enabled",
+        "base_url",
+        "checkpoint_sha",
+        "norm_stats_sha",
+    }
+)
+EXECUTOR_HEALTH_RESPONSE_FIELDS = frozenset(
+    {
+        "schema_version",
+        "service",
+        "service_version",
+        "status",
+        "uptime_ms",
+        "checkpoint_sha",
+        "norm_stats_sha",
+        "supported_task_types",
+        "supported_action_contracts",
+        "queue",
+        "device",
+        "time_ms",
+    }
+)
 
 
 @dataclass(frozen=True)
 class ExecutorDescriptor:
+    """Runtime capability identity; `/health` is the JSON transport contract."""
+
     name: str
     task_types: frozenset[str]
     action_contract_version: str
@@ -41,6 +76,8 @@ class ExecutorDescriptor:
 
 @dataclass(frozen=True)
 class ExecutionContext:
+    """Supervisor-local call context assembled into `/v1/infer` envelopes."""
+
     run_id: str
     strategy_attempt: int
     replan_index: int
@@ -153,13 +190,13 @@ def _phase_vla_inputs(
         camera[camera_key],
         f"camera.{camera_key}",
         expected_camera_id=expected_camera_id,
+        expected_size=(FROZEN_IMAGE_WIDTH, FROZEN_IMAGE_HEIGHT),
     )
-    wrist_image_raw = camera.get("wrist_image")
-    wrist_image = (
-        None
-        if wrist_image_raw is None
-        else _canonical_image_reference(wrist_image_raw, "camera.wrist_image")
-    )
+    if camera.get("wrist_image") is not None:
+        raise ExecutorError(
+            FailureCode.EXECUTOR_BAD_RESPONSE,
+            "frozen three-camera profile requires camera.wrist_image=null",
+        )
     state = arm_state.get("state", arm_state.get("tcp_pose_m_rad"))
     tcp_pose = arm_state.get("tcp_pose_m_rad")
     if state is None:
@@ -173,7 +210,7 @@ def _phase_vla_inputs(
         f"robot.{arm_key}.tcp_pose_m_rad",
         minimum_length=6,
     )
-    return full_image, wrist_image, state, tcp_pose
+    return full_image, None, state, tcp_pose
 
 
 def _canonical_image_reference(
@@ -181,6 +218,7 @@ def _canonical_image_reference(
     field: str,
     *,
     expected_camera_id: str | None = None,
+    expected_size: tuple[int, int] | None = None,
 ) -> dict[str, Any]:
     """Rebuild an exact image allowlist before crossing a VLA boundary."""
 
@@ -235,6 +273,12 @@ def _canonical_image_reference(
             FailureCode.EXECUTOR_BAD_RESPONSE,
             f"{field}.width/height must be positive integers",
         )
+    if expected_size is not None and (width, height) != expected_size:
+        raise ExecutorError(
+            FailureCode.EXECUTOR_BAD_RESPONSE,
+            f"{field} must use frozen {expected_size[0]}x{expected_size[1]} "
+            f"resolution; got {width}x{height}",
+        )
     return {
         "uri": uri,
         "image_sha256": image_sha256,
@@ -270,6 +314,33 @@ def _finite_numeric_vector(
 def _validate_health_response(
     response: Mapping[str, Any], descriptor: ExecutorDescriptor
 ) -> None:
+    unknown_keys = set(response) - EXECUTOR_HEALTH_RESPONSE_FIELDS
+    if unknown_keys:
+        raise ExecutorError(
+            FailureCode.EXECUTOR_BAD_RESPONSE,
+            "executor health response contains unknown fields: "
+            f"{sorted(unknown_keys, key=str)}",
+        )
+    invalid_optional_fields: dict[str, Any] = {}
+    if "service_version" in response and not isinstance(
+        response["service_version"], str
+    ):
+        invalid_optional_fields["service_version"] = response["service_version"]
+    for field in ("uptime_ms", "time_ms"):
+        if field not in response:
+            continue
+        value = response[field]
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            invalid_optional_fields[field] = value
+    for field in ("queue", "device"):
+        if field in response and not isinstance(response[field], Mapping):
+            invalid_optional_fields[field] = response[field]
+    if invalid_optional_fields:
+        raise ExecutorError(
+            FailureCode.EXECUTOR_BAD_RESPONSE,
+            "executor health response violates optional field schema: "
+            f"{invalid_optional_fields}",
+        )
     version = response.get("schema_version")
     if not _is_compatible_version(version, "1.0"):
         raise ExecutorError(
@@ -604,9 +675,8 @@ class OpenVLAOFTAdapter:
         )
         self.transport = transport
         self.descriptor = ExecutorDescriptor(
-            name="openvla_oft",
-            task_types=task_types
-            or frozenset({"pick_place", "object_localization", "visual_manipulation"}),
+            name=OPENVLA_OFT_EXECUTOR_NAME,
+            task_types=task_types or OPENVLA_OFT_TASK_TYPES,
             action_contract_version=ACTION_CONTRACT_VERSION,
             checkpoint_sha=checkpoint_sha,
             norm_stats_sha=norm_stats_sha,
@@ -735,11 +805,8 @@ class Pi05Adapter:
         )
         self.transport = transport
         self.descriptor = ExecutorDescriptor(
-            name="pi05",
-            task_types=task_types
-            or frozenset(
-                {"pick_place", "visual_manipulation", "instruction_interaction"}
-            ),
+            name=PI05_EXECUTOR_NAME,
+            task_types=task_types or PI05_TASK_TYPES,
             action_contract_version=ACTION_CONTRACT_VERSION,
             checkpoint_sha=checkpoint_sha,
             norm_stats_sha=norm_stats_sha,
@@ -857,7 +924,8 @@ def build_executors_from_config(
 
     The transport factory receives ``(executor_name, base_url)``. This keeps
     deployment-specific HTTP/WebSocket code outside the supervisor while ensuring
-    that ``config.executors.*.base_url`` is actually consumed.
+    that ``config.executors.*.base_url`` is actually consumed. Supported task
+    types are frozen adapter capabilities, not deployment configuration.
     """
 
     raw_executors = config.get("executors")
@@ -865,14 +933,19 @@ def build_executors_from_config(
         raise ValueError("executors config must be an object")
 
     adapter_types = {
-        "openvla_oft": OpenVLAOFTAdapter,
-        "pi05": Pi05Adapter,
+        OPENVLA_OFT_EXECUTOR_NAME: OpenVLAOFTAdapter,
+        PI05_EXECUTOR_NAME: Pi05Adapter,
     }
     built: list[Executor] = []
     for name, adapter_type in adapter_types.items():
         raw = raw_executors.get(name)
         if not isinstance(raw, Mapping):
             raise ValueError(f"config.executors.{name} must be an object")
+        if set(raw) != EXECUTOR_CONFIG_FIELDS:
+            raise ValueError(
+                f"config.executors.{name} must contain exactly "
+                f"{sorted(EXECUTOR_CONFIG_FIELDS)}; task_types are frozen in code"
+            )
         enabled = raw.get("enabled")
         if not isinstance(enabled, bool):
             raise ValueError(f"config.executors.{name}.enabled must be a boolean")

@@ -9,6 +9,18 @@ from typing import Any, Mapping
 from .contracts import OBSERVATION_VERSION, Observation
 from .errors import FailureCode, ObservationError
 
+FROZEN_IMAGE_WIDTH = 1280
+FROZEN_IMAGE_HEIGHT = 720
+FROZEN_CAMERA_IDS_BY_STREAM = {
+    "arm_a_rgb": frozenset({"CAM_A_TOP"}),
+    "handoff_rgb": frozenset({"CAM_HANDOFF"}),
+    "arm_b_rgb": frozenset({"CAM_B_TOP"}),
+    "full_image": frozenset({"CAM_A_TOP", "CAM_HANDOFF", "CAM_B_TOP"}),
+}
+FROZEN_IMAGE_REFERENCE_FIELDS = frozenset(
+    {"uri", "image_sha256", "camera_id", "width", "height"}
+)
+
 ONLINE_TOP_LEVEL_ALLOWLIST = frozenset(
     {
         "observation_version",
@@ -241,6 +253,49 @@ def find_forbidden_online_path(value: Any, path: str = "$") -> str | None:
     return _scan_for_gt(value, path)
 
 
+def _frozen_camera_failure(camera: Any) -> str | None:
+    if not isinstance(camera, Mapping):
+        return "camera must be an object"
+    allowed_streams = set(FROZEN_CAMERA_IDS_BY_STREAM) | {"wrist_image"}
+    unknown_streams = set(camera) - allowed_streams
+    if unknown_streams:
+        return f"camera contains unknown streams: {sorted(unknown_streams)}"
+    missing_streams = set(FROZEN_CAMERA_IDS_BY_STREAM) - set(camera)
+    if missing_streams:
+        return f"camera is missing frozen streams: {sorted(missing_streams)}"
+    if camera.get("wrist_image") is not None:
+        return "frozen three-camera profile requires camera.wrist_image=null"
+
+    for stream, expected_camera_ids in FROZEN_CAMERA_IDS_BY_STREAM.items():
+        image = camera.get(stream)
+        if not isinstance(image, Mapping) or set(image) != set(
+            FROZEN_IMAGE_REFERENCE_FIELDS
+        ):
+            return (
+                f"camera.{stream} must contain exactly "
+                f"{sorted(FROZEN_IMAGE_REFERENCE_FIELDS)}"
+            )
+        camera_id = image.get("camera_id")
+        if camera_id not in expected_camera_ids:
+            return (
+                f"camera.{stream}.camera_id must be one of "
+                f"{sorted(expected_camera_ids)}; got {camera_id!r}"
+            )
+        width = image.get("width")
+        height = image.get("height")
+        if (
+            isinstance(width, bool)
+            or isinstance(height, bool)
+            or width != FROZEN_IMAGE_WIDTH
+            or height != FROZEN_IMAGE_HEIGHT
+        ):
+            return (
+                f"camera.{stream} must use frozen "
+                f"{FROZEN_IMAGE_WIDTH}x{FROZEN_IMAGE_HEIGHT} resolution"
+            )
+    return None
+
+
 class ObservationGateway:
     """Single ingress for data visible to the online decision loop."""
 
@@ -310,6 +365,12 @@ class ObservationGateway:
             raise ObservationError(
                 FailureCode.OBSERVATION_INVALID,
                 "timestamp_ms moved backwards within a run",
+            )
+        camera_failure = _frozen_camera_failure(raw.get("camera"))
+        if camera_failure is not None:
+            raise ObservationError(
+                FailureCode.OBSERVATION_INVALID,
+                camera_failure,
             )
         data = {
             key: deepcopy(value)

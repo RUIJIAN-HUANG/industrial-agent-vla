@@ -8,6 +8,7 @@
     "config_version",
     "verification_frames",
     "executor_timeout_ms",
+    "image_cas",
     "lifecycle",
     "recovery",
     "safety",
@@ -27,6 +28,61 @@
       "type": "integer",
       "minimum": 1,
       "maximum": 300000
+    },
+    "image_cas": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "root",
+        "layout",
+        "encoding",
+        "digest_scope",
+        "max_blob_bytes",
+        "max_pixels",
+        "cache_max_bytes",
+        "missing_retry_count",
+        "missing_retry_delay_ms"
+      ],
+      "properties": {
+        "root": {
+          "type": "string",
+          "minLength": 1
+        },
+        "layout": {
+          "const": "sha256-v1"
+        },
+        "encoding": {
+          "const": "png"
+        },
+        "digest_scope": {
+          "const": "encoded_bytes"
+        },
+        "max_blob_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 134217728
+        },
+        "max_pixels": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000000
+        },
+        "cache_max_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1073741824
+        },
+        "missing_retry_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2
+        },
+        "missing_retry_delay_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000
+        }
+      }
     },
     "lifecycle": {
       "type": "object",

@@ -14,7 +14,7 @@ Frozen role:
 
 What is implemented here:
 
-- stdlib HTTP entrypoint
+- stdlib HTTP entrypoint and service boundary
 - request/response contract validation
 - local content-addressed RGB image resolution
 - mock policy for smoke tests

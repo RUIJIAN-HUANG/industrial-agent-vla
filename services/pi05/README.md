@@ -3,7 +3,7 @@
 负责人：E。当前状态：接口占位，真实模型尚未集成。
 
 冻结定位：π0.5 是 Arm_A 的唯一 VLA。它直接接收预设的上游自然语言、
-`CAM_A_TOP`/腕部完整图像和 Arm_A 状态，负责抓取四个零件、纠正倒放零件、
+`CAM_A_TOP` 完整图像和 Arm_A 状态，负责抓取四个零件、纠正倒放零件、
 装入 2×3 料箱、把满箱放到 `HANDOFF_CENTER` 并退回 `HOME_A`。
 YOLO DetectionPacket 不是推理前置条件。π0.5 必须针对这一固定角色完成工业
 场景微调并提供 base/tuned 同协议对照。
@@ -19,6 +19,15 @@ YOLO DetectionPacket 不是推理前置条件。π0.5 必须针对这一固定�
 - 工业微调的数据/配置/checkpoint SHA、base/tuned 成功率与失败分布。
 - 服务只能输出 `arm_id=Arm_A` 的动作；收到 Arm_B 请求必须拒绝。
 - 恢复时必须使用 Arm_A 的新鲜观测重新推理，禁止请求 OpenVLA 接管。
+- 服务入口必须调用
+  `industrial_agent.service_images.CasRequestImageResolver.resolve_vla_request()`
+  将 `CAM_A_TOP` 引用解析为真实 RGB；冻结场景的 `wrist_image` 必须为
+  `null`。Real 模式缺图、坏 SHA 或解码失败时必须 fail-closed，禁止使用零图、
+  placeholder 或自动降级 Mock。
+
+仓库已提供 [`handler.py`](handler.py) 的 `build_v1_infer_handler()` 作为
+`POST /v1/infer` 强制入口核心：它先解析并校验 CAS，再把只读 RGB 数组替换进
+`model_input` 后调用注入的 π0.5 backend。HTTP/WebSocket 外壳不得绕过该 handler。
 
 不要在此目录提交 checkpoint、训练数据、缓存或个人机器路径。完整接口见
 [`../../docs/architecture/interface-contracts.md`](../../docs/architecture/interface-contracts.md)。

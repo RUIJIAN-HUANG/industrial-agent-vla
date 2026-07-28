@@ -4,6 +4,8 @@ import hashlib
 import json
 import tempfile
 import unittest
+from dataclasses import replace
+from pathlib import Path
 from typing import Any, Mapping
 
 from industrial_agent.contracts import (
@@ -21,7 +23,13 @@ from industrial_agent.executor import (
     Pi05Adapter,
 )
 from industrial_agent.fsm import AgentState
-from industrial_agent.lifecycle import FixedTaskProfile
+from industrial_agent.lifecycle import (
+    FROZEN_HANDOFF_EVENT_SEQUENCE,
+    HANDOFF_CANDIDATE_CHECKED_EVENT_TYPE,
+    HANDOFF_READY_EVENT_TYPE,
+    HANDOFF_VERIFIED_EVENT_TYPE,
+    FixedTaskProfile,
+)
 from industrial_agent.mock import (
     FixedDualArmMockSimulator,
     MockExecutor,
@@ -140,6 +148,21 @@ class FlakyPerception:
 
 
 class FourAgentOrchestrationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._event_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self._event_directory.cleanup)
+        self._event_sink_index = 0
+
+    def _durable_event_path(self, label: str = "events") -> Path:
+        self._event_sink_index += 1
+        return (
+            Path(self._event_directory.name)
+            / f"{self._event_sink_index:03d}-{label}.jsonl"
+        )
+
+    def _durable_event_sink(self, label: str = "events") -> EventSink:
+        return EventSink(self._durable_event_path(label))
+
     def make_agent(
         self,
         perception: Any,
@@ -152,11 +175,12 @@ class FourAgentOrchestrationTests(unittest.TestCase):
     ) -> tuple[IndustrialAgent, RecordingExecutor, RecordingExecutor]:
         openvla = openvla or RecordingExecutor("openvla_oft", 0.01)
         primary = pi05 or RecordingExecutor("pi05", 0.02)
+        event_sink = events or self._durable_event_sink()
         agent = IndustrialAgent(
             [openvla, primary],
             perception=perception,
             perception_evidence=evidence,
-            events=events,
+            events=event_sink,
             require_perception=True,
             verification_frames=3,
             max_decisions_per_strategy_attempt=max_decisions,
@@ -222,7 +246,7 @@ class FourAgentOrchestrationTests(unittest.TestCase):
         handoff_index = next(
             index
             for index, event in enumerate(result.events)
-            if event.event_type == "handoff_ready"
+            if event.event_type == HANDOFF_READY_EVENT_TYPE
         )
         openvla_index = next(
             index
@@ -231,6 +255,42 @@ class FourAgentOrchestrationTests(unittest.TestCase):
             and event.payload["executor"] == "openvla_oft"
         )
         self.assertLess(handoff_index, openvla_index)
+        self.assertEqual(
+            tuple(
+                event.event_type
+                for event in result.events
+                if event.event_type in FROZEN_HANDOFF_EVENT_SEQUENCE
+            ),
+            FROZEN_HANDOFF_EVENT_SEQUENCE,
+        )
+        candidate_events = [
+            event
+            for event in result.events
+            if event.event_type == HANDOFF_CANDIDATE_CHECKED_EVENT_TYPE
+        ]
+        self.assertGreaterEqual(len(candidate_events), 1)
+        verified_index = max(
+            index
+            for index, event in enumerate(result.events)
+            if event.event_type == HANDOFF_VERIFIED_EVENT_TYPE
+        )
+        ready_index = next(
+            index
+            for index, event in enumerate(result.events)
+            if event.event_type == HANDOFF_READY_EVENT_TYPE
+        )
+        b_only_index = next(
+            index
+            for index, event in enumerate(result.events)
+            if event.event_type == "control_token.changed"
+            and event.payload.get("next_token") == "B_ONLY"
+        )
+        self.assertLess(verified_index, ready_index)
+        self.assertLess(ready_index, b_only_index)
+        self.assertFalse(result.events[verified_index].payload["grants_b_only"])
+        self.assertTrue(result.events[verified_index].payload["quorum_passed"])
+        self.assertNotIn("handoff_ready", result.events[verified_index].payload)
+        self.assertTrue(result.events[ready_index].payload["grants_b_only"])
         handoff_start_index = next(
             index
             for index, event in enumerate(result.events)
@@ -257,7 +317,9 @@ class FourAgentOrchestrationTests(unittest.TestCase):
 
         self.assertTrue(result.success)
         handoff = next(
-            event for event in result.events if event.event_type == "handoff.verified"
+            event
+            for event in result.events
+            if event.event_type == HANDOFF_VERIFIED_EVENT_TYPE
         )
         self.assertEqual(handoff.payload["stable_frames"], 3)
         self.assertEqual(handoff.payload["required_frames"], 3)
@@ -297,7 +359,7 @@ class FourAgentOrchestrationTests(unittest.TestCase):
         self.assertEqual(simulator.illegal_arm_b_attempts, 0)
         self.assertNotIn("B_ONLY", result.control_token_history)
         self.assertFalse(
-            any(event.event_type == "handoff_ready" for event in result.events)
+            any(event.event_type == HANDOFF_READY_EVENT_TYPE for event in result.events)
         )
 
     def test_contradictory_arm_retreat_evidence_safe_stops_before_arm_b(self) -> None:
@@ -430,6 +492,18 @@ class FourAgentOrchestrationTests(unittest.TestCase):
         self.assertEqual(openvla.plan_calls, 1)
         self.assertEqual(result.replan_counts["pi05"], 1)
         self.assertEqual(result.executor_history, ("pi05", "openvla_oft"))
+        candidate_events = [
+            event
+            for event in result.events
+            if event.event_type == HANDOFF_CANDIDATE_CHECKED_EVENT_TYPE
+        ]
+        self.assertEqual(len(candidate_events), 2)
+        milestone_events = [
+            event.event_type
+            for event in result.events
+            if event.event_type in FROZEN_HANDOFF_EVENT_SEQUENCE
+        ]
+        self.assertEqual(tuple(milestone_events), FROZEN_HANDOFF_EVENT_SEQUENCE)
 
     def test_retry_exhaustion_never_substitutes_openvla_for_pi05(self) -> None:
         agent, openvla, pi05 = self.make_agent(
@@ -579,13 +653,16 @@ class FourAgentOrchestrationTests(unittest.TestCase):
     def test_handoff_event_must_persist_before_b_only_is_granted(self) -> None:
         class FailingHandoffEventSink(EventSink):
             def emit(self, **kwargs: Any):
-                if kwargs.get("event_type") == "handoff_ready":
+                if kwargs.get("event_type") == HANDOFF_READY_EVENT_TYPE:
                     raise OSError("event store unavailable")
                 return super().emit(**kwargs)
 
+        event_sink = FailingHandoffEventSink(
+            self._durable_event_path("failing-handoff")
+        )
         agent, openvla, _ = self.make_agent(
             make_perception(),
-            events=FailingHandoffEventSink(),
+            events=event_sink,
         )
         simulator = FixedDualArmMockSimulator()
 
@@ -598,6 +675,21 @@ class FourAgentOrchestrationTests(unittest.TestCase):
         self.assertNotIn("B_ONLY", result.control_token_history)
         self.assertEqual(result.control_token_history[-1], "NONE")
         self.assertEqual(openvla.plan_calls, 0)
+        self.assertFalse(
+            any(
+                event.event_type == HANDOFF_READY_EVENT_TYPE
+                or event.payload.get("grants_b_only") is True
+                or "handoff_ready" in event.payload
+                for event in event_sink.events
+            )
+        )
+        verified = next(
+            event
+            for event in event_sink.events
+            if event.event_type == HANDOFF_VERIFIED_EVENT_TYPE
+        )
+        self.assertTrue(verified.payload["quorum_passed"])
+        self.assertFalse(verified.payload["grants_b_only"])
 
     def test_cancel_failure_after_motion_fails_closed(self) -> None:
         class CancelFailurePi05(RecordingExecutor):
@@ -726,8 +818,8 @@ class FourAgentOrchestrationTests(unittest.TestCase):
         result = agent.run(four_agent_task("polluted-image"), simulator)
 
         self.assertFalse(result.success)
-        self.assertEqual(result.state, AgentState.SAFE_STOPPED)
-        self.assertTrue(simulator.safe_stop_called)
+        self.assertEqual(result.state, AgentState.FAILED)
+        self.assertFalse(simulator.safe_stop_called)
         self.assertEqual(pi05.plan_calls, 0)
         self.assertEqual(openvla.plan_calls, 0)
 
@@ -764,8 +856,8 @@ class FourAgentOrchestrationTests(unittest.TestCase):
                         "uri": f"cas://sha256/{digest}",
                         "image_sha256": f"sha256:{digest}",
                         "camera_id": camera_id,
-                        "width": 640,
-                        "height": 480,
+                        "width": 1280,
+                        "height": 720,
                     }
                 return observation
 
@@ -802,8 +894,8 @@ class FourAgentOrchestrationTests(unittest.TestCase):
                     "uri": f"cas://sha256/{'f' * 64}",
                     "image_sha256": f"sha256:{'f' * 64}",
                     "camera_id": "CAM_HANDOFF",
-                    "width": 640,
-                    "height": 480,
+                    "width": 1280,
+                    "height": 720,
                 }
                 return observation
 
@@ -819,6 +911,33 @@ class FourAgentOrchestrationTests(unittest.TestCase):
         self.assertEqual(result.state, AgentState.SAFE_STOPPED)
         self.assertEqual(result.failure_code, FailureCode.OBSERVATION_INVALID)
         self.assertTrue(simulator.safe_stop_called)
+        self.assertEqual(openvla.plan_calls, 0)
+
+    def test_noncanonical_phase_camera_resolution_is_rejected_before_vla(self) -> None:
+        class WrongResolutionSimulator(FixedDualArmMockSimulator):
+            def _observation(self) -> dict[str, object]:
+                observation = super()._observation()
+                camera = observation["camera"]
+                assert isinstance(camera, dict)
+                arm_a_rgb = camera["arm_a_rgb"]
+                assert isinstance(arm_a_rgb, dict)
+                arm_a_rgb["width"] = 640
+                arm_a_rgb["height"] = 480
+                return observation
+
+        agent, openvla, pi05 = self.make_agent(make_perception())
+        simulator = WrongResolutionSimulator()
+
+        result = agent.run(
+            four_agent_task("wrong-camera-resolution"),
+            simulator,
+        )
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.state, AgentState.FAILED)
+        self.assertEqual(result.failure_code, FailureCode.OBSERVATION_INVALID)
+        self.assertFalse(simulator.safe_stop_called)
+        self.assertEqual(pi05.plan_calls, 0)
         self.assertEqual(openvla.plan_calls, 0)
 
     def test_pi05_gets_original_language_openvla_gets_fixed_handoff_text(
@@ -856,6 +975,20 @@ class FourAgentOrchestrationTests(unittest.TestCase):
                     required_votes=1,
                 ),
             ),
+        )
+        agent, openvla, pi05 = self.make_agent(make_perception())
+
+        result = agent.run(task, FixedDualArmMockSimulator())
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.failure_code, FailureCode.INVALID_TASK)
+        self.assertEqual(openvla.plan_calls, 0)
+        self.assertEqual(pi05.plan_calls, 0)
+
+    def test_fixed_task_rejects_legacy_short_instruction_alias(self) -> None:
+        task = replace(
+            four_agent_task("legacy-instruction"),
+            instruction="帮我把零件最多的区域装箱",
         )
         agent, openvla, pi05 = self.make_agent(make_perception())
 
@@ -985,15 +1118,15 @@ class VLAAdapterInputTests(unittest.TestCase):
             "uri": f"cas://sha256/{'a' * 64}",
             "image_sha256": f"sha256:{'a' * 64}",
             "camera_id": "CAM_A_TOP",
-            "width": 640,
-            "height": 480,
+            "width": 1280,
+            "height": 720,
         }
         camera["arm_b_rgb"] = {
             "uri": f"cas://sha256/{'b' * 64}",
             "image_sha256": f"sha256:{'b' * 64}",
             "camera_id": "CAM_B_TOP",
-            "width": 640,
-            "height": 480,
+            "width": 1280,
+            "height": 720,
         }
         observation = ObservationGateway().ingest_online(raw_observation)
         context = ExecutionContext(

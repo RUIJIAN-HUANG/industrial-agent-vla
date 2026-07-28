@@ -114,7 +114,7 @@
     <text x="1355" y="452" class="tag" text-anchor="middle">AGENT 3 / 4</text>
     <text x="1440" y="456" class="agenttitle">OpenVLA Agent｜Arm B 协作执行</text>
     <text x="1290" y="495" class="body">输入：固定协作指令 + CAM_B 原始 RGB + B 臂状态</text>
-    <text x="1290" y="523" class="body">触发：Supervisor 发出 handoff_ready + B_ONLY 令牌</text>
+    <text x="1290" y="523" class="body">触发：durable handoff.ready + B_ONLY 令牌</text>
     <text x="1290" y="551" class="body">职责：抓箱把手、水平搬运、放入固定成品位</text>
     <text x="1290" y="579" class="body">输出：有限长度 canonical ActionChunk B</text>
     <rect x="1290" y="596" width="405" height="20" rx="10" fill="#ffedd5"/>
@@ -125,7 +125,7 @@
   <path d="M1040 342 C880 370 540 360 420 402" fill="none" stroke="#2563eb" stroke-width="3" marker-end="url(#aBlue)"/>
   <text x="720" y="365" class="small" text-anchor="middle">原始指令 + phase + 当前新观测</text>
   <path d="M1550 342 C1580 360 1585 380 1570 402" fill="none" stroke="#ea580c" stroke-width="3" marker-end="url(#aOrange)"/>
-  <text x="1637" y="374" class="small" text-anchor="middle">handoff_ready</text>
+  <text x="1637" y="374" class="small" text-anchor="middle">handoff.ready</text>
   <path d="M1120 408 C1170 378 1300 375 1420 342" fill="none" stroke="#7c3aed" stroke-width="3" marker-end="url(#aPurple)"/>
   <text x="1260" y="386" class="small" text-anchor="middle">DetectionPacket / evidence</text>
 
@@ -167,7 +167,7 @@
     <rect x="650" y="866" width="500" height="130" rx="22" fill="#dcfce7" stroke="#16803b" stroke-width="4"/>
     <text x="900" y="902" class="head" text-anchor="middle">中央固定交接位</text>
     <text x="900" y="934" class="body" text-anchor="middle">A_ONLY → HANDOFF_VERIFY → B_ONLY</text>
-    <text x="900" y="964" class="small" text-anchor="middle">初始为空；满箱稳定且 A 完全退出后才发 handoff_ready</text>
+    <text x="900" y="964" class="small" text-anchor="middle">初始为空；满箱稳定且 A 完全退出后才发 handoff.ready</text>
 
     <rect x="1230" y="842" width="500" height="178" rx="22" fill="#ffedd5" stroke="#ea580c" stroke-width="4"/>
     <text x="1255" y="878" class="head">Arm B 下游单元</text>
