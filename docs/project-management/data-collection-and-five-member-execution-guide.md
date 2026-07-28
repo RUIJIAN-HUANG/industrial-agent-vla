@@ -20,7 +20,7 @@
 π0.5 Agent 控制 Arm_A
     ↓ 完成四个零件装箱、纠正倒放件、满箱放到 HANDOFF_CENTER、退出共享区
 Supervisor 先做候选预检，再锁臂并用三张新鲜在线观测和机器人遥测做 2/3 复合投票
-    ↓ handoff.candidate_checked → handoff.verified → handoff.ready
+    ↓ handoff.candidate_checked 至少 1 次、重试时可为 1..N 次；里程碑为 handoff.verified → handoff.ready
     ↓ 令牌 A_ONLY → HANDOFF_VERIFY → B_ONLY
 OpenVLA Agent 控制 Arm_B
     ↓ 抓取同一个满箱并放到 FINISHED_01

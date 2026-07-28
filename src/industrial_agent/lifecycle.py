@@ -42,8 +42,11 @@ FROZEN_TOKEN_SEQUENCE = (
 HANDOFF_CANDIDATE_CHECKED_EVENT_TYPE = "handoff.candidate_checked"
 HANDOFF_VERIFIED_EVENT_TYPE = "handoff.verified"
 HANDOFF_READY_EVENT_TYPE = "handoff.ready"
+# Candidate checks are observations, not irreversible lifecycle milestones.
+# Any run that reaches handoff emits one or more checks as retries require.
+# Only the verified -> ready pair has a frozen irreversible order.
+REPEATABLE_HANDOFF_EVENT_TYPES = (HANDOFF_CANDIDATE_CHECKED_EVENT_TYPE,)
 FROZEN_HANDOFF_EVENT_SEQUENCE = (
-    HANDOFF_CANDIDATE_CHECKED_EVENT_TYPE,
     HANDOFF_VERIFIED_EVENT_TYPE,
     HANDOFF_READY_EVENT_TYPE,
 )

@@ -150,8 +150,10 @@ VLA 接收未叠加检测框的完整 RGB 图像。YOLO 使用同一原始帧的
 8. `detections.jsonl`、`events.jsonl`、`trace.json`、视频和离线
    `metrics.json` 均可关联且可复算。
 
-交接事件类型唯一采用点号风格，固定顺序为
-`handoff.candidate_checked → handoff.verified → handoff.ready`。其中前两个只表示
+交接事件类型唯一采用点号风格。候选预检事件
+`handoff.candidate_checked` 在进入交接的运行中至少出现一次，并可因重试出现
+1..N 次；不可逆里程碑顺序固定为
+`handoff.verified → handoff.ready`。候选预检和 `handoff.verified` 只表示
 预检或核验证据，**均不表示 Arm_B 已获准动作**；只有 durable
 `handoff.ready` 才是授予 `B_ONLY` 的就绪事件。冻结 Arm_B 自然语言中的
 `handoff_ready` 是业务信号名称，不是 `event_type`。

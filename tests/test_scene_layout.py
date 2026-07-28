@@ -119,9 +119,6 @@ class FrozenSceneLayoutTests(unittest.TestCase):
             "physics.control_frequency_hz": lambda config: config["physics"].pop(
                 "control_frequency_hz"
             ),
-            "physics.reset_settle_steps": lambda config: config["physics"].pop(
-                "reset_settle_steps"
-            ),
         }
 
         for expected_label, mutation in mutations.items():

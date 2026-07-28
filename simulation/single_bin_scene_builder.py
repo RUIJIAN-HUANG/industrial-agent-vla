@@ -656,9 +656,7 @@ def build_scene(
     )
     world.SetCustomDataByKey(
         "scene:tokenSequence",
-        Vt.StringArray(
-            [str(token) for token in workflow.get("token_sequence", [])]
-        ),
+        Vt.StringArray([str(token) for token in workflow.get("token_sequence", [])]),
     )
     world.SetCustomDataByKey(
         "scene:handoffReadyEvent",

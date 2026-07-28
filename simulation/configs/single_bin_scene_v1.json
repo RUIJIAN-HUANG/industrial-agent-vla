@@ -259,7 +259,6 @@
     "gravity_m_s2": [0.0, 0.0, -9.81],
     "physics_dt_s": 0.008333333333333333,
     "rendering_dt_s": 0.03333333333333333,
-    "control_frequency_hz": 60,
-    "reset_settle_steps": 120
+    "control_frequency_hz": 60
   }
 }

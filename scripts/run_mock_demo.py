@@ -20,8 +20,8 @@ _TASK_PROFILE = json.loads(
 )["lifecycle"]["task_profile"]
 ARM_A_INSTRUCTION = _TASK_PROFILE["arm_a_instruction"]
 ARM_B_INSTRUCTION = _TASK_PROFILE["arm_b_instruction"]
+HANDOFF_CANDIDATE_EVENT_TYPE = "handoff.candidate_checked"
 HANDOFF_EVENT_SEQUENCE = (
-    "handoff.candidate_checked",
     "handoff.verified",
     "handoff.ready",
 )
@@ -174,7 +174,7 @@ class FrozenPipelineDemo:
         candidate_observation_id = "obs-handoff-candidate"
         self.detect(candidate_observation_id, "CAM_HANDOFF")
         self.emit(
-            "handoff.candidate_checked",
+            HANDOFF_CANDIDATE_EVENT_TYPE,
             "VERIFYING",
             observation_id=candidate_observation_id,
             verdict="PASS",
@@ -189,6 +189,7 @@ class FrozenPipelineDemo:
             votes=sum(handoff_votes),
             frame_count=len(handoff_votes),
             frames_captured_after_lock=True,
+            quorum_passed=True,
             grants_b_only=False,
             persistence="mock_ordering_only",
         )
@@ -196,8 +197,9 @@ class FrozenPipelineDemo:
             "handoff.ready",
             "VERIFYING",
             verified_event_recorded=True,
+            durable_ack=True,
             grants_b_only=True,
-            persistence="mock_ordering_only",
+            persistence="mock_simulated_durable_ack",
         )
 
         self.set_token("B_ONLY", "OBSERVING")

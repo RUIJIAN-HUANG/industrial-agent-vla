@@ -137,7 +137,6 @@ _PHYSICS = {
     "physics_dt_s": 1.0 / 120.0,
     "rendering_dt_s": 1.0 / 30.0,
     "control_frequency_hz": 60,
-    "reset_settle_steps": 120,
 }
 _REACH_TARGETS = (
     ("Arm_A", "station", "PACK_STATION"),

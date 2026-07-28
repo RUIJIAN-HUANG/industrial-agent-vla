@@ -110,7 +110,8 @@ A_ONLY
 - `image_sha256` 对 PNG 编码文件的完整字节计算；
 - 路径为 `${INDUSTRIAL_AGENT_CAS_ROOT}/sha256/<前两位>/<完整 digest>`；
 - Isaac Adapter 原子写入成功后才能发布 `ImageReference`；
-- π0.5、OpenVLA-OFT、YOLO 在自身服务入口调用同一个 `resolve_rgb()`；
+- π0.5、OpenVLA-OFT、YOLO 在自身服务入口调用同一个
+  `CasRequestImageResolver`，再由它调用底层 `resolve_rgb()`；
 - Supervisor 只转发引用，不读取或通过 JSON 传输像素；
 - Real 模式解析失败必须返回 CAS/观测错误，禁止使用零图继续推理。
 
@@ -446,13 +447,13 @@ VLA 不接收另一机械臂的控制目标、YOLO DetectionPacket 或 GT。
   "workspace_by_arm": {
     "Arm_A": {
       "frame": "robot_base",
-      "min_xyz_m": [0.0, -0.60, 0.0],
-      "max_xyz_m": [0.70, 0.45, 1.0]
+      "min_m": [0.0, -0.60, 0.0],
+      "max_m": [0.70, 0.45, 1.0]
     },
     "Arm_B": {
       "frame": "robot_base",
-      "min_xyz_m": [0.0, -0.25, 0.0],
-      "max_xyz_m": [0.70, 0.60, 1.0]
+      "min_m": [0.0, -0.25, 0.0],
+      "max_m": [0.70, 0.60, 1.0]
     }
   }
 }

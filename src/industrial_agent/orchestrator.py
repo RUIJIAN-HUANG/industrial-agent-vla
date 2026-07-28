@@ -46,7 +46,7 @@ from .lifecycle import (
     HANDOFF_READY_EVENT_TYPE,
     HANDOFF_VERIFIED_EVENT_TYPE,
 )
-from .observation import ObservationGateway
+from .observation import FROZEN_IMAGE_HEIGHT, FROZEN_IMAGE_WIDTH, ObservationGateway
 from .perception import (
     DetectionEvidenceSink,
     DetectionPacket,
@@ -138,7 +138,7 @@ class IndustrialAgent:
         perception_iou_threshold: float = 0.45,
         max_decisions_per_strategy_attempt: int = 8,
         task_profile: FixedTaskProfile | None = None,
-        require_durable_handoff: bool = False,
+        require_durable_handoff: bool = True,
         safe_stop_timeout_ms: int = 2_000,
     ):
         if verification_frames < 1 or verification_frames > 9:
@@ -208,9 +208,13 @@ class IndustrialAgent:
         self.safety = safety or ActionSafetyValidator()
         self.verifier = verifier or PostconditionVerifier()
         self.events = events or EventSink()
-        if require_durable_handoff and not self.events.durable:
+        if require_durable_handoff is not True:
+            raise ValueError(
+                "fixed dual-VLA handoff cannot disable durable event persistence"
+            )
+        if not self.events.durable:
             raise ValueError("durable handoff requires an fsync-backed EventSink path")
-        self.require_durable_handoff = require_durable_handoff
+        self.require_durable_handoff = True
         self.memory_store = memory_store or MemoryStore()
         self.topology_mode = "FIXED_DUAL_VLA_SERIAL"
         self.task_profile = profile
@@ -1033,6 +1037,14 @@ class IndustrialAgent:
                 "CAM_B_TOP",
             }:
                 return "camera.full_image must reference a frozen RGB camera"
+            if image_key in required_phase_cameras and (
+                image_reference.width,
+                image_reference.height,
+            ) != (FROZEN_IMAGE_WIDTH, FROZEN_IMAGE_HEIGHT):
+                return (
+                    f"camera.{image_key} must use frozen "
+                    f"{FROZEN_IMAGE_WIDTH}x{FROZEN_IMAGE_HEIGHT} resolution"
+                )
         if not isinstance(robot, Mapping):
             return "robot state is missing or invalid"
         if set(robot) != {"active_arm", "arm_a", "arm_b"}:
@@ -1367,6 +1379,16 @@ class IndustrialAgent:
             raise PerceptionError(
                 FailureCode.OBSERVATION_INVALID,
                 f"camera.{camera_key}.camera_id must be {expected_camera_id!r}",
+                retryable=False,
+            )
+        if camera_key in {"full_image", "arm_a_rgb", "handoff_rgb", "arm_b_rgb"} and (
+            image.width,
+            image.height,
+        ) != (FROZEN_IMAGE_WIDTH, FROZEN_IMAGE_HEIGHT):
+            raise PerceptionError(
+                FailureCode.OBSERVATION_INVALID,
+                f"camera.{camera_key} must use frozen "
+                f"{FROZEN_IMAGE_WIDTH}x{FROZEN_IMAGE_HEIGHT} resolution",
                 retryable=False,
             )
         return image
@@ -2808,7 +2830,8 @@ class IndustrialAgent:
                         self._emit(
                             HANDOFF_VERIFIED_EVENT_TYPE,
                             {
-                                "handoff_ready": True,
+                                "quorum_passed": True,
+                                "grants_b_only": False,
                                 "stable_frames": len(frames),
                                 "required_frames": (
                                     self.task_profile.handoff_verification_frames
@@ -2828,19 +2851,15 @@ class IndustrialAgent:
                                 "bin_id": self.task_profile.bin_id,
                                 "from_arm": self.task_profile.arm_a_id,
                                 "to_arm": self.task_profile.arm_b_id,
-                                "durable_ack": self.events.durable,
+                                "durable_ack": True,
+                                "grants_b_only": True,
                             },
                         )
                         previous, current_token = self._lifecycle.grant_arm_b()
                         self._record_control_token(
                             previous,
                             current_token,
-                            (
-                                "durable handoff.ready grants Arm B exclusive control"
-                                if self.events.durable
-                                else "acknowledged handoff.ready grants Arm B "
-                                "exclusive control in non-production mode"
-                            ),
+                            "durable handoff.ready grants Arm B exclusive control",
                         )
                     elif subtask.subtask_id == ARM_B_TRANSPORT_SUBTASK_ID:
                         final_interlock_failure = (

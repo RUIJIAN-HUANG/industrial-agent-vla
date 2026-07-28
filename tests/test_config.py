@@ -16,6 +16,7 @@ from industrial_agent.lifecycle import (
 from industrial_agent.mock import MockExecutor
 from industrial_agent.orchestrator import IndustrialAgent
 from industrial_agent.perception import MockPerceptionAgent
+from industrial_agent.telemetry import EventSink
 
 
 PERCEPTION_CHECKPOINT_SHA = f"sha256:{'c' * 64}"
@@ -168,6 +169,21 @@ class ConfigTests(unittest.TestCase):
                 perception=self._perception(),
                 perception_mode="NOT_A_MODE",
                 max_perception_attempts=2,
+            )
+
+    def test_fixed_runtime_rejects_non_durable_handoff_sink(self) -> None:
+        with self.assertRaisesRegex(ValueError, "fsync-backed EventSink"):
+            IndustrialAgent(
+                self._executors(),
+                perception=self._perception(),
+                events=EventSink(),
+            )
+        with self.assertRaisesRegex(ValueError, "cannot disable"):
+            IndustrialAgent(
+                self._executors(),
+                perception=self._perception(),
+                events=EventSink(),
+                require_durable_handoff=False,
             )
 
     def test_legacy_routing_and_switch_fields_are_rejected(self) -> None:

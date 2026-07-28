@@ -50,6 +50,9 @@ RenderProduct。创建 RGB Annotator 后，必须把其 `uint8 H×W×3/4` 输出
 生命周期配置，机械臂正常工作空间属于控制器安全配置，两者的机器真源均为
 `configs/agent.default.json`；不得在场景 JSON 中重复维护
 `handoff_verify_stable_cycles` 或 `normal_workspace_limits`。
+Reset 后的物理稳定步数也不属于静态 USD 场景合同；应由 G0 运行/验收入口通过
+显式参数执行并记录。在该运行入口落地前，不得用场景 JSON 中未消费的
+`reset_settle_steps` 宣称已经完成自动稳定。
 
 主开发与最终 Docker 建议冻结 **Isaac Sim 5.1.x**。代码兼容 4.5，并为 4.2
 保留最低限度的导入回退；不要把多个 Isaac Sim 版本混入同一个正式镜像。

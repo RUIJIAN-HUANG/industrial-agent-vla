@@ -23,6 +23,7 @@ from .contracts import (
     TaskSchema,
 )
 from .errors import ContractError, ExecutorError, FailureCode
+from .observation import FROZEN_IMAGE_HEIGHT, FROZEN_IMAGE_WIDTH
 
 ARTIFACT_DIGEST_PATTERN = re.compile(r"sha256:[0-9a-fA-F]{64}")
 CAS_IMAGE_URI_PATTERN = re.compile(r"cas://sha256/([0-9a-fA-F]{64})")
@@ -189,13 +190,13 @@ def _phase_vla_inputs(
         camera[camera_key],
         f"camera.{camera_key}",
         expected_camera_id=expected_camera_id,
+        expected_size=(FROZEN_IMAGE_WIDTH, FROZEN_IMAGE_HEIGHT),
     )
-    wrist_image_raw = camera.get("wrist_image")
-    wrist_image = (
-        None
-        if wrist_image_raw is None
-        else _canonical_image_reference(wrist_image_raw, "camera.wrist_image")
-    )
+    if camera.get("wrist_image") is not None:
+        raise ExecutorError(
+            FailureCode.EXECUTOR_BAD_RESPONSE,
+            "frozen three-camera profile requires camera.wrist_image=null",
+        )
     state = arm_state.get("state", arm_state.get("tcp_pose_m_rad"))
     tcp_pose = arm_state.get("tcp_pose_m_rad")
     if state is None:
@@ -209,7 +210,7 @@ def _phase_vla_inputs(
         f"robot.{arm_key}.tcp_pose_m_rad",
         minimum_length=6,
     )
-    return full_image, wrist_image, state, tcp_pose
+    return full_image, None, state, tcp_pose
 
 
 def _canonical_image_reference(
@@ -217,6 +218,7 @@ def _canonical_image_reference(
     field: str,
     *,
     expected_camera_id: str | None = None,
+    expected_size: tuple[int, int] | None = None,
 ) -> dict[str, Any]:
     """Rebuild an exact image allowlist before crossing a VLA boundary."""
 
@@ -271,6 +273,12 @@ def _canonical_image_reference(
             FailureCode.EXECUTOR_BAD_RESPONSE,
             f"{field}.width/height must be positive integers",
         )
+    if expected_size is not None and (width, height) != expected_size:
+        raise ExecutorError(
+            FailureCode.EXECUTOR_BAD_RESPONSE,
+            f"{field} must use frozen {expected_size[0]}x{expected_size[1]} "
+            f"resolution; got {width}x{height}",
+        )
     return {
         "uri": uri,
         "image_sha256": image_sha256,
@@ -312,6 +320,26 @@ def _validate_health_response(
             FailureCode.EXECUTOR_BAD_RESPONSE,
             "executor health response contains unknown fields: "
             f"{sorted(unknown_keys, key=str)}",
+        )
+    invalid_optional_fields: dict[str, Any] = {}
+    if "service_version" in response and not isinstance(
+        response["service_version"], str
+    ):
+        invalid_optional_fields["service_version"] = response["service_version"]
+    for field in ("uptime_ms", "time_ms"):
+        if field not in response:
+            continue
+        value = response[field]
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            invalid_optional_fields[field] = value
+    for field in ("queue", "device"):
+        if field in response and not isinstance(response[field], Mapping):
+            invalid_optional_fields[field] = response[field]
+    if invalid_optional_fields:
+        raise ExecutorError(
+            FailureCode.EXECUTOR_BAD_RESPONSE,
+            "executor health response violates optional field schema: "
+            f"{invalid_optional_fields}",
         )
     version = response.get("schema_version")
     if not _is_compatible_version(version, "1.0"):

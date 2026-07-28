@@ -15,11 +15,14 @@ python scripts/verify_project_frozen_inputs.py
 python scripts/run_mock_demo.py
 ```
 
-Mock 不加载真实 OpenVLA-OFT、π0.5 或仿真平台，也不证明真实 fsync；每个场景
+Mock 不加载真实 OpenVLA-OFT、π0.5 或仿真平台；其中 `durable_ack=true` 只模拟
+“持久化成功后再授权”的顺序，不证明真实文件系统 fsync。每个场景
 验证 `π0.5 → 候选预检 → 锁臂后三帧 2/3 交接核验 → OpenVLA-OFT` 的调用顺序、
-`A_ONLY → HANDOFF_VERIFY → B_ONLY` 的令牌顺序，以及
-`handoff.candidate_checked → handoff.verified → handoff.ready` 的事件顺序。
-候选帧不进入三帧投票，只有 `handoff.ready` 表示 Arm_B 可以执行。
+`A_ONLY → HANDOFF_VERIFY → B_ONLY` 的令牌顺序。候选预检事件
+`handoff.candidate_checked` 在进入交接的运行中至少出现一次，并可按重试需要出现
+1..N 次；不可逆里程碑只校验
+`handoff.verified → handoff.ready` 的事件顺序。候选帧不进入三帧投票，只有
+`handoff.ready` 表示 Arm_B 可以执行。
 
 YOLO 评测是同步调用、失败非门控的评分 sidecar：在线检测空结果、超时或坏响应必须留证，但不得
 阻止 π0.5/OpenVLA-OFT 主控制链路。以下离线命令是 GT 与预测唯一允许汇合的位置。

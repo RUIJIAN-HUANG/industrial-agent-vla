@@ -12,6 +12,7 @@ from industrial_agent.lifecycle import (
 from scripts.run_mock_demo import (
     ARM_A_INSTRUCTION,
     ARM_B_INSTRUCTION,
+    HANDOFF_CANDIDATE_EVENT_TYPE,
     HANDOFF_EVENT_SEQUENCE,
     FrozenPipelineDemo,
 )
@@ -63,14 +64,22 @@ class DocumentationContractTests(unittest.TestCase):
         )
         self.assertEqual(
             [event["token"] for event in handoff_events],
-            ["A_ONLY", "HANDOFF_VERIFY", "HANDOFF_VERIFY"],
+            ["HANDOFF_VERIFY", "HANDOFF_VERIFY"],
         )
+        candidate_events = [
+            event
+            for event in demo.events
+            if event["event_type"] == HANDOFF_CANDIDATE_EVENT_TYPE
+        ]
+        self.assertGreaterEqual(len(candidate_events), 1)
         self.assertFalse(
-            handoff_events[0]["payload"]["contributes_to_quorum"],
+            candidate_events[-1]["payload"]["contributes_to_quorum"],
         )
-        self.assertEqual(handoff_events[1]["payload"]["frame_count"], 3)
-        self.assertFalse(handoff_events[1]["payload"]["grants_b_only"])
-        self.assertTrue(handoff_events[2]["payload"]["grants_b_only"])
+        self.assertFalse(candidate_events[-1]["payload"]["grants_b_only"])
+        self.assertEqual(handoff_events[0]["payload"]["frame_count"], 3)
+        self.assertFalse(handoff_events[0]["payload"]["grants_b_only"])
+        self.assertTrue(handoff_events[1]["payload"]["durable_ack"])
+        self.assertTrue(handoff_events[1]["payload"]["grants_b_only"])
 
     def test_architecture_freezes_three_cameras_and_null_wrist_image(self) -> None:
         documents = [
@@ -82,6 +91,7 @@ class DocumentationContractTests(unittest.TestCase):
 
         for event_type in HANDOFF_EVENT_SEQUENCE:
             self.assertIn(event_type, combined)
+        self.assertIn(HANDOFF_CANDIDATE_EVENT_TYPE, combined)
         for camera_id in ("CAM_A_TOP", "CAM_HANDOFF", "CAM_B_TOP"):
             self.assertIn(camera_id, combined)
         self.assertIn("三台物理", combined)
