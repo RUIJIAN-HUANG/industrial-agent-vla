@@ -341,6 +341,11 @@ def test_service_import_requires_explicit_mode():
     env = os.environ.copy()
     env.pop("PI05_SERVICE_MODE", None)
     env.pop("PI05_MODE", None)
+    env["PYTHONPATH"] = os.pathsep.join(
+        filter(None, (os.path.join(_PROJECT_ROOT, "src"), env.get("PYTHONPATH")))
+    )
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
 
     result = subprocess.run(
         [sys.executable, "-c", "import services.pi05.src.openpi_service"],
@@ -348,6 +353,8 @@ def test_service_import_requires_explicit_mode():
         env=env,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="strict",
         timeout=30,
         check=False,
     )
