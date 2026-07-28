@@ -37,14 +37,14 @@ def require_isaac_sim_51() -> dict[str, str]:
                 raise RuntimeError(
                     "Isaac Sim rejected enabling 'isaacsim.core.version'."
                 )
-        from isaacsim.core.version import Version
+        from isaacsim.core.version import get_version
     except (ImportError, RuntimeError) as exc:
         raise RuntimeError(
             "Isaac Sim version metadata is unavailable. Enable the "
             "'isaacsim.core.version' extension in the 5.1 runtime."
         ) from exc
 
-    raw_version = tuple(str(item) for item in Version().get_version())
+    raw_version = tuple(str(item) for item in get_version())
     if len(raw_version) < 8:
         raise RuntimeError(
             f"Isaac Sim returned an incomplete version tuple: {raw_version!r}"

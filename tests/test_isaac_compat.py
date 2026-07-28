@@ -23,11 +23,18 @@ class IsaacCompatibilityTests(unittest.TestCase):
             )
         )
 
-        class FakeVersion:
-            def get_version(self):
-                return ("5.1.0", "", "5", "1", "0", "", "123", "release")
-
-        isaacsim_version = types.SimpleNamespace(Version=FakeVersion)
+        isaacsim_version = types.SimpleNamespace(
+            get_version=lambda: (
+                "5.1.0",
+                "",
+                "5",
+                "1",
+                "0",
+                "",
+                "123",
+                "release",
+            )
+        )
         with patch.dict(
             sys.modules,
             {
@@ -54,10 +61,6 @@ class IsaacCompatibilityTests(unittest.TestCase):
             )
         )
 
-        class FakeVersion:
-            def get_version(self):
-                return ("4.5.0", "", "4", "5", "0", "", "123", "release")
-
         with patch.dict(
             sys.modules,
             {
@@ -66,7 +69,18 @@ class IsaacCompatibilityTests(unittest.TestCase):
                 ),
                 "omni.kit": types.SimpleNamespace(app=app_module),
                 "omni.kit.app": app_module,
-                "isaacsim.core.version": types.SimpleNamespace(Version=FakeVersion),
+                "isaacsim.core.version": types.SimpleNamespace(
+                    get_version=lambda: (
+                        "4.5.0",
+                        "",
+                        "4",
+                        "5",
+                        "0",
+                        "",
+                        "123",
+                        "release",
+                    )
+                ),
             },
         ):
             with self.assertRaisesRegex(RuntimeError, "requires Isaac Sim 5.1"):
