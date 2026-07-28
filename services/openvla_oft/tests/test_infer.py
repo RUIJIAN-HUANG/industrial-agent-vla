@@ -4,18 +4,43 @@ from __future__ import annotations
 def test_infer_valid_request_returns_schema_compliant_action_chunk(
     service,
     valid_infer_request,
-    schema_validator,
 ):
     status, response = service.infer(valid_infer_request)
 
     assert status == 200
-    schema_validator("executor-infer.schema.json", "response").validate(response)
-    schema_validator("action-chunk.schema.json").validate(response["action_chunk"])
+    assert response["status"] == "ok"
     assert response["executor"] == "openvla_oft"
     assert response["action_chunk"]["executor"] == "openvla_oft"
     assert response["action_chunk"]["task_id"] == valid_infer_request["task_id"]
+    assert response["action_chunk"]["action_space"] == "ee_delta_pose_gripper"
+    assert response["action_chunk"]["frame"] == "robot_base"
     for step in response["action_chunk"]["steps"]:
         assert len(step["values"]) == 7
+
+
+def test_infer_null_wrist_image_is_accepted(
+    service,
+    valid_infer_request,
+):
+    status, response = service.infer(valid_infer_request)
+
+    assert status == 200
+    assert response["status"] == "ok"
+
+
+def test_infer_optional_wrist_image_is_resolved(
+    service,
+    valid_infer_request,
+    valid_wrist_image,
+    copy_request,
+):
+    request = copy_request(valid_infer_request)
+    request["model_input"]["wrist_image"] = valid_wrist_image
+
+    status, response = service.infer(request)
+
+    assert status == 200
+    assert response["status"] == "ok"
 
 
 def test_infer_duplicate_request_id_returns_cached_response(

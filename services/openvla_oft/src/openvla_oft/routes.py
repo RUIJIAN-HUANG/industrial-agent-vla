@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError
+from threading import Event
 from time import perf_counter
 from typing import Any, Mapping
 
 from .exceptions import ServiceError
+from .image_cas import ImageCas
 from .model import OpenVLAOFTModel
 from .schemas import (
     build_cancel_response,
@@ -26,16 +28,23 @@ class OpenVLAOFTService:
     ) -> None:
         self.config = config
         self.model = model or OpenVLAOFTModel(config)
+        self._image_cas = ImageCas.from_mapping(config["image_cas"])
         self.started_at = perf_counter()
         max_workers = int(config["api"]["max_concurrent_requests"])
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
         self._active_by_task: dict[str, dict[str, Future[list[list[float]]]]] = {}
+        self._cancel_event_by_request: dict[tuple[str, str], Event] = {}
         self._completed_by_request: dict[str, dict[str, Any]] = {}
         self._completed_observation_by_task: dict[str, str] = {}
 
     def health(self) -> tuple[int, dict[str, Any]]:
         uptime_ms = int((perf_counter() - self.started_at) * 1000)
-        return 200, build_health_response(self.config, uptime_ms=uptime_ms)
+        status = "ready" if self.model.ready else "degraded"
+        return 200, build_health_response(
+            self.config,
+            uptime_ms=uptime_ms,
+            status=status,
+        )
 
     def infer(self, payload: Any) -> tuple[int, dict[str, Any]]:
         artifacts = self.config["artifacts"]
@@ -49,12 +58,20 @@ class OpenVLAOFTService:
         try:
             request = validate_infer_request(payload, self.config)
             self._reject_stale_observation(request)
+            if not self.model.ready:
+                raise ServiceError(
+                    "EXEC_2101_UNAVAILABLE",
+                    "real OpenVLA-OFT inference is not integrated",
+                    retryable=False,
+                )
+            request = self._resolve_images(request)
             self._register_active(request)
             start = perf_counter()
             future = self._active_by_task[request["task_id"]][request["request_id"]]
             try:
                 actions = future.result(timeout=request["deadline_ms"] / 1000)
             except TimeoutError as exc:
+                self._cancel_request(request["task_id"], request["request_id"])
                 future.cancel()
                 raise ServiceError(
                     "EXEC_2102_TIMEOUT",
@@ -91,7 +108,8 @@ class OpenVLAOFTService:
             request = validate_cancel_request(payload)
             active = self._active_by_task.pop(request["task_id"], {})
             if active:
-                for future in active.values():
+                for request_id, future in active.items():
+                    self._cancel_request(request["task_id"], request_id)
                     future.cancel()
                 response = build_cancel_response(
                     request,
@@ -132,10 +150,23 @@ class OpenVLAOFTService:
                 retryable=True,
                 retry_after_ms=int(self.config["api"]["default_deadline_ms"]),
             )
-        future = self._executor.submit(self.model.predict, request)
+        cancel_event = Event()
+        self._cancel_event_by_request[(request["task_id"], request["request_id"])] = (
+            cancel_event
+        )
+        future = self._executor.submit(
+            self.model.predict,
+            request,
+            cancel_event=cancel_event,
+        )
         self._active_by_task.setdefault(request["task_id"], {})[
             request["request_id"]
         ] = future
+
+    def _cancel_request(self, task_id: str, request_id: str) -> None:
+        event = self._cancel_event_by_request.pop((task_id, request_id), None)
+        if event is not None:
+            event.set()
 
     def _clear_active(self, request: Mapping[str, Any]) -> None:
         task_id = request.get("task_id")
@@ -146,8 +177,32 @@ class OpenVLAOFTService:
         if active is None:
             return
         active.pop(request_id, None)
+        self._cancel_event_by_request.pop((task_id, request_id), None)
         if not active:
             self._active_by_task.pop(task_id, None)
+
+    def _resolve_images(self, request: Mapping[str, Any]) -> dict[str, Any]:
+        model_input = request["model_input"]
+        image_size = tuple(self.config["image_size"])
+        full_image = self._image_cas.resolve_rgb(
+            model_input["full_image"],
+            expected_camera_id="CAM_B_TOP",
+            expected_size=image_size,
+        )
+        resolved_model_input = dict(model_input)
+        resolved_model_input["full_image_rgb"] = full_image.rgb
+        wrist_image = model_input["wrist_image"]
+        if wrist_image is None:
+            resolved_model_input["wrist_image_rgb"] = None
+        else:
+            resolved_model_input["wrist_image_rgb"] = self._image_cas.resolve_rgb(
+                wrist_image,
+                expected_camera_id="CAM_B_WRIST",
+                expected_size=image_size,
+            ).rgb
+        resolved_request = dict(request)
+        resolved_request["model_input"] = resolved_model_input
+        return resolved_request
 
     def _reject_stale_observation(self, request: Mapping[str, Any]) -> None:
         previous = self._completed_observation_by_task.get(request["task_id"])
@@ -166,6 +221,8 @@ def _http_status_for_error(code: str) -> int:
         return 503
     if code == "EXEC_2102_TIMEOUT":
         return 504
+    if code == "EXEC_2107_CANCELLED":
+        return 409
     if code.startswith("SAFE_"):
         return 409
     return 422

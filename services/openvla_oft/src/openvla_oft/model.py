@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from threading import Event
 from typing import Any, Mapping, Protocol
 
 from .exceptions import ServiceError
@@ -9,7 +10,13 @@ from .utils import validate_action_matrix
 
 
 class PolicyRunner(Protocol):
-    def predict(self, request: Mapping[str, Any]) -> list[list[float]]:
+    ready: bool
+
+    def predict(
+        self,
+        request: Mapping[str, Any],
+        cancel_event: Event | None = None,
+    ) -> list[list[float]]:
         """Return model-native ``N x 7`` end-effector delta actions."""
 
 
@@ -35,10 +42,16 @@ class ActionConverter:
 class MockOpenVLAPolicy:
     """Deterministic policy for contract and orchestration smoke tests only."""
 
+    ready = True
+
     def __init__(self, *, steps: int) -> None:
         self.steps = steps
 
-    def predict(self, request: Mapping[str, Any]) -> list[list[float]]:
+    def predict(
+        self,
+        request: Mapping[str, Any],
+        cancel_event: Event | None = None,
+    ) -> list[list[float]]:
         del request
         template = [
             [0.0, 0.015, 0.0, 0.0, 0.0, 0.0, -0.75],
@@ -46,7 +59,16 @@ class MockOpenVLAPolicy:
             [0.0, 0.010, 0.010, 0.0, 0.0, 0.0, -0.25],
             [0.0, 0.000, 0.000, 0.0, 0.0, 0.0, 0.75],
         ]
-        return template[: self.steps]
+        output: list[list[float]] = []
+        for row in template[: self.steps]:
+            if cancel_event is not None and cancel_event.is_set():
+                raise ServiceError(
+                    "EXEC_2107_CANCELLED",
+                    "mock OpenVLA-OFT inference was cancelled",
+                    retryable=False,
+                )
+            output.append(row)
+        return output
 
 
 class RealOpenVLAPolicy:
@@ -58,11 +80,18 @@ class RealOpenVLAPolicy:
     OpenVLA-OFT repository, not by supervisor-side model loading.
     """
 
+    ready = False
+
     def __init__(self, config: Mapping[str, Any]) -> None:
         self.config = config
 
-    def predict(self, request: Mapping[str, Any]) -> list[list[float]]:
+    def predict(
+        self,
+        request: Mapping[str, Any],
+        cancel_event: Event | None = None,
+    ) -> list[list[float]]:
         del request
+        del cancel_event
         raise ServiceError(
             "EXEC_2101_UNAVAILABLE",
             "real OpenVLA-OFT inference is not integrated; "
@@ -87,6 +116,14 @@ class OpenVLAOFTModel:
         else:
             self.runner = RealOpenVLAPolicy(config)
 
-    def predict(self, request: Mapping[str, Any]) -> list[list[float]]:
-        native_actions = self.runner.predict(request)
+    @property
+    def ready(self) -> bool:
+        return bool(self.runner.ready)
+
+    def predict(
+        self,
+        request: Mapping[str, Any],
+        cancel_event: Event | None = None,
+    ) -> list[list[float]]:
+        native_actions = self.runner.predict(request, cancel_event=cancel_event)
         return self.converter.native_to_canonical(native_actions)

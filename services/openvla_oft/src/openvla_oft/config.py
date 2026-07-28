@@ -10,6 +10,7 @@ from typing import Any, Mapping
 
 SHA256_PREFIX = "sha256:"
 ZERO_SHA256 = f"{SHA256_PREFIX}{'0' * 64}"
+IMAGE_CAS_DEFAULT_ROOT = "artifacts/cas/openvla_oft"
 
 
 def service_root() -> Path:
@@ -74,12 +75,16 @@ def load_config(config_dir: str | Path | None = None) -> dict[str, Any]:
         "OPENVLA_OFT_NORM_STATS_SHA",
         artifacts.get("norm_stats_sha", ZERO_SHA256),
     )
+    image_cas = config.setdefault("image_cas", {})
+    image_cas["root"] = os.getenv(
+        "INDUSTRIAL_AGENT_CAS_ROOT",
+        image_cas.get("root", IMAGE_CAS_DEFAULT_ROOT),
+    )
     config["mock_mode"] = _env_bool(
         "OPENVLA_OFT_USE_MOCK",
         bool(config.get("mock_mode", True)),
     )
     config["checkpoint_dir"] = os.getenv("OPENVLA_OFT_CHECKPOINT_DIR", "")
-    config["cas_root"] = os.getenv("CAS_ROOT", "")
     validate_config(config)
     return config
 
@@ -96,7 +101,11 @@ def validate_config(config: Mapping[str, Any]) -> None:
         "image_size",
         "api",
         "artifacts",
+        "image_cas",
         "model",
+        "language_field",
+        "task_id_field",
+        "action_conversion",
     }
     missing = required - set(config)
     if missing:
@@ -121,12 +130,72 @@ def validate_config(config: Mapping[str, Any]) -> None:
         )
     ):
         raise ValueError("image_size must contain two positive integers")
+    if image_size != [1280, 720]:
+        raise ValueError("image_size must be [1280, 720]")
+    if config["language_field"] != "model_input.task_description":
+        raise ValueError("language_field must be model_input.task_description")
+    if config["task_id_field"] != "task_id":
+        raise ValueError("task_id_field must be task_id")
+    action_conversion = config["action_conversion"]
+    if not isinstance(action_conversion, Mapping):
+        raise ValueError("action_conversion must be an object")
+    frozen_order = [
+        "dx_m",
+        "dy_m",
+        "dz_m",
+        "droll_rad",
+        "dpitch_rad",
+        "dyaw_rad",
+        "gripper_norm",
+    ]
+    if action_conversion.get("canonical_order") != frozen_order:
+        raise ValueError(
+            "action_conversion.canonical_order must be the frozen N x 7 order"
+        )
+    if action_conversion.get("native_order") != frozen_order:
+        raise ValueError(
+            "action_conversion.native_order must match the frozen N x 7 order"
+        )
+    model = config["model"]
+    if not isinstance(model, Mapping):
+        raise ValueError("model must be an object")
+    if model.get("architecture") != "openvla-oft":
+        raise ValueError("model.architecture must be openvla-oft")
+    if model.get("input_image_size") != [1280, 720]:
+        raise ValueError("model.input_image_size must be [1280, 720]")
+    if model.get("uses_wrist_camera") is not True:
+        raise ValueError("model.uses_wrist_camera must be true")
+    if model.get("proprio_dim") != 7:
+        raise ValueError("model.proprio_dim must be 7")
+    if model.get("action_dim") != 7:
+        raise ValueError("model.action_dim must be 7")
     artifacts = config["artifacts"]
     if not isinstance(artifacts, Mapping):
         raise ValueError("artifacts must be an object")
     for field in ("checkpoint_sha", "norm_stats_sha"):
         if not looks_like_sha256(artifacts.get(field)):
             raise ValueError(f"artifacts.{field} must be sha256:<64 hex characters>")
+    image_cas = config["image_cas"]
+    if not isinstance(image_cas, Mapping):
+        raise ValueError("image_cas must be an object")
+    if not isinstance(image_cas.get("root"), str) or not image_cas["root"].strip():
+        raise ValueError("image_cas.root must be a non-empty string")
+    if image_cas.get("layout") != "sha256-v1":
+        raise ValueError("image_cas.layout must be sha256-v1")
+    if image_cas.get("encoding") != "png":
+        raise ValueError("image_cas.encoding must be png")
+    if image_cas.get("digest_scope") != "encoded_bytes":
+        raise ValueError("image_cas.digest_scope must be encoded_bytes")
+    for field in (
+        "max_blob_bytes",
+        "max_pixels",
+        "cache_max_bytes",
+        "missing_retry_count",
+        "missing_retry_delay_ms",
+    ):
+        value = image_cas.get(field)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(f"image_cas.{field} must be a non-negative integer")
     api = config["api"]
     if not isinstance(api, Mapping):
         raise ValueError("api must be an object")

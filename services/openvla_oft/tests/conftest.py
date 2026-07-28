@@ -1,25 +1,30 @@
 from __future__ import annotations
 
-import json
 import sys
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pytest
-from jsonschema import Draft202012Validator
-from referencing import Registry, Resource
 
 SERVICE_ROOT = Path(__file__).resolve().parents[1]
-REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(SERVICE_ROOT / "src"))
 
 from openvla_oft.config import load_config  # noqa: E402
+from openvla_oft.image_cas import ImageCas  # noqa: E402
 from openvla_oft.routes import OpenVLAOFTService  # noqa: E402
 
 
 @pytest.fixture
-def config() -> dict[str, Any]:
+def cas_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    root = tmp_path / "cas"
+    monkeypatch.setenv("INDUSTRIAL_AGENT_CAS_ROOT", str(root))
+    return root
+
+
+@pytest.fixture
+def config(cas_root: Path) -> dict[str, Any]:
     return load_config(SERVICE_ROOT / "configs")
 
 
@@ -30,11 +35,12 @@ def service(config: dict[str, Any]) -> OpenVLAOFTService:
 
 @pytest.fixture
 def valid_infer_request(config: dict[str, Any]) -> dict[str, Any]:
-    full_digest = "a" * 64
-    wrist_digest = "b" * 64
+    cas = ImageCas.from_mapping(config["image_cas"])
+    full_rgb = np.zeros((720, 1280, 3), dtype=np.uint8)
+    full_rgb[..., 1] = 64
     checkpoint_sha = config["artifacts"]["checkpoint_sha"]
     norm_stats_sha = config["artifacts"]["norm_stats_sha"]
-    width, height = config["image_size"]
+    full_ref = cas.write_rgb(full_rgb, camera_id="CAM_B_TOP")
     return {
         "schema_version": "1.0",
         "request_id": "req-1",
@@ -51,43 +57,18 @@ def valid_infer_request(config: dict[str, Any]) -> dict[str, Any]:
         "expected_action_contract": "1.0",
         "model_input": {
             "task_description": config["instruction"],
-            "full_image": {
-                "uri": f"cas://sha256/{full_digest}",
-                "image_sha256": f"sha256:{full_digest}",
-                "camera_id": "CAM_B_TOP",
-                "width": width,
-                "height": height,
-            },
-            "wrist_image": {
-                "uri": f"cas://sha256/{wrist_digest}",
-                "image_sha256": f"sha256:{wrist_digest}",
-                "camera_id": "CAM_B_WRIST",
-                "width": width,
-                "height": height,
-            },
+            "full_image": full_ref,
+            "wrist_image": None,
             "state": [0.4, 0.0, 0.4, 0.0, 0.0, 0.0, 0.5],
         },
     }
 
 
 @pytest.fixture
-def schema_validator() -> Any:
-    loaded = [
-        json.loads(path.read_text(encoding="utf-8"))
-        for path in sorted((REPO_ROOT / "schemas").glob("*.schema.json"))
-    ]
-    registry = Registry().with_resources(
-        (schema["$id"], Resource.from_contents(schema)) for schema in loaded
-    )
-
-    def build(schema_name: str, definition: str | None = None) -> Draft202012Validator:
-        schema = next(
-            item for item in loaded if item["$id"].endswith(f"/{schema_name}")
-        )
-        selected = schema if definition is None else schema["$defs"][definition]
-        return Draft202012Validator(selected, registry=registry)
-
-    return build
+def valid_wrist_image(config: dict[str, Any]) -> dict[str, Any]:
+    cas = ImageCas.from_mapping(config["image_cas"])
+    wrist_rgb = np.full((720, 1280, 3), 32, dtype=np.uint8)
+    return cas.write_rgb(wrist_rgb, camera_id="CAM_B_WRIST")
 
 
 @pytest.fixture

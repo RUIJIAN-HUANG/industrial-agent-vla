@@ -11,14 +11,22 @@
     "norm_stats_sha": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
     "checkpoint_kind": "mock-placeholder"
   },
+  "image_cas": {
+    "root": "artifacts/cas/openvla_oft",
+    "layout": "sha256-v1",
+    "encoding": "png",
+    "digest_scope": "encoded_bytes",
+    "max_blob_bytes": 16777216,
+    "max_pixels": 4194304,
+    "cache_max_bytes": 67108864,
+    "missing_retry_count": 1,
+    "missing_retry_delay_ms": 25
+  },
   "model": {
     "architecture": "openvla-oft",
     "device": "cuda",
     "torch_dtype": "float16",
-    "input_image_size": [
-      640,
-      480
-    ],
+    "input_image_size": [1280, 720],
     "uses_wrist_camera": true,
     "proprio_dim": 7,
     "action_dim": 7

@@ -14,8 +14,8 @@
     "CAM_B_WRIST"
   ],
   "image_size": [
-    640,
-    480
+    1280,
+    720
   ],
   "language_field": "model_input.task_description",
   "task_id_field": "task_id",

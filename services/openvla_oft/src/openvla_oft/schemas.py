@@ -5,9 +5,9 @@ from __future__ import annotations
 from time import time
 from typing import Any, Mapping
 
-from .cas import validate_image_reference
 from .config import looks_like_sha256
 from .exceptions import ServiceError
+from .image_cas import validate_image_reference
 from .utils import finite_vector
 
 SCHEMA_VERSION = "1.0"
@@ -61,13 +61,14 @@ def build_health_response(
     config: Mapping[str, Any],
     *,
     uptime_ms: int,
+    status: str = "ready",
 ) -> dict[str, Any]:
     artifacts = config["artifacts"]
     return {
         "schema_version": SCHEMA_VERSION,
         "service": SERVICE_NAME,
         "service_version": str(config.get("service_version", "0.1.0")),
-        "status": "ready",
+        "status": status,
         "uptime_ms": uptime_ms,
         "checkpoint_sha": artifacts["checkpoint_sha"],
         "norm_stats_sha": artifacts["norm_stats_sha"],
@@ -153,12 +154,15 @@ def validate_infer_request(payload: Any, config: Mapping[str, Any]) -> dict[str,
         expected_camera_id="CAM_B_TOP",
         expected_size=image_size,
     )
-    wrist_image = validate_image_reference(
-        model_input["wrist_image"],
-        field_name="model_input.wrist_image",
-        expected_camera_id="CAM_B_WRIST",
-        expected_size=image_size,
-    )
+    wrist_raw = model_input["wrist_image"]
+    wrist_image = None
+    if wrist_raw is not None:
+        wrist_image = validate_image_reference(
+            wrist_raw,
+            field_name="model_input.wrist_image",
+            expected_camera_id="CAM_B_WRIST",
+            expected_size=image_size,
+        )
     state = finite_vector(model_input["state"], "model_input.state", min_length=7)
     return {
         **dict(payload),

@@ -7,7 +7,10 @@ name = "openvla-oft"
 version = "0.1.0"
 description = "Standalone OpenVLA-OFT executor service for Arm_B."
 requires-python = ">=3.10"
-dependencies = []
+dependencies = [
+    "numpy>=1.24,<3",
+    "Pillow>=10,<13"
+]
 
 [project.optional-dependencies]
 test = [
