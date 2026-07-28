@@ -6,8 +6,18 @@ from pathlib import Path
 
 from jsonschema import Draft202012Validator, ValidationError
 
-from industrial_agent.contracts import Postcondition, TaskSchema
+from industrial_agent.contracts import (
+    ACTION_CONTRACT_VERSION,
+    FROZEN_VLA_EXECUTOR_NAMES,
+    MAX_ACTION_CHUNK_STEPS,
+    PI05_EXECUTOR_NAME,
+    ActionChunk,
+    ActionStep,
+    Postcondition,
+    TaskSchema,
+)
 from industrial_agent.errors import ContractError, FailureCode
+from industrial_agent.executor import EXECUTOR_HEALTH_RESPONSE_FIELDS
 
 
 class ContractAlignmentTests(unittest.TestCase):
@@ -50,6 +60,10 @@ class ContractAlignmentTests(unittest.TestCase):
         }
         validator = Draft202012Validator(schema)
         validator.validate(response)
+        self.assertEqual(
+            frozenset(schema["properties"]),
+            EXECUTOR_HEALTH_RESPONSE_FIELDS,
+        )
 
         del response["supported_task_types"]
         with self.assertRaises(ValidationError):
@@ -111,6 +125,60 @@ class ContractAlignmentTests(unittest.TestCase):
                 with self.assertRaises(ContractError) as caught:
                     Postcondition.from_dict({**base, field: value})
                 self.assertEqual(caught.exception.code, FailureCode.INVALID_TASK)
+
+    def test_action_chunk_python_contract_matches_frozen_schema_limits(self) -> None:
+        schema = json.loads(
+            (self.root / "schemas" / "action-chunk.schema.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        properties = schema["properties"]
+        self.assertEqual(
+            frozenset(properties["executor"]["enum"]),
+            FROZEN_VLA_EXECUTOR_NAMES,
+        )
+        self.assertEqual(
+            properties["steps"]["maxItems"],
+            MAX_ACTION_CHUNK_STEPS,
+        )
+
+        step = ActionStep.from_sequence([0, 0, 0, 0, 0, 0, 0])
+        valid = ActionChunk(
+            contract_version=ACTION_CONTRACT_VERSION,
+            chunk_id="chunk-32",
+            task_id="task-1",
+            executor=PI05_EXECUTOR_NAME,
+            steps=(step,) * MAX_ACTION_CHUNK_STEPS,
+        )
+        valid.validate_contract()
+
+        invalid_executor = ActionChunk(
+            contract_version=ACTION_CONTRACT_VERSION,
+            chunk_id="chunk-third-vla",
+            task_id="task-1",
+            executor="rt2",
+            steps=(step,),
+        )
+        with self.assertRaises(ContractError) as caught:
+            invalid_executor.validate_contract()
+        self.assertEqual(
+            caught.exception.code,
+            FailureCode.ACTION_CONTRACT_INVALID,
+        )
+
+        oversized = ActionChunk(
+            contract_version=ACTION_CONTRACT_VERSION,
+            chunk_id="chunk-33",
+            task_id="task-1",
+            executor=PI05_EXECUTOR_NAME,
+            steps=(step,) * (MAX_ACTION_CHUNK_STEPS + 1),
+        )
+        with self.assertRaises(ContractError) as caught:
+            oversized.validate_contract()
+        self.assertEqual(
+            caught.exception.code,
+            FailureCode.ACTION_CONTRACT_INVALID,
+        )
 
 
 if __name__ == "__main__":

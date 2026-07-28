@@ -1,7 +1,18 @@
 {
-  "config_version": "1.2",
+  "config_version": "1.3",
   "verification_frames": 3,
   "executor_timeout_ms": 15000,
+  "image_cas": {
+    "root": "artifacts/cas",
+    "layout": "sha256-v1",
+    "encoding": "png",
+    "digest_scope": "encoded_bytes",
+    "max_blob_bytes": 16777216,
+    "max_pixels": 4194304,
+    "cache_max_bytes": 67108864,
+    "missing_retry_count": 1,
+    "missing_retry_delay_ms": 25
+  },
   "lifecycle": {
     "mode": "FIXED_DUAL_VLA_SERIAL",
     "supervisor_nlp": false,
@@ -73,13 +84,13 @@
   "executors": {
     "openvla_oft": {
       "enabled": true,
-      "base_url": "http://127.0.0.1:8101",
+      "base_url": "http://127.0.0.1:8102",
       "checkpoint_sha": "REPLACE_WITH_PINNED_SHA",
       "norm_stats_sha": "REPLACE_WITH_PINNED_SHA"
     },
     "pi05": {
       "enabled": true,
-      "base_url": "http://127.0.0.1:8102",
+      "base_url": "http://127.0.0.1:8101",
       "checkpoint_sha": "REPLACE_WITH_PINNED_SHA",
       "norm_stats_sha": "REPLACE_WITH_PINNED_SHA"
     }

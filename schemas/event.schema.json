@@ -42,7 +42,10 @@
     },
     "event_type": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "not": {
+        "const": "handoff_ready"
+      }
     },
     "state": {
       "enum": [
@@ -93,10 +96,102 @@
             "fixed_lifecycle",
             null
           ]
+        },
+        "quorum_passed": {
+          "type": "boolean"
+        },
+        "grants_b_only": {
+          "type": "boolean"
+        },
+        "durable_ack": {
+          "type": "boolean"
         }
+      },
+      "not": {
+        "required": [
+          "handoff_ready"
+        ]
       }
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "handoff.verified"
+          }
+        },
+        "required": [
+          "event_type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "required": [
+              "quorum_passed",
+              "grants_b_only"
+            ],
+            "properties": {
+              "quorum_passed": {
+                "const": true
+              },
+              "grants_b_only": {
+                "const": false
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "handoff.ready"
+          }
+        },
+        "required": [
+          "event_type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "required": [
+              "durable_ack",
+              "grants_b_only"
+            ],
+            "properties": {
+              "durable_ack": {
+                "const": true
+              },
+              "grants_b_only": {
+                "const": true
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "payload": {
+            "not": {
+              "properties": {
+                "grants_b_only": {
+                  "const": true
+                }
+              },
+              "required": [
+                "grants_b_only"
+              ]
+            }
+          }
+        }
+      }
+    }
+  ],
   "$defs": {
     "controlToken": {
       "enum": [

@@ -157,15 +157,16 @@ class ExecutorAdapterTests(unittest.TestCase):
                 "uri": f"cas://sha256/{digest}",
                 "image_sha256": f"sha256:{digest}",
                 "camera_id": camera_id,
-                "width": 640,
-                "height": 480,
+                "width": 1280,
+                "height": 720,
             }
 
         raw["camera"] = {
             "full_image": image("CAM_HANDOFF", "a"),
             "arm_a_rgb": image("CAM_A_TOP", "b"),
-            "arm_b_rgb": image("CAM_B_TOP", "c"),
-            "wrist_image": image("CAM_WRIST", "d"),
+            "handoff_rgb": image("CAM_HANDOFF", "c"),
+            "arm_b_rgb": image("CAM_B_TOP", "d"),
+            "wrist_image": None,
         }
         robot = raw["robot"]
         assert isinstance(robot, dict)
@@ -206,6 +207,7 @@ class ExecutorAdapterTests(unittest.TestCase):
             model_input["full_image"],
             self.observation.data["camera"]["arm_b_rgb"],
         )
+        self.assertIsNone(model_input["wrist_image"])
         self.assertIn("task_description", model_input)
 
     def test_cancel_reuses_run_and_subtask_correlation(self) -> None:
@@ -239,7 +241,58 @@ class ExecutorAdapterTests(unittest.TestCase):
         model_input = transport.calls[-1][1]["model_input"]
         assert isinstance(model_input, Mapping)
         self.assertEqual(model_input["prompt"], "execute semantic action")
+        self.assertIsNone(model_input["observation"]["camera"]["wrist_image"])
         self.assertIn("observation", model_input)
+
+    def test_non_null_wrist_image_is_rejected_before_transport(self) -> None:
+        camera = self.observation.data["camera"]
+        assert isinstance(camera, dict)
+        camera["wrist_image"] = {
+            "uri": f"cas://sha256/{'e' * 64}",
+            "image_sha256": f"sha256:{'e' * 64}",
+            "camera_id": "CAM_WRIST",
+            "width": 1280,
+            "height": 720,
+        }
+        for adapter_type, service in (
+            (OpenVLAOFTAdapter, "openvla_oft"),
+            (Pi05Adapter, "pi05"),
+        ):
+            transport = EchoTransport(service=service)
+            adapter = adapter_type(
+                transport,
+                checkpoint_sha=CHECKPOINT_SHA,
+                norm_stats_sha=NORM_STATS_SHA,
+            )
+            with self.subTest(service=service):
+                with self.assertRaises(ExecutorError) as caught:
+                    adapter.plan(task(), self.observation, self.context)
+                self.assertEqual(
+                    caught.exception.code,
+                    FailureCode.EXECUTOR_BAD_RESPONSE,
+                )
+                self.assertNotIn("/v1/infer", [call[0] for call in transport.calls])
+
+    def test_non_frozen_resolution_is_rejected_before_transport(self) -> None:
+        camera = self.observation.data["camera"]
+        assert isinstance(camera, dict)
+        arm_b_rgb = camera["arm_b_rgb"]
+        assert isinstance(arm_b_rgb, dict)
+        arm_b_rgb["width"] = 640
+        arm_b_rgb["height"] = 480
+        transport = EchoTransport()
+        adapter = OpenVLAOFTAdapter(
+            transport,
+            checkpoint_sha=CHECKPOINT_SHA,
+            norm_stats_sha=NORM_STATS_SHA,
+        )
+
+        with self.assertRaises(ExecutorError) as caught:
+            adapter.plan(task(), self.observation, self.context)
+
+        self.assertEqual(caught.exception.code, FailureCode.EXECUTOR_BAD_RESPONSE)
+        self.assertIn("1280x720", str(caught.exception))
+        self.assertNotIn("/v1/infer", [call[0] for call in transport.calls])
 
     def test_response_correlation_mismatch_is_rejected(self) -> None:
         adapter = OpenVLAOFTAdapter(
@@ -262,6 +315,7 @@ class ExecutorAdapterTests(unittest.TestCase):
             ("checkpoint_sha", "wrong-checkpoint"),
             ("norm_stats_sha", "wrong-norm"),
             ("supported_action_contracts", ["2.0"]),
+            ("unexpected_health_field", True),
         )
         for adapter_type, service in adapter_cases:
             with self.subTest(adapter=service, field="valid"):
@@ -387,8 +441,8 @@ class ExecutorAdapterTests(unittest.TestCase):
         self.assertEqual(
             calls,
             [
-                ("openvla_oft", "http://127.0.0.1:8101"),
-                ("pi05", "http://127.0.0.1:8102"),
+                ("openvla_oft", "http://127.0.0.1:8102"),
+                ("pi05", "http://127.0.0.1:8101"),
             ],
         )
         self.assertEqual(
@@ -403,6 +457,18 @@ class ExecutorAdapterTests(unittest.TestCase):
         )
         config = deepcopy(config)
         with self.assertRaisesRegex(ValueError, "64 hexadecimal"):
+            build_executors_from_config(
+                config,
+                lambda name, base_url: EchoTransport(service=name),
+            )
+
+    def test_executor_factory_rejects_configurable_task_types(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        config = json.loads(
+            (root / "configs" / "agent.default.json").read_text(encoding="utf-8")
+        )
+        config["executors"]["openvla_oft"]["task_types"] = ["pick_place"]
+        with self.assertRaisesRegex(ValueError, "task_types are frozen"):
             build_executors_from_config(
                 config,
                 lambda name, base_url: EchoTransport(service=name),
@@ -424,7 +490,7 @@ class ExecutorAdapterTests(unittest.TestCase):
 
         executors = build_executors_from_config(config, factory)
         self.assertEqual([item.descriptor.name for item in executors], ["openvla_oft"])
-        self.assertEqual(calls, [("openvla_oft", "http://127.0.0.1:8101")])
+        self.assertEqual(calls, [("openvla_oft", "http://127.0.0.1:8102")])
 
     def test_adapters_and_factory_reject_mutable_artifact_aliases(self) -> None:
         with self.assertRaisesRegex(ValueError, "64 hexadecimal"):

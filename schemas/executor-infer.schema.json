@@ -336,20 +336,20 @@
               "properties": {
                 "camera_id": {
                   "const": "CAM_B_TOP"
+                },
+                "width": {
+                  "const": 1280
+                },
+                "height": {
+                  "const": 720
                 }
               }
             }
           ]
         },
         "wrist_image": {
-          "oneOf": [
-            {
-              "type": "null"
-            },
-            {
-              "$ref": "#/$defs/imageReference"
-            }
-          ]
+          "description": "The frozen three-camera profile has no wrist camera.",
+          "const": null
         },
         "state": {
           "type": "array",
@@ -397,20 +397,20 @@
                       "properties": {
                         "camera_id": {
                           "const": "CAM_A_TOP"
+                        },
+                        "width": {
+                          "const": 1280
+                        },
+                        "height": {
+                          "const": 720
                         }
                       }
                     }
                   ]
                 },
                 "wrist_image": {
-                  "oneOf": [
-                    {
-                      "type": "null"
-                    },
-                    {
-                      "$ref": "#/$defs/imageReference"
-                    }
-                  ]
+                  "description": "The frozen three-camera profile has no wrist camera.",
+                  "const": null
                 }
               }
             },

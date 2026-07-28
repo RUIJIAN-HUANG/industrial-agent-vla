@@ -57,24 +57,92 @@ def _stage_function(name: str) -> Callable[..., Any]:
 def create_new_stage() -> Any:
     """Create and return a new in-memory USD stage."""
 
-    stage = _stage_function("create_new_stage")()
+    result = _stage_function("create_new_stage")()
     # Isaac Sim 5.1 returns a boolean success flag from create_new_stage(),
-    # while some older variants return the stage object itself. Never pass the
-    # 5.1 boolean into USD APIs as though it were a Usd.Stage.
-    if stage is None or isinstance(stage, bool):
-        stage = get_current_stage()
-    if stage is None:
-        raise RuntimeError("Isaac Sim did not return a current USD stage.")
-    return stage
+    # while older variants return the stage object itself. A False result must
+    # fail closed: falling back to get_current_stage() could silently reuse a
+    # stale stage left over from a previous run.
+    if isinstance(result, bool):
+        if not result:
+            raise RuntimeError("Isaac Sim failed to create a new USD stage.")
+        return get_current_stage()
+    return require_usd_stage(result, context="create_new_stage")
 
 
 def get_current_stage() -> Any:
-    """Return a fresh handle to the currently active USD stage."""
+    """Return a fresh, non-boolean handle to the currently active USD stage."""
 
     stage = _stage_function("get_current_stage")()
+    return require_usd_stage(stage, context="get_current_stage")
+
+
+def _usd_stage_type() -> type[Any]:
+    """Import and return ``pxr.Usd.Stage`` after SimulationApp startup."""
+
+    try:
+        from pxr import Usd
+    except ImportError as exc:
+        raise RuntimeError(
+            "pxr.Usd is unavailable after SimulationApp startup."
+        ) from exc
+    return Usd.Stage
+
+
+def require_usd_stage(stage: Any, *, context: str) -> Any:
+    """Require an actual ``pxr.Usd.Stage`` rather than a status sentinel."""
+
     if stage is None or isinstance(stage, bool):
-        raise RuntimeError("Isaac Sim did not return a valid current USD stage.")
+        raise RuntimeError(f"{context} did not return a valid USD Stage.")
+    if not isinstance(stage, _usd_stage_type()):
+        raise TypeError(
+            f"{context} returned {type(stage).__name__}, expected pxr.Usd.Stage."
+        )
     return stage
+
+
+def validate_stage_contract(
+    stage: Any,
+    *,
+    expected_up_axis: str = "Z",
+    expected_meters_per_unit: float = 1.0,
+    expected_kilograms_per_unit: float = 1.0,
+) -> None:
+    """Read back and validate the frozen USD stage type, axis, and units."""
+
+    require_usd_stage(stage, context="stage contract validation")
+    try:
+        from pxr import UsdGeom, UsdPhysics
+    except ImportError as exc:
+        raise RuntimeError(
+            "pxr.UsdGeom/UsdPhysics are unavailable after SimulationApp startup."
+        ) from exc
+
+    actual_up_axis = str(UsdGeom.GetStageUpAxis(stage)).upper()
+    actual_meters_per_unit = float(UsdGeom.GetStageMetersPerUnit(stage))
+    actual_kilograms_per_unit = float(
+        UsdPhysics.GetStageKilogramsPerUnit(stage)
+    )
+    errors: list[str] = []
+    if actual_up_axis != expected_up_axis.upper():
+        errors.append(
+            f"up axis is {actual_up_axis!r}, expected {expected_up_axis.upper()!r}"
+        )
+    if abs(actual_meters_per_unit - expected_meters_per_unit) > 1e-12:
+        errors.append(
+            "metersPerUnit is "
+            f"{actual_meters_per_unit}, expected {expected_meters_per_unit}"
+        )
+    if (
+        abs(actual_kilograms_per_unit - expected_kilograms_per_unit)
+        > 1e-12
+    ):
+        errors.append(
+            "kilogramsPerUnit is "
+            f"{actual_kilograms_per_unit}, "
+            f"expected {expected_kilograms_per_unit}"
+        )
+    if errors:
+        raise RuntimeError("Invalid frozen USD stage contract: " + "; ".join(errors))
 
 
 def wait_for_stage_loading(

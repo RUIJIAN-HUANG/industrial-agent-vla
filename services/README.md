@@ -14,8 +14,8 @@ Verifier、环境和离线 mAP 评测器不是 Agent。
 
 1. 总控把预设的上游自然语言、Arm_A 图像和状态原样交给 `pi05/`；
 2. π0.5 完成四零件装箱、把料箱放到 `HANDOFF_CENTER` 并让 Arm_A 退出；
-3. Supervisor 用三张新鲜图像完成至少两票交接核验，再发布
-   `handoff_ready` 并把令牌切为 `B_ONLY`；
+3. Supervisor 用三张新鲜图像完成至少两票交接核验，先持久化
+   `handoff.ready`，成功返回后才把令牌切为 `B_ONLY`；
 4. 总控把预设的下游协作指令、Arm_B 图像和状态原样交给
    `openvla_oft/`，由其把满箱搬到 `FINISHED_01`。
 
@@ -30,6 +30,9 @@ Verifier、环境和离线 mAP 评测器不是 Agent。
 
 每个服务使用自己的环境、依赖清单、配置和测试，并严格实现
 [`../docs/architecture/interface-contracts.md`](../docs/architecture/interface-contracts.md)。
+三个路由的框架无关入口核心分别位于
+`pi05/handler.py`、`openvla_oft/handler.py` 与 `yolo/handler.py`；它们是模型
+backend 前不可绕过的 CAS 像素解析边界。
 模型权重、norm stats 实体和训练数据不得提交到 Git；仓库只保存固定 SHA、来源、
 下载说明和兼容性信息。
 

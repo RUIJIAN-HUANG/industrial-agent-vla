@@ -59,7 +59,6 @@ class EventSink:
     ) -> EventRecord:
         with self._lock:
             sequence = self._sequence_by_run.get(run_id, 0) + 1
-            self._sequence_by_run[run_id] = sequence
             event = EventRecord(
                 event_id=str(uuid4()),
                 sequence=sequence,
@@ -70,20 +69,40 @@ class EventSink:
                 state=state.value,
                 payload=dict(payload or {}),
             )
-            self.events.append(event)
             if self._path is not None:
                 self._path.parent.mkdir(parents=True, exist_ok=True)
-                with self._path.open("a", encoding="utf-8") as handle:
-                    handle.write(
-                        json.dumps(
-                            event.to_dict(),
-                            ensure_ascii=False,
-                            separators=(",", ":"),
-                        )
-                        + "\n"
+                encoded_event = (
+                    json.dumps(
+                        event.to_dict(),
+                        ensure_ascii=False,
+                        separators=(",", ":"),
                     )
-                    handle.flush()
-                    os.fsync(handle.fileno())
+                    + "\n"
+                ).encode("utf-8")
+                with self._path.open("ab+") as handle:
+                    handle.seek(0, os.SEEK_END)
+                    previous_size = handle.tell()
+                    try:
+                        handle.write(encoded_event)
+                        handle.flush()
+                        os.fsync(handle.fileno())
+                    except Exception:
+                        # A failed durable write must not leave a record that an
+                        # offline reader could mistake for an acknowledged
+                        # readiness event.  Roll back best-effort and preserve
+                        # the original exception as the failure signal.
+                        try:
+                            handle.seek(previous_size)
+                            handle.truncate()
+                            handle.flush()
+                            os.fsync(handle.fileno())
+                        except Exception:
+                            pass
+                        raise
+            # Publish to in-memory consumers and consume the sequence number
+            # only after the durable acknowledgement succeeds.
+            self._sequence_by_run[run_id] = sequence
+            self.events.append(event)
         return event
 
     def events_for_run(self, run_id: str) -> tuple[EventRecord, ...]:
@@ -95,7 +114,11 @@ class EventSink:
 
 @dataclass
 class RunMemory:
-    """Small deterministic memory; no free-form hidden reasoning is stored."""
+    """Runtime-only deterministic memory; no hidden reasoning is stored.
+
+    Persistence uses :meth:`snapshot` inside the versioned memory-store format;
+    this mutable working object is not a standalone JSON exchange contract.
+    """
 
     run_id: str
     task_id: str

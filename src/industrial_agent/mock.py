@@ -17,6 +17,10 @@ from .executor import ExecutionContext, ExecutorDescriptor
 from .environment import SafeStopReceipt, execution_guard_digest
 
 
+_FROZEN_CAMERA_WIDTH = 1280
+_FROZEN_CAMERA_HEIGHT = 720
+
+
 class MockExecutor:
     def __init__(self, name: str, dx_m: float):
         checkpoint_sha = hashlib.sha256(f"{name}:checkpoint".encode()).hexdigest()
@@ -92,7 +96,9 @@ class FixedDualArmMockSimulator:
         if self.arm_a_success_after < 1 or self.arm_b_success_after < 1:
             raise ValueError("success thresholds must be >= 1")
 
-    def _critical_observation_data(self) -> dict[str, object]:
+    def _current_observation_data(self) -> dict[str, object]:
+        """Build the state shared by observations and execution-guard digests."""
+
         if self.safe_stop_called:
             active_arm = "NONE"
         elif not self.arm_a_retreated and not self.bin_at_handoff:
@@ -151,6 +157,19 @@ class FixedDualArmMockSimulator:
             "quality": {"confidence": 0.99},
         }
 
+    def _critical_observation_data(self) -> dict[str, object]:
+        return self._current_observation_data()
+
+    @staticmethod
+    def _image_reference(digest: str, camera_id: str) -> dict[str, object]:
+        return {
+            "uri": f"cas://sha256/{digest}",
+            "image_sha256": f"sha256:{digest}",
+            "camera_id": camera_id,
+            "width": _FROZEN_CAMERA_WIDTH,
+            "height": _FROZEN_CAMERA_HEIGHT,
+        }
+
     def _observation(self) -> dict[str, object]:
         self._observation_counter += 1
         frame_id = f"dual-frame-{self._observation_counter}"
@@ -159,95 +178,17 @@ class FixedDualArmMockSimulator:
         frame_sha = hashlib.sha256(frame_id.encode()).hexdigest()
         arm_a_sha = hashlib.sha256(f"{frame_id}:arm_a".encode()).hexdigest()
         arm_b_sha = hashlib.sha256(f"{frame_id}:arm_b".encode()).hexdigest()
-        if self.safe_stop_called:
-            active_arm = "NONE"
-        elif not self.arm_a_retreated and not self.bin_at_handoff:
-            active_arm = "Arm_A"
-        elif not self.arm_b_retreated:
-            active_arm = "Arm_B"
-        else:
-            active_arm = "NONE"
-        arm_a_state = [0.5, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5]
-        arm_b_state = [0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5]
         return {
             "observation_version": "1.0",
             "observation_id": observation_id,
             "timestamp_ms": self._observation_counter,
             "camera": {
-                "full_image": {
-                    "uri": f"cas://sha256/{frame_sha}",
-                    "image_sha256": f"sha256:{frame_sha}",
-                    "camera_id": "CAM_HANDOFF",
-                    "width": 640,
-                    "height": 480,
-                },
-                "arm_a_rgb": {
-                    "uri": f"cas://sha256/{arm_a_sha}",
-                    "image_sha256": f"sha256:{arm_a_sha}",
-                    "camera_id": "CAM_A_TOP",
-                    "width": 640,
-                    "height": 480,
-                },
-                "handoff_rgb": {
-                    "uri": f"cas://sha256/{frame_sha}",
-                    "image_sha256": f"sha256:{frame_sha}",
-                    "camera_id": "CAM_HANDOFF",
-                    "width": 640,
-                    "height": 480,
-                },
-                "arm_b_rgb": {
-                    "uri": f"cas://sha256/{arm_b_sha}",
-                    "image_sha256": f"sha256:{arm_b_sha}",
-                    "camera_id": "CAM_B_TOP",
-                    "width": 640,
-                    "height": 480,
-                },
+                "full_image": self._image_reference(frame_sha, "CAM_HANDOFF"),
+                "arm_a_rgb": self._image_reference(arm_a_sha, "CAM_A_TOP"),
+                "handoff_rgb": self._image_reference(frame_sha, "CAM_HANDOFF"),
+                "arm_b_rgb": self._image_reference(arm_b_sha, "CAM_B_TOP"),
             },
-            "objects": [
-                {
-                    "object_id": "Bin_01",
-                    "confidence": 0.99,
-                    "zone_id": (
-                        "FINISHED_01"
-                        if self.bin_at_finished
-                        else "HANDOFF_CENTER"
-                        if self.bin_at_handoff
-                        else "PACK_STATION"
-                    ),
-                }
-            ],
-            "robot": {
-                "active_arm": active_arm,
-                "arm_a": {
-                    "tcp_pose_m_rad": arm_a_state[:6],
-                    "state": arm_a_state,
-                    "retreated": self.arm_a_retreated,
-                    "gripper_open": self.arm_a_gripper_open,
-                    "stationary": self.arm_a_stationary,
-                },
-                "arm_b": {
-                    "tcp_pose_m_rad": arm_b_state[:6],
-                    "state": arm_b_state,
-                    "retreated": self.arm_b_retreated,
-                    "gripper_open": self.arm_b_gripper_open,
-                    "stationary": self.arm_b_stationary,
-                },
-            },
-            "safety": {
-                "emergency_stop": False,
-                "protective_stop": False,
-                "system_fault": None,
-            },
-            "task": {
-                "packed_part_count": self.packed_part_count,
-                "bin_at_handoff": self.bin_at_handoff,
-                "arm_a_retreated": self.arm_a_retreated,
-                "arm_b_retreated": self.arm_b_retreated,
-                "bin_at_finished": self.bin_at_finished,
-                "bin_speed_m_s": self.bin_speed_m_s,
-                "status": "done" if self.bin_at_finished else "pending",
-            },
-            "quality": {"confidence": 0.99},
+            **self._current_observation_data(),
         }
 
     def observe(self) -> dict[str, object]:
