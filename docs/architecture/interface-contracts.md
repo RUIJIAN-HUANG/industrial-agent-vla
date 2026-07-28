@@ -16,8 +16,15 @@
 确定性 Safety、Verifier、Isaac Sim Adapter 和离线 mAP Evaluator 不是 Agent。
 Supervisor 不做 NLP、任务复杂度判断或模型路由。部署任务指令是冻结预设：
 
-- Arm_A/π0.5：`帮我把零件最多的区域装箱`
-- Arm_B/OpenVLA-OFT：`把中央交接区的同一料箱搬到完成区并摆正`
+- Arm_A/π0.5：`将工作区中的四个红色零件依次装入料箱；倒放零件先调整为正向。装箱完成后，将料箱放到中央交接位并返回 HOME_A。失败时重新观察后继续。`
+- Arm_B/OpenVLA-OFT：`收到 handoff_ready 后，观察中央交接位，抓稳 Bin_01 并保持水平，将其搬到 FINISHED_01，松开夹爪并返回 HOME_B。`
+
+以上两条是 `single_bin_pack_handoff_v1` 的唯一逐字冻结值，不是任务语义示例。
+机器可执行真源是 `configs/agent.default.json` 中的 `lifecycle.task_profile`，
+并由 `schemas/agent-config.schema.json` 的 `const` 约束和
+`FixedTaskProfile.validate_frozen()` 双重校验。本文与
+`final-frozen-scene-and-flow.md` 必须逐字同步；若需要改写自然语言，必须发布新的
+TaskProfile ID 和接口契约版本，不能原地修改 v1。
 
 固定顺序：
 
@@ -110,19 +117,25 @@ GT 只允许由离线 Evaluator 读取。YOLO、两个 VLA、Supervisor、在线
 
 权威 Schema：`schemas/task.schema.json`
 
+该 Schema 是通用任务信封的结构真源，只校验字段、类型和基础边界；它不会把某个
+部署 profile 的自然语言写成通用 `const`。当前部署的逐字值由
+`single_bin_pack_handoff_v1` TaskProfile 冻结，并由 Supervisor 在接受任务时执行
+第二层校验。因此“通过通用 TaskSchema”不等于“通过当前部署 profile”。
+
 Supervisor 只接受冻结部署任务，不从文本生成路由。示例：
 
 ```json
 {
   "schema_version": "1.0",
   "task_id": "episode-0001",
-  "instruction": "帮我把零件最多的区域装箱",
-  "task_type": "fixed_dual_vla_pack_transport",
+  "instruction": "将工作区中的四个红色零件依次装入料箱；倒放零件先调整为正向。装箱完成后，将料箱放到中央交接位并返回 HOME_A。失败时重新观察后继续。",
+  "task_type": "visual_manipulation",
   "postconditions": [
     {
       "kind": "field_equals",
       "path": "task.bin_at_finished",
       "expected": true,
+      "min_confidence": 0.6,
       "required_votes": 2
     }
   ],

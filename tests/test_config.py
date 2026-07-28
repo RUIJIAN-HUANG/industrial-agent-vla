@@ -6,6 +6,7 @@ from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
 
+from industrial_agent.lifecycle import FixedTaskProfile
 from industrial_agent.mock import MockExecutor
 from industrial_agent.orchestrator import IndustrialAgent
 from industrial_agent.perception import MockPerceptionAgent
@@ -71,6 +72,31 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(image_cas["digest_scope"], "encoded_bytes")
         self.assertGreaterEqual(image_cas["max_pixels"], 1280 * 720)
         self.assertEqual(image_cas["missing_retry_count"], 1)
+
+    def test_frozen_role_instruction_truth_sources_are_aligned(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        profile = FixedTaskProfile()
+        task_profile = self.config["lifecycle"]["task_profile"]
+        schema_profile = self.schema["$defs"]["fixedTaskProfile"]["properties"]
+        interface_contract = (
+            root / "docs" / "architecture" / "interface-contracts.md"
+        ).read_text(encoding="utf-8")
+        frozen_flow = (
+            root / "docs" / "architecture" / "final-frozen-scene-and-flow.md"
+        ).read_text(encoding="utf-8")
+
+        for field_name in ("arm_a_instruction", "arm_b_instruction"):
+            expected = getattr(profile, field_name)
+            self.assertEqual(task_profile[field_name], expected)
+            self.assertEqual(schema_profile[field_name]["const"], expected)
+            self.assertIn(expected, interface_contract)
+            self.assertIn(expected, frozen_flow)
+
+        self.assertNotIn("帮我把零件最多的区域装箱", interface_contract)
+        self.assertNotIn(
+            "把中央交接区的同一料箱搬到完成区并摆正",
+            interface_contract,
+        )
 
     def test_default_config_builds_fixed_dual_vla_core(self) -> None:
         executors = self._executors()
@@ -139,6 +165,12 @@ class ConfigTests(unittest.TestCase):
             (
                 lambda config: config["lifecycle"]["task_profile"].update(
                     {"handoff_required_votes": 3}
+                ),
+                "cannot be changed",
+            ),
+            (
+                lambda config: config["lifecycle"]["task_profile"].update(
+                    {"arm_a_instruction": "帮我把零件最多的区域装箱"}
                 ),
                 "cannot be changed",
             ),

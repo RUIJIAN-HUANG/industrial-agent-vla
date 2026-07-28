@@ -123,7 +123,7 @@ A_ONLY -> HANDOFF_VERIFY -> B_ONLY -> NONE
 
 1. 部署配置已经固定第一阶段一定由 π0.5/Arm_A 执行；
 2. Supervisor 原样传递 Arm_A 预设指令；
-3. π0.5 用视觉和语言决定零件最多的区域、姿态和抓放动作；
+3. π0.5 用视觉和语言识别 P01–P04、判断倒放姿态并生成装箱、交接动作；
 4. Arm_A 完成后，Supervisor 根据传感事实而不是 NLP 切换生命周期；
 5. Arm_B 使用另一条冻结协作指令，由 OpenVLA-OFT 执行。
 

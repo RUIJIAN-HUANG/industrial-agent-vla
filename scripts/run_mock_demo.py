@@ -9,13 +9,15 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from pathlib import Path
 
-ARM_A_INSTRUCTION = (
-    "将四个红色零件装入料箱；倒放零件先纠正。完成后把料箱放到中央交接位并返回 HOME_A。"
-)
-ARM_B_INSTRUCTION = (
-    "收到 handoff_ready 后，将中央交接位的满箱搬到 FINISHED_01，完成后返回 HOME_B。"
-)
+_TASK_PROFILE = json.loads(
+    (Path(__file__).resolve().parents[1] / "configs" / "agent.default.json").read_text(
+        encoding="utf-8"
+    )
+)["lifecycle"]["task_profile"]
+ARM_A_INSTRUCTION = _TASK_PROFILE["arm_a_instruction"]
+ARM_B_INSTRUCTION = _TASK_PROFILE["arm_b_instruction"]
 
 
 @dataclass

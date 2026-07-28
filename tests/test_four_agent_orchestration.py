@@ -4,6 +4,7 @@ import hashlib
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from typing import Any, Mapping
 
 from industrial_agent.contracts import (
@@ -856,6 +857,20 @@ class FourAgentOrchestrationTests(unittest.TestCase):
                     required_votes=1,
                 ),
             ),
+        )
+        agent, openvla, pi05 = self.make_agent(make_perception())
+
+        result = agent.run(task, FixedDualArmMockSimulator())
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.failure_code, FailureCode.INVALID_TASK)
+        self.assertEqual(openvla.plan_calls, 0)
+        self.assertEqual(pi05.plan_calls, 0)
+
+    def test_fixed_task_rejects_legacy_short_instruction_alias(self) -> None:
+        task = replace(
+            four_agent_task("legacy-instruction"),
+            instruction="帮我把零件最多的区域装箱",
         )
         agent, openvla, pi05 = self.make_agent(make_perception())
 
