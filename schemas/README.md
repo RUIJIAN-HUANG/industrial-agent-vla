@@ -20,6 +20,13 @@
 CI 会用 Draft 2020-12 元 Schema 校验所有文件，并验证默认 Agent 配置。
 Schema 变化必须先更新接口文档和契约测试，再修改生产服务。
 
+Schema 只覆盖跨进程、落盘或对外交换的 JSON 合同。`RunMemory`、
+`StateTransition`、`ExecutorDescriptor`、`ExecutionContext`、
+`VerificationResult`、`ConditionResult` 等进程内类型不单独建立 Schema；
+它们只有在转换为上表中的事件、推理信封或核验结果后才允许跨边界。
+`CocoExportManifest` 由离线导出代码的严格 `from_dict()`/`to_dict()` 合同校验，
+不属于在线 Agent 接口。
+
 所有 `checkpoint_sha` 与 `norm_stats_sha` 必须使用完整
 `sha256:<64 位十六进制>`；配置文件仅允许明确的待替换占位符，任何真实服务
 启动时都会拒绝该占位符以及 `latest`、版本昵称和缩写摘要。

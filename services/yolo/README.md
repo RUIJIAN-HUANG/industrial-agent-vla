@@ -48,6 +48,15 @@ Supervisor 客户端会拒绝不一致的 `observation_id`、`image_sha256`、�
 6. 用 `trace_id + observation_id + image_sha256` 关联控制 trace。
 7. 在线服务进程不得读取离线评测标注目录。
 
+第 3 步必须通过
+`industrial_agent.service_images.CasRequestImageResolver.resolve_yolo_request()`
+实现，并与两个 VLA 共用 `INDUSTRIAL_AGENT_CAS_ROOT` 只读卷。YOLO 不得使用
+HTTP 下载、任意文件路径或自行维护另一套 CAS resolver。
+
+仓库已提供 [`handler.py`](handler.py) 的 `build_v1_detect_handler()` 作为
+`POST /v1/detect` 强制入口核心：它先解析并校验 CAS，再用只读 RGB 数组替换
+请求中的 URI 引用后调用注入的 YOLO backend。HTTP 外壳不得绕过该 handler。
+
 ## 失败与数据标签
 
 空 `detections` 是合法成功响应。服务错误使用

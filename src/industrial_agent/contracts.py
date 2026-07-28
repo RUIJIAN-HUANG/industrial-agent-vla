@@ -18,6 +18,15 @@ TASK_SCHEMA_VERSION = "1.0"
 OBSERVATION_VERSION = "1.0"
 ACTION_CONTRACT_VERSION = "1.0"
 TASK_SCHEMA_VERSION_PATTERN = re.compile(r"^1\.[0-9]+$")
+OPENVLA_OFT_EXECUTOR_NAME = "openvla_oft"
+PI05_EXECUTOR_NAME = "pi05"
+FROZEN_VLA_EXECUTOR_NAMES = frozenset(
+    {
+        OPENVLA_OFT_EXECUTOR_NAME,
+        PI05_EXECUTOR_NAME,
+    }
+)
+MAX_ACTION_CHUNK_STEPS = 32
 
 SUPPORTED_TASK_TYPES = frozenset(
     {
@@ -31,6 +40,8 @@ SUPPORTED_TASK_TYPES = frozenset(
 
 
 class SubtaskStatus(str, Enum):
+    # PENDING is the serialized planner-output state.  The supervisor promotes
+    # only the first dependency-free subtask to READY after all preflight checks.
     PENDING = "PENDING"
     READY = "READY"
     RUNNING = "RUNNING"
@@ -286,6 +297,16 @@ class Subtask:
                 FailureCode.INVALID_TASK,
                 f"unsupported subtask task_type: {self.task_type}",
             )
+        if (
+            self.assigned_executor is not None
+            and self.assigned_executor not in FROZEN_VLA_EXECUTOR_NAMES
+        ):
+            raise ContractError(
+                FailureCode.INVALID_TASK,
+                "assigned_executor must be one of "
+                f"{sorted(FROZEN_VLA_EXECUTOR_NAMES)}, "
+                f"got {self.assigned_executor!r}",
+            )
         if not self.postconditions:
             raise ContractError(
                 FailureCode.INVALID_TASK,
@@ -513,10 +534,24 @@ class ActionChunk:
                 FailureCode.ACTION_CONTRACT_INVALID,
                 "chunk_id, task_id and executor are required",
             )
+        if (
+            not isinstance(self.executor, str)
+            or self.executor not in FROZEN_VLA_EXECUTOR_NAMES
+        ):
+            raise ContractError(
+                FailureCode.ACTION_CONTRACT_INVALID,
+                "executor must be one of "
+                f"{sorted(FROZEN_VLA_EXECUTOR_NAMES)}, got {self.executor!r}",
+            )
         if not self.steps:
             raise ContractError(
                 FailureCode.ACTION_CONTRACT_INVALID,
                 "action chunk must contain at least one step",
+            )
+        if len(self.steps) > MAX_ACTION_CHUNK_STEPS:
+            raise ContractError(
+                FailureCode.ACTION_CONTRACT_INVALID,
+                f"action chunk cannot contain more than {MAX_ACTION_CHUNK_STEPS} steps",
             )
 
     def to_dict(self) -> dict[str, Any]:

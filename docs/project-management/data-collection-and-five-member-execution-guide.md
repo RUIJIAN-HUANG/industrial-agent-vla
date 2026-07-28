@@ -19,8 +19,9 @@
     ↓ 原文，不增加 NLP Agent
 π0.5 Agent 控制 Arm_A
     ↓ 完成四个零件装箱、纠正倒放件、满箱放到 HANDOFF_CENTER、退出共享区
-Supervisor 用三张新鲜在线观测和机器人遥测校验 A 已退出、料箱已到交接位
-    ↓ 发布 handoff_ready，令牌 A_ONLY → HANDOFF_VERIFY → B_ONLY
+Supervisor 先做候选预检，再锁臂并用三张新鲜在线观测和机器人遥测做 2/3 复合投票
+    ↓ handoff.candidate_checked 至少 1 次、重试时可为 1..N 次；里程碑为 handoff.verified → handoff.ready
+    ↓ 令牌 A_ONLY → HANDOFF_VERIFY → B_ONLY
 OpenVLA Agent 控制 Arm_B
     ↓ 抓取同一个满箱并放到 FINISHED_01
 Supervisor 用新鲜在线观测和机器人遥测验证终局
@@ -88,7 +89,7 @@ Supervisor 启动任务时读取的是人工预先配置的运行档案，例如
 4. 制作脚本专家：
    - A 臂：抓 P01–P04、P02 纠姿、放入 2×3 料箱、把满箱放到
      `HANDOFF_CENTER`、退出；
-   - B 臂：等待 `handoff_ready`、抓料箱把手、水平搬运到
+   - B 臂：等待 durable `handoff.ready`、抓料箱把手、水平搬运到
      `FINISHED_01`、退出。
 5. 脚本专家只用于采集示范和测试，不作为最终在线智能体。
 
@@ -104,7 +105,7 @@ Supervisor 启动任务时读取的是人工预先配置的运行档案，例如
 
 1. 用 1 条伪 Episode 验证 RLDS Schema。
 2. 用 5 条真实 Canonical Episode 完成转换和 Loader 遍历。
-3. 固定输入：B 区 RGB、可选腕部 RGB、B 臂状态、固定协作指令。
+3. 固定输入：B 区 RGB、`wrist_image=null`、B 臂状态、固定协作指令。
 4. 固定输出：统一的 7 维动作块。
 5. 完成小数据过拟合冒烟后再扩量；不得只凭训练 Loss 宣称有效。
 6. 提供 `/health`、`/infer`、超时、取消和错误码。
@@ -113,7 +114,7 @@ Supervisor 启动任务时读取的是人工预先配置的运行档案，例如
 
 1. 用 1 条伪 Episode 验证 LeRobot Schema。
 2. 用 5 条真实 Canonical Episode 完成转换和 Loader 遍历。
-3. 固定输入：A 区 RGB、可选腕部 RGB、A 臂状态、原始任务指令。
+3. 固定输入：A 区 RGB、`wrist_image=null`、A 臂状态、原始任务指令。
 4. 固定输出：统一的 7 维动作块。
 5. 只用 Train Split 计算 π0.5 自己的 `norm_stats`，不得与 OpenVLA
    共用。
@@ -258,10 +259,12 @@ industrial_dataset_root/
 │   ├── CAM_A_TOP/
 │   ├── CAM_HANDOFF/
 │   └── CAM_B_TOP/
-├── wrist_rgb/                        # 若当前版本启用；未启用则在 meta 声明
 ├── terminal_state.json
 └── checksums.sha256
 ```
+
+冻结 MVP 只采集以上三台物理 RGB 相机，不创建 `wrist_rgb/`。VLA 接口为兼容统一
+Schema 保留 `wrist_image` 键，但本版本每一步都写 JSON `null`。
 
 不要把三个相机都强制复制给两个 VLA。Canonical 可以统一保存，转换器只选
 对应模型需要的视角，减少显存和训练噪声。
@@ -305,7 +308,8 @@ industrial_dataset_root/
 | `robot` | object | 必含布尔字段 `robot.arm_a.retreated` 与 `robot.arm_b.retreated` |
 | `action_7d` | float[7] | `[dx,dy,dz,droll,dpitch,dyaw,gripper]` |
 | `action_duration_s` | float | 动作块时间 |
-| `fsm_phase` | string | 例如 `ARM_A_PACKING`、`ARM_B_TRANSPORT` |
+| `agent_state` | string | 必须是代码 `AgentState`：如 `OBSERVING`、`EXECUTING`、`VERIFYING` |
+| `operation_phase` | string | 业务标注：如 `ARM_A_PACKING`、`ARM_B_TRANSPORT`；不是 FSM 枚举 |
 | `handoff_token` | string | `A_ONLY/HANDOFF_VERIFY/B_ONLY/NONE` |
 | `safety_flags` | string[] | 限幅、碰撞、超时等 |
 | `valid_for_training` | bool | 当前 Step 是否作为行为目标 |
@@ -330,18 +334,17 @@ gripper           = normalized [-1, 1]
 
 - 原始自然语言；
 - `CAM_A_TOP` RGB；
-- 若腕部相机已稳定，可加入 Arm_A wrist RGB；否则整个版本统一关闭；
+- `wrist_image=null`；冻结 MVP 不采集 Arm_A wrist RGB；
 - Arm_A 关节、TCP 和夹爪状态。
 
 行为目标：
 
-1. 观察 A/B/C/D 四区；
-2. 识别零件最多的 A 区；
-3. 抓取 P01–P04；
-4. 对 P02 完成正常姿态放置；
-5. 每格最多一个零件；
-6. 抓起满箱并放到 `HANDOFF_CENTER`；
-7. 退出共享区并上报 `robot.arm_a.retreated=true`。
+1. 按冻结指令观察工作区中的 P01–P04；
+2. 抓取 P01–P04；
+3. 对倒放的 P02 完成正常姿态放置；
+4. 每格最多一个零件；
+5. 抓起满箱并放到 `HANDOFF_CENTER`；
+6. 退出共享区并上报 `robot.arm_a.retreated=true`。
 
 必须覆盖的数据类型：
 
@@ -353,17 +356,18 @@ gripper           = normalized [-1, 1]
 
 ### 7.2 OpenVLA / Arm_B
 
-固定指令示例：
+唯一逐字冻结指令：
 
-> 等待 handoff_ready；抓取中央交接位的满箱，保持水平，将其放到
-> FINISHED_01，然后退出。
+> 收到 handoff_ready 后，观察中央交接位，抓稳 Bin_01 并保持水平，将其搬到
+> FINISHED_01，松开夹爪并返回 HOME_B。
 
 输入：
 
 - `CAM_B_TOP` 和交接阶段的 `CAM_HANDOFF` RGB；
-- 若腕部相机已稳定，可加入 Arm_B wrist RGB；
+- `wrist_image=null`；冻结 MVP 不采集 Arm_B wrist RGB；
 - Arm_B 关节、TCP、夹爪状态；
-- `handoff_ready` 作为生命周期事件，不作为自然语言推理结果。
+- durable `handoff.ready` 是允许 Arm_B 执行的生命周期事件；
+- 冻结指令里的 `handoff_ready` 是业务信号文字，不是 `event_type`。
 
 行为目标：
 
@@ -748,7 +752,7 @@ DoD：有效 Episode 文件完整；回放抽检通过；Split 无泄漏；转�
 - Base/Tuned 在同一冻结集上的结果；
 - 失败样例与模型限制。
 
-DoD：只控制 Arm_B；从 `handoff_ready` 开始；输出统一动作；服务可取消、
+DoD：只控制 Arm_B；从 durable `handoff.ready` 开始；输出统一动作；服务可取消、
 超时和报告模型身份；Docker 离线加载成功。
 
 ### E / π0.5

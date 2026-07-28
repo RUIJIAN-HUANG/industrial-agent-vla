@@ -446,6 +446,18 @@ class PerceptionContractTests(unittest.TestCase):
                 lambda name, base_url: EchoYoloTransport(),
             )
 
+    def test_factory_rejects_configurable_task_types(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        config = json.loads(
+            (root / "configs" / "agent.default.json").read_text(encoding="utf-8")
+        )
+        config["perception"]["task_types"] = ["object_localization"]
+        with self.assertRaisesRegex(ValueError, "task_types are frozen"):
+            build_perception_from_config(
+                config,
+                lambda name, base_url: EchoYoloTransport(),
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
