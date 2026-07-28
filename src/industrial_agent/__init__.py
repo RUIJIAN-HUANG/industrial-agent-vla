@@ -15,6 +15,12 @@ from .contracts import (
 )
 from .executor import build_executors_from_config
 from .fsm import AgentState
+from .image_cas import (
+    CAS_ROOT_ENV,
+    ImageCas,
+    ImageCasConfig,
+    ResolvedRgbFrame,
+)
 from .lifecycle import (
     ControlToken,
     FixedDualVLAPlanner,
@@ -50,6 +56,8 @@ __all__ = [
     "DetectionEvidenceSink",
     "DetectionPacket",
     "ImageReference",
+    "ImageCas",
+    "ImageCasConfig",
     "IndustrialAgent",
     "FixedDualVLAPlanner",
     "FixedLifecycle",
@@ -60,6 +68,7 @@ __all__ = [
     "PerceptionMode",
     "Postcondition",
     "RunResult",
+    "ResolvedRgbFrame",
     "Subtask",
     "SubtaskStatus",
     "TaskPlan",
@@ -67,4 +76,5 @@ __all__ = [
     "YoloHTTPAdapter",
     "build_executors_from_config",
     "build_perception_from_config",
+    "CAS_ROOT_ENV",
 ]

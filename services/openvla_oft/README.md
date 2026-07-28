@@ -20,6 +20,9 @@ YOLO DetectionPacket 不是推理前置条件。OpenVLA-OFT 必须针对这一�
 - 工业微调的数据/配置/checkpoint SHA、base/tuned 成功率与失败分布。
 - 服务只能输出 `arm_id=Arm_B` 的动作；未持有 `B_ONLY` 时不得执行。
 - 恢复时必须使用 Arm_B 的新鲜观测重新推理，禁止接管 Arm_A 的装箱阶段。
+- 服务入口必须调用 `industrial_agent.image_cas.ImageCas.resolve_rgb()` 将
+  `CAM_B_TOP` 引用解析为真实 RGB；当前冻结场景的 `wrist_image` 允许为 `null`。
+  Real 模式缺图、坏 SHA 或解码失败时必须 fail-closed，禁止自行拼接另一套路径。
 
 不要在此目录提交 checkpoint、训练数据、缓存或个人机器路径。完整接口见
 [`../../docs/architecture/interface-contracts.md`](../../docs/architecture/interface-contracts.md)。

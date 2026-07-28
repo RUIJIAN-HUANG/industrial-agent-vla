@@ -36,12 +36,15 @@ simulation/
 ├── scene_layout.py                   # 无 Isaac Sim 也可运行的静态预检
 ├── isaac_compat.py                   # Isaac Sim 4.2/4.5/5.1 薄兼容层
 ├── single_bin_scene_builder.py       # USD 几何、物理、相机与机器人构建
+├── rgb_cas_bridge.py                 # RGB/RGBA Annotator → 共享图像 CAS
 └── build_single_bin_scene.py         # Standalone Python 入口
 ```
 
-本轮交付范围是“可导入的场景 USD + Camera Prim”。它还没有创建运行期
-RenderProduct、图像缓冲区或 YOLO 订阅；这些应在场景、IK 和遮挡检查通过后再接，
-避免把视觉服务问题与基础场景问题混在一起排查。
+场景构建入口负责“可导入的场景 USD + Camera Prim”，尚不自动创建运行期
+RenderProduct。创建 RGB Annotator 后，必须把其 `uint8 H×W×3/4` 输出传给
+`IsaacRgbCasPublisher.publish()`；该桥会严格校验冻结相机分辨率、移除 alpha、
+编码 RGB PNG、原子写入共享 CAS 并返回 `ImageReference`。不得在仿真适配器中
+另写一套路径或 SHA 逻辑。
 
 主开发与最终 Docker 建议冻结 **Isaac Sim 5.1.x**。代码兼容 4.5，并为 4.2
 保留最低限度的导入回退；不要把多个 Isaac Sim 版本混入同一个正式镜像。

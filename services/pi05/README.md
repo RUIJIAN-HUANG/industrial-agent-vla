@@ -19,6 +19,9 @@ YOLO DetectionPacket 不是推理前置条件。π0.5 必须针对这一固定�
 - 工业微调的数据/配置/checkpoint SHA、base/tuned 成功率与失败分布。
 - 服务只能输出 `arm_id=Arm_A` 的动作；收到 Arm_B 请求必须拒绝。
 - 恢复时必须使用 Arm_A 的新鲜观测重新推理，禁止请求 OpenVLA 接管。
+- 服务入口必须调用 `industrial_agent.image_cas.ImageCas.resolve_rgb()` 将
+  `CAM_A_TOP` 引用解析为真实 RGB；Real 模式缺图、坏 SHA 或解码失败时必须
+  fail-closed，禁止使用零图、placeholder 或自动降级 Mock。
 
 不要在此目录提交 checkpoint、训练数据、缓存或个人机器路径。完整接口见
 [`../../docs/architecture/interface-contracts.md`](../../docs/architecture/interface-contracts.md)。
