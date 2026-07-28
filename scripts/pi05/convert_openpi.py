@@ -107,10 +107,10 @@ except Exception:
 # ---------------------------------------------------------------------------
 ACTION_DIM: int = 7  # [dx,dy,dz,dax,day,daz,gripper]，方案书 §5.1
 DEFAULT_FPS: int = 10  # 方案书 §3.4 control_hz=10
-DEFAULT_STATE_DIM: int = 8  # Franka 7-DOF + 1 gripper
+DEFAULT_STATE_DIM: int = 7  # frozen Arm_A: TCP pose(6) + gripper(1)
 DEFAULT_ROBOT_TYPE: str = "franka"
 DEFAULT_REPO_ID: str = "your_team/industrial"
-DEFAULT_IMAGE_HW: tuple = (256, 256)  # openpi LIBERO 默认图像尺寸
+DEFAULT_IMAGE_HW: tuple = (224, 224)  # OpenPI pinned model input resolution
 
 
 # ---------------------------------------------------------------------------
@@ -119,16 +119,27 @@ DEFAULT_IMAGE_HW: tuple = (256, 256)  # openpi LIBERO 默认图像尺寸
 def load_image_as_array(
     path: Path, size: tuple = DEFAULT_IMAGE_HW
 ) -> np.ndarray | None:
-    """加载 jpg 为 RGB uint8 ndarray，resize 到指定尺寸；失败返回 None。
+    """Load RGB and resize-with-pad without changing the scene aspect ratio.
 
-    方案书 §5.4：LeRobot feature shape 固定 (256,256,3)，需在存储前 resize。
-    注意：推理时 openpi input_transform 仍会做 resize-with-pad，属于不同路径，
-    本脚本的 resize 仅为对齐 LeRobot feature schema。
+    This matches the OpenPI inference geometry for frozen 1280x720 frames.  Direct
+    square stretching is forbidden because it creates a train/inference domain shift.
     """
+    target_h, target_w = int(size[0]), int(size[1])
+    if target_h < 1 or target_w < 1:
+        raise ValueError(f"invalid target image size: {size}")
     if PIL_AVAILABLE:
         try:
-            img = Image.open(path).convert("RGB").resize(size, Image.BILINEAR)
-            return np.ascontiguousarray(np.asarray(img, dtype=np.uint8))
+            image = Image.open(path).convert("RGB")
+            scale = min(target_w / image.width, target_h / image.height)
+            resized_w = max(1, int(round(image.width * scale)))
+            resized_h = max(1, int(round(image.height * scale)))
+            resized = image.resize((resized_w, resized_h), Image.BILINEAR)
+            canvas = Image.new("RGB", (target_w, target_h), color=(0, 0, 0))
+            canvas.paste(
+                resized,
+                ((target_w - resized_w) // 2, (target_h - resized_h) // 2),
+            )
+            return np.ascontiguousarray(np.asarray(canvas, dtype=np.uint8))
         except Exception as e:
             logger.warning("PIL 读取失败 %s: %s", path, e)
             return None
@@ -138,8 +149,18 @@ def load_image_as_array(
             if arr is None:
                 return None
             arr = cv2.cvtColor(arr, cv2.COLOR_BGR2RGB)
-            arr = cv2.resize(arr, size, interpolation=cv2.INTER_LINEAR)
-            return np.ascontiguousarray(arr, dtype=np.uint8)
+            source_h, source_w = arr.shape[:2]
+            scale = min(target_w / source_w, target_h / source_h)
+            resized_w = max(1, int(round(source_w * scale)))
+            resized_h = max(1, int(round(source_h * scale)))
+            resized = cv2.resize(
+                arr, (resized_w, resized_h), interpolation=cv2.INTER_LINEAR
+            )
+            canvas = np.zeros((target_h, target_w, 3), dtype=np.uint8)
+            top = (target_h - resized_h) // 2
+            left = (target_w - resized_w) // 2
+            canvas[top : top + resized_h, left : left + resized_w] = resized
+            return np.ascontiguousarray(canvas)
         except Exception as e:
             logger.warning("cv2 读取失败 %s: %s", path, e)
             return None
@@ -269,7 +290,7 @@ def parse_args() -> argparse.Namespace:
         "--state_dim",
         type=int,
         default=DEFAULT_STATE_DIM,
-        help="机器人本体状态维度（Franka 7-DOF+gripper=8）。传 0 表示自动检测。",
+        help="机器人本体状态维度（冻结 Arm_A TCP pose 6D + gripper=7）。传 0 自动检测。",
     )
     parser.add_argument(
         "--robot_type",
@@ -281,7 +302,7 @@ def parse_args() -> argparse.Namespace:
         type=int,
         nargs=2,
         default=DEFAULT_IMAGE_HW,
-        help="图像 resize 尺寸（H W），默认 256 256。",
+        help="图像 resize-with-pad 尺寸（H W），默认 224 224。",
     )
     parser.add_argument(
         "--filter_success_only",
@@ -339,11 +360,6 @@ def main() -> int:
     # ---- 创建 LeRobot 数据集 ----
     features: dict[str, Any] = {
         "image": {
-            "dtype": "image",
-            "shape": img_shape,
-            "names": ["height", "width", "channel"],
-        },
-        "wrist_image": {
             "dtype": "image",
             "shape": img_shape,
             "names": ["height", "width", "channel"],
@@ -457,8 +473,6 @@ def main() -> int:
             actions = actions.reshape(n_steps, -1)
 
         front_dir = ep_dir / "front_rgb"
-        wrist_dir = ep_dir / "wrist_rgb"
-        has_wrist_dir = wrist_dir.exists()
 
         # 4. 逐 step 处理
         added = 0
@@ -515,25 +529,11 @@ def main() -> int:
                 record_skip("front_image_load_failed")
                 continue
 
-            # (6) 腕部视图（可选；缺失用黑图占位，不跳过）
-            wrist_image: np.ndarray | None = None
-            if has_wrist_dir:
-                wrist_path = wrist_dir / f"{i:06d}.jpg"
-                if wrist_path.exists():
-                    wrist_image = load_image_as_array(wrist_path, size=(img_h, img_w))
-                if wrist_image is None:
-                    logger.warning(
-                        "[%s step=%d] 腕部图缺失或读取失败，使用黑图占位", ep_name, i
-                    )
-            if wrist_image is None:
-                wrist_image = np.zeros(img_shape, dtype=np.uint8)
-
             # ---- 添加帧 ----
             try:
                 dataset.add_frame(
                     {
                         "image": image,
-                        "wrist_image": wrist_image,
                         "state": np.asarray(state, dtype=np.float32),
                         "actions": np.asarray(action, dtype=np.float32),
                     }

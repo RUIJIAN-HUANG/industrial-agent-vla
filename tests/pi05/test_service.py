@@ -60,7 +60,6 @@ from services.pi05.src import openpi_service
 from services.pi05.src.action import CanonicalActionChunk
 from services.pi05.src.observation import (
     ObsPacket,
-    image_reference_to_placeholder,
     is_image_reference,
     validate_image_reference,
 )
@@ -999,48 +998,6 @@ def test_validate_image_reference_requires_exact_digest_text():
 
     with pytest.raises(ValueError, match="摘要与 image_sha256 不一致"):
         validate_image_reference(ref, expected_camera_id="CAM_A_TOP")
-
-
-def test_zero_placeholder_uses_image_ref_dimensions():
-    """image_reference_to_placeholder 按 ImageReference 尺寸创建零图。"""
-    ref = {
-        "uri": "cas://sha256/" + "b" * 64,
-        "image_sha256": "sha256:" + "b" * 64,
-        "camera_id": "CAM_A_TOP",
-        "width": 320,
-        "height": 240,
-    }
-    img = image_reference_to_placeholder(ref)
-    assert img.dtype == np.uint8
-    assert img.shape == (240, 320, 3)
-    assert np.all(img == 0)
-
-
-def test_zero_placeholder_fallback_dimensions():
-    """image_reference_to_placeholder 在尺寸非法时回退默认 640x480。"""
-    ref_bad = {
-        "uri": "cas://sha256/" + "c" * 64,
-        "image_sha256": "sha256:" + "c" * 64,
-        "camera_id": "CAM_A_TOP",
-        "width": -1,
-        "height": 0,
-    }
-    img = image_reference_to_placeholder(ref_bad)
-    assert img.shape == (480, 640, 3)
-
-
-def test_zero_placeholder_clamps_oversized():
-    """image_reference_to_placeholder 尺寸超过 4096 时钳制。"""
-    ref_huge = {
-        "uri": "cas://sha256/" + "d" * 64,
-        "image_sha256": "sha256:" + "d" * 64,
-        "camera_id": "CAM_A_TOP",
-        "width": 8192,
-        "height": 5000,
-    }
-    img = image_reference_to_placeholder(ref_huge)
-    assert img.shape[0] == 4096  # 钳制
-    assert img.shape[1] == 4096  # 钳制
 
 
 # ---------------------------------------------------------------------------

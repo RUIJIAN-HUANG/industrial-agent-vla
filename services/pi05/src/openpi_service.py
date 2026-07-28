@@ -324,7 +324,10 @@ def _norm_stats_sha() -> str:
 # env 优先让生产部署能固定 pinned sha，executor 兜底兼容现有 mock 测试。
 # ---------------------------------------------------------------------------
 def _resolve_checkpoint_sha() -> str:
-    """checkpoint_sha：环境变量 PI05_CHECKPOINT_SHA 优先，否则读 executor。"""
+    """Return the verified runtime digest in real mode."""
+
+    if executor is not None and getattr(executor, "mode", None) == "real":
+        return _checkpoint_sha()
     env_sha = os.environ.get("PI05_CHECKPOINT_SHA", "").strip()
     if env_sha:
         return env_sha
@@ -332,7 +335,10 @@ def _resolve_checkpoint_sha() -> str:
 
 
 def _resolve_norm_stats_sha() -> str:
-    """norm_stats_sha：环境变量 PI05_NORM_STATS_SHA 优先，否则读 executor。"""
+    """Return the verified runtime digest in real mode."""
+
+    if executor is not None and getattr(executor, "mode", None) == "real":
+        return _norm_stats_sha()
     env_sha = os.environ.get("PI05_NORM_STATS_SHA", "").strip()
     if env_sha:
         return env_sha

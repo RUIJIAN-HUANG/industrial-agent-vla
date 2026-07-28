@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
@@ -42,6 +43,7 @@ logger.setLevel(logging.INFO)
 try:
     from openpi.policies import policy_config as _openpi_policy_config  # type: ignore
     from openpi.shared import download as _openpi_download  # type: ignore
+    from openpi.shared import normalize as _openpi_normalize  # type: ignore
     from openpi.training import config as _openpi_config  # type: ignore
 
     OPENPI_AVAILABLE = True
@@ -173,8 +175,7 @@ class WebsocketPolicyClient:
         """将 openpi example dict 转为 ObsPacket 格式发送，提取 actions 返回。
 
         example 键名映射（pi05.py _build_example → openpi_service ObsPacket）：
-          "observation/exterior_image_1_left"  → "rgb_front"
-          "observation/wrist_image_left"       → "rgb_wrist"
+          "observation/image"                  → "rgb_front"
           "observation/state"                  → "robot_state"
           "prompt"                             → "instruction"
           "episode_id" / "step_id" / …         → 透传
@@ -182,11 +183,17 @@ class WebsocketPolicyClient:
         self._ensure_connected()
 
         # ---- 协议转换：openpi example → ObsPacket（方案书 §3.4） ----
-        _front = example.get(
-            "observation/exterior_image_1_left",
-            np.zeros((480, 640, 3), dtype=np.uint8),
-        )
-        _state = example.get("observation/state", np.zeros(8, dtype=np.float32))
+        try:
+            _front = example["observation/image"]
+            _state = example["observation/state"]
+        except KeyError as exc:
+            raise ValueError(
+                f"WebSocket request is missing required OpenPI key: {exc.args[0]}"
+            ) from exc
+        if not isinstance(_front, np.ndarray):
+            raise TypeError("observation/image must be a numpy RGB array")
+        if not isinstance(_state, np.ndarray):
+            _state = np.asarray(_state, dtype=np.float32)
         request: dict[str, Any] = {
             "schema_version": "v1",
             "episode_id": str(example.get("episode_id", "unknown")),
@@ -210,17 +217,6 @@ class WebsocketPolicyClient:
                 {"terminated": False, "truncated": False, "camera_ok": True},
             ),
         }
-        wrist = example.get("observation/wrist_image_left")
-        if wrist is not None:
-            request["rgb_wrist"] = (
-                {
-                    "bytes": wrist.tobytes(),
-                    "shape": list(wrist.shape),
-                    "dtype": str(wrist.dtype),
-                }
-                if isinstance(wrist, np.ndarray)
-                else wrist
-            )
 
         # ---- 发送与接收 ----
         async def _send_recv():
@@ -277,14 +273,43 @@ class LocalOpenPiPolicyClient:
     返回物理动作（已反归一化）。
     """
 
-    def __init__(self, config_name: str, checkpoint_dir: str | None) -> None:
-        config = _openpi_config.get_config(config_name)
-        ckpt = checkpoint_dir
-        if not ckpt:
-            ckpt = _openpi_download.maybe_download(
-                f"gs://openpi-assets/checkpoints/{config_name}"
+    def __init__(
+        self,
+        config_name: str,
+        checkpoint_dir: str | None,
+        norm_stats_path: str | None = None,
+    ) -> None:
+        if config_name == "pi05_industrial":
+            from configs.pi05.train_config import get_config as get_industrial_config
+
+            config = get_industrial_config(config_name)
+            if config is None:
+                raise RuntimeError("pi05_industrial configuration is unavailable")
+            if not checkpoint_dir:
+                raise RuntimeError(
+                    "pi05_industrial inference requires an explicit checkpoint directory"
+                )
+            if not norm_stats_path:
+                raise RuntimeError(
+                    "pi05_industrial inference requires an explicit norm_stats path"
+                )
+            ckpt = checkpoint_dir
+            norm_stats = _openpi_normalize.deserialize_json(
+                Path(norm_stats_path).read_text(encoding="utf-8")
             )
-        self._policy = _openpi_policy_config.create_trained_policy(config, ckpt)
+        else:
+            config = _openpi_config.get_config(config_name)
+            ckpt = checkpoint_dir
+            norm_stats = None
+            if not ckpt:
+                ckpt = _openpi_download.maybe_download(
+                    f"gs://openpi-assets/checkpoints/{config_name}"
+                )
+        self._policy = _openpi_policy_config.create_trained_policy(
+            config,
+            ckpt,
+            norm_stats=norm_stats,
+        )
         self._ckpt = ckpt
         self._config_name = config_name
         logger.info("【JAX 客户端】加载 %s @ %s", config_name, ckpt)
@@ -307,12 +332,13 @@ class LocalOpenPiPolicyClient:
 def make_policy_client(
     config_name: str,
     checkpoint_dir: str | None,
+    norm_stats_path: str | None,
     ws_host: str | None,
     ws_port: str | None,
 ) -> PolicyClient | None:
     """按优先级创建策略客户端：WebSocket > 本地 JAX。
 
-    均不可用时返回 None，由调用方（pi05.py）降级到 Mock 模式。
+    均不可用时返回 None；real 调用方必须 fail-closed，不能降级到 Dummy。
     """
     # 优先 WebSocket（§3.3：远程推理解决显存争用）
     if ws_host and ws_port and WS_CLIENT_AVAILABLE:
@@ -324,7 +350,11 @@ def make_policy_client(
     # 本地 JAX 路径（Table 21 Row3）
     if OPENPI_AVAILABLE:
         try:
-            return LocalOpenPiPolicyClient(config_name, checkpoint_dir)
+            return LocalOpenPiPolicyClient(
+                config_name,
+                checkpoint_dir,
+                norm_stats_path,
+            )
         except Exception as e:
             logger.error("本地 openpi 加载失败：%s", e)
 

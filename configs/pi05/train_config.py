@@ -47,10 +47,13 @@ norm stats 计算命令（训练前必跑，方案书 §3.3.1 Para186）：
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import os
 from dataclasses import dataclass
 from typing import Any
+
+import numpy as np
 
 # ---------------------------------------------------------------------------
 # 日志
@@ -80,9 +83,25 @@ BASE_CHECKPOINT: str = os.environ.get(
 )
 # LoRA rank（方案书 §3.2.1；在 weight_loader / model_config 中使用）
 LORA_RANK: int = int(os.environ.get("PI05_LORA_RANK", "32"))
-# state 维度：Franka 7-DOF + 1 gripper = 8（convert_openpi.py DEFAULT_STATE_DIM；S1 修复）
+# 冻结 Arm_A policy state：末端 6D pose + 1 gripper = 7。
 # 作为唯一真相源，供 train.py 与 compute_norm_stats.py 引用
-STATE_DIM: int = int(os.environ.get("PI05_STATE_DIM", "8"))
+STATE_DIM: int = int(os.environ.get("PI05_STATE_DIM", "7"))
+OPENPI_COMMIT: str = "15a9616a00943ada6c20a0f158e3adb39df2ccac"
+MODEL_ACTION_DIM: int = 32
+CANONICAL_ACTION_DIM: int = 7
+
+
+def project_policy_actions(actions: Any) -> np.ndarray:
+    """Project one pinned π0.5 32-D output onto the canonical seven axes."""
+
+    array = np.asarray(actions)
+    if array.ndim < 1 or array.shape[-1] != MODEL_ACTION_DIM:
+        raise ValueError(
+            "π0.5 base-compatible output must end in "
+            f"{MODEL_ACTION_DIM} action dimensions, got {array.shape}"
+        )
+    return array[..., :CANONICAL_ACTION_DIM]
+
 
 # ----------------- 训练超参数补充（C2 修复）-----------------
 # 以下参数若 openpi 官方 TrainConfig 未直接暴露对应字段，则由 optimizer / lr_schedule 内部默认值控制；
@@ -104,7 +123,7 @@ EVAL_INTERVAL: int = int(os.environ.get("PI05_EVAL_INTERVAL", "1000"))
 
 
 # ---------------------------------------------------------------------------
-# 依赖：openpi（try/except，缺失时降级为纯 dataclass 占位定义 + 打印提示）
+# 依赖：openpi（try/except，缺失时降级为纯 dataclass 占位定义）
 # ---------------------------------------------------------------------------
 # 方案书 §3.3：需要 LoRA 时必须走 JAX 路径，依赖 openpi 官方包。
 # 本地无 openpi 时，仍允许本文件被 import（用于文档/CI 静态检查），
@@ -113,19 +132,22 @@ OPENPI_AVAILABLE: bool = False
 OPENPI_IMPORT_ERROR: str | None = None
 
 TrainConfig: Any = None
-LeRobotLiberoDataConfig: Any = None
+DataConfig: Any = None
+DataConfigFactory: Any = None
+ModelTransformFactory: Any = None
 Pi0Config: Any = None
-ModelType: Any = None
 CosineDecaySchedule: Any = None
 AdamW: Any = None
 WeightLoader: Any = None
-_CONFIGS: dict[str, Any] = {}
+_LOCAL_CONFIGS: dict[str, Any] = {}
 
 try:
-    from openpi.models.model import ModelType  # type: ignore
+    from openpi import transforms as _transforms  # type: ignore
     from openpi.models.pi0_config import Pi0Config  # type: ignore
     from openpi.training.config import (  # type: ignore
-        LeRobotLiberoDataConfig,
+        DataConfig,
+        DataConfigFactory,
+        ModelTransformFactory,
         TrainConfig,
     )
     from openpi.training.optimizer import AdamW, CosineDecaySchedule  # type: ignore
@@ -134,13 +156,6 @@ try:
         WeightLoader,
     )
 
-    # 复用官方 _CONFIGS 注册表（若官方以字典形式导出）。
-    # 注意：_CONFIGS 为 openpi 私有 API（前缀下划线），官方可能随时重命名或移除；
-    # 若导入失败则降级为本地空字典，register_config() 仅注册到本地占位表。
-    try:
-        from openpi.training.config import _CONFIGS  # type: ignore
-    except Exception:  # 官方未导出或已改名 _CONFIGS，使用本地空字典（W1 已记录风险）
-        _CONFIGS = {}
     OPENPI_AVAILABLE = True
 except Exception as _e:  # pragma: no cover
     OPENPI_IMPORT_ERROR = str(_e)
@@ -178,41 +193,49 @@ except Exception as _e:  # pragma: no cover
         eval_interval: int = 1000
 
     @dataclass
-    class LeRobotLiberoDataConfig:
-        """占位数据配置（对齐官方 LeRobotLiberoDataConfig 关键字段）。"""
+    class DataConfig:
+        prompt_from_task: bool = True
+
+    @dataclass
+    class DataConfigFactory:
+        """Fallback shape used only for CPU/static tests."""
 
         repo_id: str = ""
-        assets: Any = None
-        transforms: Any = None
+        base_config: Any = None
+
+    class ModelTransformFactory:
+        pass
 
     @dataclass
     class Pi0Config:
         """占位模型配置（对齐官方 Pi0Config 关键字段）。"""
 
-        model_type: Any = None
-        action_dim: int = 7
+        pi05: bool = True
+        action_dim: int = MODEL_ACTION_DIM
         action_horizon: int = 10
-        max_token_len: int = 48
+        max_token_len: int = 200
         paligemma_variant: str = ""  # LoRA 变体名（gemma_2b_lora）
+        action_expert_variant: str = ""
+        discrete_state_input: bool = True
 
         def get_freeze_filter(self) -> Any:
             return None
-
-    class ModelType:  # 占位枚举
-        PI05 = "pi05"
 
     @dataclass
     class CosineDecaySchedule:
         """占位学习率调度（对齐官方 CosineDecaySchedule 关键字段）。"""
 
-        init_value: float = 2e-5
-        warmup_steps: int = 2000  # 线性预热步数（C2 修复）
+        warmup_steps: int = 2000
+        peak_lr: float = 2e-5
+        decay_steps: int = 30000
+        decay_lr: float = 2e-6
 
     @dataclass
     class AdamW:
         """占位优化器（官方默认 AdamW；weight_decay 由 openpi 内部控制）。"""
 
         weight_decay: float = 0.01  # C2 修复：显式声明默认值以保持可审计性
+        clip_gradient_norm: float = 1.0
 
     class WeightLoader:
         """占位权重加载器。"""
@@ -223,16 +246,116 @@ except Exception as _e:  # pragma: no cover
         def __init__(self, path: str) -> None:
             self.path = path
 
-    _CONFIGS = {}
+    _LOCAL_CONFIGS = {}
 
-    print(
-        "[pi05_train_config] WARNING: openpi 未安装或 import 失败，已降级为占位 dataclass。\n"
-        f"  原因: {OPENPI_IMPORT_ERROR}\n"
-        "  提示: LoRA 微调必须走 openpi JAX 路径（方案书 §3.3）。\n"
-        "        请安装: git clone https://github.com/Physical-Intelligence/openpi\n"
-        "                cd openpi && uv sync\n"
-        "  当前 PI05_INDUSTRIAL_CONFIG 仅用于文档/检查，不能用于真实训练。"
-    )
+if OPENPI_AVAILABLE:
+
+    @dataclass(frozen=True)
+    class IndustrialInputs:
+        """One top camera, no wrist cameras, identical in training and inference."""
+
+        model_type: Any
+
+        def __call__(self, data: dict[str, Any]) -> dict[str, Any]:
+            base_image = np.asarray(data["observation/image"])
+            if np.issubdtype(base_image.dtype, np.floating):
+                base_image = np.clip(base_image * 255.0, 0, 255).astype(np.uint8)
+            if base_image.ndim == 3 and base_image.shape[0] == 3:
+                base_image = np.transpose(base_image, (1, 2, 0))
+            if (
+                base_image.ndim != 3
+                or base_image.shape[2] != 3
+                or base_image.dtype != np.uint8
+            ):
+                raise ValueError(
+                    "observation/image must decode to uint8[H,W,3], "
+                    f"got dtype={base_image.dtype} shape={base_image.shape}"
+                )
+            state = np.asarray(data["observation/state"], dtype=np.float32)
+            if state.ndim != 1 or state.shape[0] != STATE_DIM:
+                raise ValueError(
+                    f"observation/state must be [{STATE_DIM}], got {state.shape}"
+                )
+            actions = data.get("actions")
+            if actions is not None:
+                actions = np.asarray(actions, dtype=np.float32)
+                if actions.ndim < 1 or actions.shape[-1] != 7:
+                    raise ValueError(
+                        f"training actions must end in 7 dimensions, got {actions.shape}"
+                    )
+
+            # Pi0.5 always exposes three image tensor slots.  The frozen scene
+            # has only CAM_A_TOP, so absent wrist slots are masked model padding,
+            # never observations or CAS fallbacks.
+            missing_wrist = np.zeros_like(base_image)
+            result: dict[str, Any] = {
+                "state": state,
+                "image": {
+                    "base_0_rgb": base_image,
+                    "left_wrist_0_rgb": missing_wrist,
+                    "right_wrist_0_rgb": missing_wrist.copy(),
+                },
+                "image_mask": {
+                    "base_0_rgb": np.True_,
+                    "left_wrist_0_rgb": np.False_,
+                    "right_wrist_0_rgb": np.False_,
+                },
+            }
+            if actions is not None:
+                result["actions"] = actions
+            if "prompt" in data:
+                result["prompt"] = data["prompt"]
+            return result
+
+    @dataclass(frozen=True)
+    class IndustrialOutputs:
+        """Project the pinned 32-D π0.5 head onto the frozen 7-D contract."""
+
+        def __call__(self, data: dict[str, Any]) -> dict[str, Any]:
+            # OpenPI's pinned pi05_base checkpoint has a 32-D state/action
+            # projection. Training data supplies the seven canonical robot
+            # dimensions and ModelTransformFactory pads them to 32. At policy
+            # output we explicitly discard only those padding dimensions,
+            # preserving a strict N×7 service contract without changing the
+            # pretrained projection-layer shapes.
+            return {"actions": project_policy_actions(data["actions"])}
+
+    @dataclass(frozen=True)
+    class IndustrialLeRobotDataConfig(DataConfigFactory):
+        """Pinned OpenPI data mapping for CAM_A_TOP with no wrist stream."""
+
+        def create(self, assets_dirs: Any, model_config: Any) -> Any:
+            repack_transform = _transforms.Group(
+                inputs=[
+                    _transforms.RepackTransform(
+                        {
+                            "observation/image": "image",
+                            "observation/state": "state",
+                            "actions": "actions",
+                            "prompt": "prompt",
+                        }
+                    )
+                ]
+            )
+            data_transforms = _transforms.Group(
+                inputs=[IndustrialInputs(model_type=model_config.model_type)],
+                outputs=[IndustrialOutputs()],
+            )
+            model_transforms = ModelTransformFactory()(model_config)
+            return dataclasses.replace(
+                self.create_base_config(assets_dirs, model_config),
+                repack_transforms=repack_transform,
+                data_transforms=data_transforms,
+                model_transforms=model_transforms,
+            )
+
+else:
+
+    @dataclass
+    class IndustrialLeRobotDataConfig(DataConfigFactory):
+        """Fallback config used only when OpenPI isn't installed."""
+
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -250,17 +373,21 @@ def _build_pi05_industrial_config() -> TrainConfig:
         # 方案书 §3.3：LIBERO 配置动作块常为 10；以本项目 checkpoint 配置为准，
         #   action_horizon=10 为初始候选，D21 首轮微调后按闭环表现调整。
         model=Pi0Config(
-            model_type=ModelType.PI05,
-            action_dim=7,  # 7 维动作（方案书 §3.4）
-            action_horizon=10,  # 动作块长度（初始候选，D21 后按闭环表现调整）
-            max_token_len=48,  # 文本 token 最大长度
-            paligemma_variant="gemma_2b_lora",  # LoRA 变体：冻结 Gemma 2B backbone
+            pi05=True,
+            action_dim=MODEL_ACTION_DIM,
+            action_horizon=10,
+            max_token_len=200,
+            # π0.5 的本体状态必须按官方语义作为离散语言 token 输入。
+            discrete_state_input=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
         ),
         # ---- 数据配置 ----
         # 方案书 §5.4：canonical → LeRobot 转换由 scripts/pi05/convert_openpi.py 完成。
         # 方案书 §3.3.1 Para186：norm stats 用 compute_norm_stats 单独生成本项目自有统计。
-        data=LeRobotLiberoDataConfig(
+        data=IndustrialLeRobotDataConfig(
             repo_id=DATASET_REPO_ID,
+            base_config=DataConfig(prompt_from_task=True),
         ),
         # ---- 训练参数 ----
         # 方案书 §3.3：LoRA 微调显存 >22.5GB；22.5GB 卡建议降到 16 或 8。
@@ -276,9 +403,12 @@ def _build_pi05_industrial_config() -> TrainConfig:
         # ---- 学习率 ----
         # LoRA 微调用较小学习率（方案书 §6.3 首轮微调 1—2 组超参）。
         lr_schedule=CosineDecaySchedule(
-            init_value=2e-5,
-            # warmup_steps=WARMUP_STEPS,  # 若官方 CosineDecaySchedule 支持则取消注释（C2）
+            warmup_steps=WARMUP_STEPS,
+            peak_lr=2e-5,
+            decay_steps=30_000,
+            decay_lr=2e-6,
         ),
+        optimizer=AdamW(weight_decay=WEIGHT_DECAY, clip_gradient_norm=1.0),
         # ---- LoRA 权重加载（openpi 机制，非 PEFT） ----
         # CheckpointWeightLoader 加载 pi05_base 权重，_merge_params 自动注入 LoRA 适配层
         # （rank=LORA_RANK=32，在 weight_loader 或 model_config 中指定；方案书 §3.2.1）。
@@ -288,11 +418,13 @@ def _build_pi05_industrial_config() -> TrainConfig:
         # get_freeze_filter() 生成的 filter 必须与 model Pi0Config 参数完全匹配，
         # 否则训练效果会很差（~1-3% success rate）。
         freeze_filter=Pi0Config(
-            model_type=ModelType.PI05,
-            action_dim=7,
+            pi05=True,
+            action_dim=MODEL_ACTION_DIM,
             action_horizon=10,
-            max_token_len=48,
+            max_token_len=200,
+            discrete_state_input=True,
             paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
         ).get_freeze_filter(),
         # ---- 其他 ----
         overwrite=True,
@@ -358,29 +490,25 @@ _QUIET_MODE: bool = os.environ.get("PI05_QUIET", "0").strip() in ("1", "true", "
 # 注册配置
 # ---------------------------------------------------------------------------
 def register_config() -> bool:
-    """把 pi05_industrial 注册进 openpi 官方 _CONFIGS 字典。
+    """Expose the local config without mutating OpenPI private registries.
 
     Returns:
-        True 注册成功；False 表示注册失败（openpi 不可用时也注册到本地占位字典）。
+        True when the local immutable registry contains the config.
     """
     try:
-        _CONFIGS["pi05_industrial"] = PI05_INDUSTRIAL_CONFIG
-        return True
+        existing = _LOCAL_CONFIGS.setdefault("pi05_industrial", PI05_INDUSTRIAL_CONFIG)
+        return existing is PI05_INDUSTRIAL_CONFIG
     except Exception as e:
-        logger.warning("注册 pi05_industrial 到 _CONFIGS 失败: %s", e)
+        logger.warning("本地 pi05_industrial 配置暴露失败: %s", e)
         return False
 
 
 def get_config(name: str = "pi05_industrial") -> TrainConfig | None:
-    """获取配置实例。优先从 _CONFIGS 取，其次返回本文件构建的实例。
+    """从本模块注册表获取配置实例。
 
     供 openpi scripts/train.py 或本地脚本调用：get_config("pi05_industrial")。
     """
-    if name == "pi05_industrial" and PI05_INDUSTRIAL_CONFIG is not None:
-        return PI05_INDUSTRIAL_CONFIG
-    if name in _CONFIGS:
-        return _CONFIGS[name]
-    return None
+    return _LOCAL_CONFIGS.get(name)
 
 
 # ---------------------------------------------------------------------------
@@ -406,8 +534,12 @@ def _print_summary() -> None:
         print("      git clone https://github.com/Physical-Intelligence/openpi")
         print("      cd openpi && uv sync")
     print("配置名:             pi05_industrial")
-    print(f"model_type:         {getattr(ModelType, 'PI05', 'PI05')}")
-    print("action_dim:         7   (方案书 §3.4 [dx,dy,dz,dax,day,daz,gripper])")
+    model_type = getattr(
+        getattr(PI05_INDUSTRIAL_CONFIG, "model", None), "model_type", "PI05"
+    )
+    print(f"model_type:         {model_type}")
+    print("model action_dim:   32  (兼容 pi05_base 投影层；输入由 OpenPI pad 到 32)")
+    print("service action_dim: 7   (输出显式投影为 [dx,dy,dz,dax,day,daz,gripper])")
     print("action_horizon:     10  (初始候选，D21 后按闭环表现调整)")
     print(
         f"batch_size:         {BATCH_SIZE}  (默认安全值 16；方案书 §3.3：22.5GB 卡建议 ≤16)"
@@ -432,7 +564,7 @@ def _print_summary() -> None:
     print(f"dataset repo_id:    {DATASET_REPO_ID}")
     print(f"output_dir:         {OUTPUT_DIR}")
     print("fsdp_devices:       1   (单卡，方案书 §3.3 JAX 路径)")
-    print(f"注册到 _CONFIGS:    {_REGISTERED}")
+    print(f"本地配置已注册:      {_REGISTERED}")
     # LoRA 安全闸门提示
     _lora_ok = validate_lora_ready()
     if not _lora_ok:

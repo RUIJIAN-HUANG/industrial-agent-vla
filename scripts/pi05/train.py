@@ -90,7 +90,7 @@ if str(_PROJECT_ROOT) not in _sys.path:
 # 该 import 会：
 #   1. 尝试 import openpi（可用时用官方类，不可用时降级为占位 dataclass）
 #   2. 构建 PI05_INDUSTRIAL_CONFIG 实例
-#   3. 把 pi05_industrial 注册进 _CONFIGS（openpi 官方注册表或本地占位表）
+#   3. 在项目本地不可变注册表中暴露 pi05_industrial（不修改官方私有注册表）
 import configs.pi05.train_config as pi05_config
 
 # ===========================================================================
@@ -222,12 +222,12 @@ def generate_mock_norm_stats(config: Any, config_name: str) -> pathlib.Path:
     path = get_norm_stats_path(config, config_name)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    # 维度从 config.model 读取（红线 2：严格匹配 train_config.py 定义）
-    action_dim = int(getattr(config.model, "action_dim", 7))  # 方案书 §3.4：7 维动作
-    # S1 修复：state 维度从 train_config 常量读取，不再硬编码
-    # Franka 7-DOF + 1 gripper = 8（convert_openpi.py DEFAULT_STATE_DIM；
-    # train_config.STATE_DIM 为唯一真相源）
-    state_dim = int(getattr(pi05_config, "STATE_DIM", 8))
+    # 归一化发生在 OpenPI PadStatesAndActions 之前，因此统计只覆盖
+    # 七个真实机器人动作维度，不覆盖 pi05_base 32-D 投影头的 padding。
+    action_dim = int(getattr(pi05_config, "CANONICAL_ACTION_DIM", 7))
+    # state 维度从 train_config 常量读取，不再硬编码：
+    # 冻结 Arm_A 状态为 TCP pose 6D + gripper 1D。
+    state_dim = int(getattr(pi05_config, "STATE_DIM", 7))
 
     mock_stats = {
         "norm_stats": {
@@ -396,7 +396,8 @@ def print_summary(config: Any, config_name: str, args: argparse.Namespace) -> No
     eval_interval = getattr(config, "eval_interval", pi05_config.EVAL_INTERVAL)
     fsdp = getattr(config, "fsdp_devices", "?")
     exp_name = getattr(config, "exp_name", args.exp_name)
-    action_dim = getattr(config.model, "action_dim", 7)
+    model_action_dim = getattr(config.model, "action_dim", 32)
+    canonical_action_dim = getattr(pi05_config, "CANONICAL_ACTION_DIM", 7)
     action_horizon = getattr(config.model, "action_horizon", 10)
 
     # LoRA 冻结状态（方案书 §3.3.1 安全闸门）
@@ -418,8 +419,10 @@ def print_summary(config: Any, config_name: str, args: argparse.Namespace) -> No
     print(
         f"  LoRA Rank:          {lora_rank}  (方案书 §3.2.1 OpenVLA-OFT 示例；π0.5 初始候选值)"
     )
+    print(f"  model action_dim:   {model_action_dim}  (兼容 pi05_base 投影层)")
     print(
-        f"  action_dim:         {action_dim}  (方案书 §3.4 [dx,dy,dz,dax,day,daz,gripper])"
+        f"  service action_dim: {canonical_action_dim}"
+        "  ([dx,dy,dz,dax,day,daz,gripper])"
     )
     print(f"  action_horizon:     {action_horizon}  (初始候选，D21 后按闭环表现调整)")
     print(f"  Batch Size:         {batch_size}  (方案书 §3.3：22.5GB 卡建议 ≤16)")

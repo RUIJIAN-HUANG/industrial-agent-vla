@@ -12,7 +12,6 @@
 from __future__ import annotations
 
 import hashlib
-import logging
 import types
 from typing import Any
 from unittest.mock import patch
@@ -26,12 +25,32 @@ from services.pi05.src.pi05_contract_adapter import Pi05ContractAdapter
 from industrial_agent.contracts import Observation, TaskSchema
 from industrial_agent.errors import ExecutorError, FailureCode
 from industrial_agent.executor import ExecutionContext
+from industrial_agent.image_cas import ImageCas, ImageCasConfig
+from industrial_agent.service_images import CasRequestImageResolver
 
 
 @pytest.fixture(autouse=True)
 def explicit_dummy_mode(monkeypatch):
     """进程内契约测试显式启用 Dummy，不依赖执行器默认值。"""
     monkeypatch.setenv("PI05_MODE", "dummy")
+
+
+@pytest.fixture
+def resolved_camera(tmp_path):
+    """Create a real frozen-size CAS frame and the shared request resolver."""
+
+    image_cas = ImageCas(ImageCasConfig(root=tmp_path / "cas"))
+    pixels = np.zeros((720, 1280, 3), dtype=np.uint8)
+    pixels[:, :, 0] = np.arange(1280, dtype=np.uint16)[None, :] % 256
+    pixels[:, :, 1] = 37
+    pixels[:, :, 2] = 211
+    reference = image_cas.write_rgb(pixels, camera_id="CAM_A_TOP")
+    camera = {
+        "full_image": reference.to_dict(),
+        "arm_a_rgb": reference.to_dict(),
+        "wrist_image": None,
+    }
+    return CasRequestImageResolver(image_cas), camera, pixels
 
 
 # ── 辅助函数 ──────────────────────────────────────────────────────────────────
@@ -145,16 +164,23 @@ def _make_context(*, original_instruction: str | None = None) -> ExecutionContex
 
 
 # ── 用例 1：进程内全链路 E2E ───────────────────────────────────────────────────
-def test_e2e_adapter_plan_returns_valid_action_chunk():
+def test_e2e_adapter_plan_returns_valid_action_chunk(resolved_camera):
     """E2E：Observation(ImageReference) → adapter.plan() → ActionChunk 逐字段校验。
 
-    覆盖：arm_a_rgb 的 ImageReference→零图占位→_prep_image→_build_example→
-    _infer_mock→_clip_actions→to_action_chunk 的完整管线。
+    覆盖：arm_a_rgb 的 ImageReference→共享 CAS 校验与解码→_prep_image→
+    _build_example→_infer_mock→_clip_actions→to_action_chunk 的完整管线。
     方案书 agent-framework.md §9 统一 7 维动作合同。
     """
-    with patch.object(Pi05Executor, "infer", return_value=_make_mock_canonical()):
-        adapter = Pi05ContractAdapter()
-        observation = _make_observation()
+    resolver, camera, expected_pixels = resolved_camera
+    captured: dict[str, np.ndarray] = {}
+
+    def capture_infer(obs: ObsPacket):
+        captured["rgb"] = obs.rgb_front.copy()
+        return _make_mock_canonical()
+
+    with patch.object(Pi05Executor, "infer", side_effect=capture_infer):
+        adapter = Pi05ContractAdapter(resolver=resolver)
+        observation = _make_observation(camera=camera)
         task = _make_task()
         context = _make_context()
 
@@ -180,44 +206,53 @@ def test_e2e_adapter_plan_returns_valid_action_chunk():
 
     # ── validate_contract 显式调用不抛异常 ──
     chunk.validate_contract()
+    np.testing.assert_array_equal(captured["rgb"], expected_pixels)
 
 
 # ── 用例 2：ImageReference 管道连通性 ───────────────────────────────────────────
-def test_image_reference_flow_does_not_raise():
-    """ImageReference 从识别→占位→_prep_image→infer 全程无异常。
+def test_image_reference_flow_resolves_verified_cas_pixels(resolved_camera):
+    """ImageReference 必须通过共享 CAS resolver 还原为真实、校验后的像素。"""
 
-    全 ImageReference 格式（arm_a_rgb + wrist_image 均无原始像素）下，
-    adapter 应正确创建零图占位并完成推理，不抛 AttributeError。
-    """
-    with patch.object(Pi05Executor, "infer", return_value=_make_mock_canonical()):
-        adapter = Pi05ContractAdapter()
-        chunk = adapter.plan(_make_task(), _make_observation(), _make_context())
+    resolver, camera, expected_pixels = resolved_camera
+    captured: dict[str, np.ndarray] = {}
 
-    assert chunk is not None
-    assert len(chunk.steps) >= 1
+    def capture_infer(obs: ObsPacket):
+        captured["rgb"] = obs.rgb_front.copy()
+        return _make_mock_canonical()
 
-
-def test_image_reference_wrist_is_null():
-    """wrist_image=null 时不抛异常。"""
-    arm_sha = hashlib.sha256(b"arm_a_no_wrist").hexdigest()
-    camera = {
-        "arm_a_rgb": {
-            "uri": f"cas://sha256/{arm_sha}",
-            "image_sha256": f"sha256:{arm_sha}",
-            "camera_id": "CAM_A_TOP",
-            "width": 1280,
-            "height": 720,
-        },
-        "wrist_image": None,
-    }
-
-    with patch.object(Pi05Executor, "infer", return_value=_make_mock_canonical()):
-        adapter = Pi05ContractAdapter()
+    with patch.object(Pi05Executor, "infer", side_effect=capture_infer):
+        adapter = Pi05ContractAdapter(resolver=resolver)
         chunk = adapter.plan(
             _make_task(), _make_observation(camera=camera), _make_context()
         )
 
     assert chunk is not None
+    assert len(chunk.steps) >= 1
+    np.testing.assert_array_equal(captured["rgb"], expected_pixels)
+
+
+def test_image_reference_wrist_is_null(resolved_camera):
+    """wrist_image=null 时不抛异常。"""
+    resolver, camera, _ = resolved_camera
+
+    with patch.object(Pi05Executor, "infer", return_value=_make_mock_canonical()):
+        adapter = Pi05ContractAdapter(resolver=resolver)
+        chunk = adapter.plan(
+            _make_task(), _make_observation(camera=camera), _make_context()
+        )
+
+    assert chunk is not None
+
+
+def test_image_reference_without_resolver_fails_closed():
+    """进程内适配器不得把 CAS 引用替换成黑图或绕过公共 resolver。"""
+
+    adapter = Pi05ContractAdapter()
+    with pytest.raises(ExecutorError) as exc_info:
+        adapter.plan(_make_task(), _make_observation(), _make_context())
+
+    assert exc_info.value.code == FailureCode.CAS_UNAVAILABLE
+    assert exc_info.value.retryable is True
 
 
 # ── 用例 3：异常与降级路径 ──────────────────────────────────────────────────────
@@ -255,27 +290,29 @@ def test_arm_a_rgb_none_raises_executor_error():
     assert exc_info.value.code == FailureCode.EXECUTOR_BAD_RESPONSE
 
 
-def test_arm_a_missing_logs_warning_and_falls_back_to_zeros(caplog):
-    """arm_a 缺失时记录 WARNING 并使用 np.zeros 零状态兜底。"""
-    caplog.set_level(logging.WARNING, logger="pi05.contract_adapter")
-
+def test_arm_a_missing_fails_closed(resolved_camera):
+    """arm_a 缺失时禁止零状态兜底，模型不得被调用。"""
+    resolver, camera, _ = resolved_camera
     observation = _make_observation(
+        camera=camera,
         robot={
             "active_arm": "Arm_A",
             # arm_a 完全缺失
-        }
+        },
     )
 
-    with patch.object(Pi05Executor, "infer", return_value=_make_mock_canonical()):
-        adapter = Pi05ContractAdapter()
-        adapter.plan(_make_task(), observation, _make_context())
+    with patch.object(Pi05Executor, "infer") as infer:
+        adapter = Pi05ContractAdapter(resolver=resolver)
+        with pytest.raises(ExecutorError) as exc_info:
+            adapter.plan(_make_task(), observation, _make_context())
 
-    warnings = [r for r in caplog.records if "state is missing" in r.message]
-    assert len(warnings) >= 1, "arm_a 缺失应记录 WARNING 日志"
+    assert exc_info.value.code == FailureCode.EXECUTOR_BAD_RESPONSE
+    assert "state is required" in str(exc_info.value)
+    infer.assert_not_called()
 
 
 # ── 用例 4：prompt 提取优先级 ──────────────────────────────────────────────────
-def test_original_instruction_takes_priority_over_task_instruction():
+def test_original_instruction_takes_priority_over_task_instruction(resolved_camera):
     """context.original_instruction 存在时优先于 task.instruction。"""
     captured: dict = {}
 
@@ -283,18 +320,19 @@ def test_original_instruction_takes_priority_over_task_instruction():
         captured["instruction"] = obs.instruction
         return _make_mock_canonical()
 
+    resolver, camera, _ = resolved_camera
     with patch.object(Pi05Executor, "infer", side_effect=capture_infer):
-        adapter = Pi05ContractAdapter()
+        adapter = Pi05ContractAdapter(resolver=resolver)
         task = _make_task()
         context = _make_context(
             original_instruction="冻结指令（来自 FixedDualVLAPlanner）"
         )
-        adapter.plan(task, _make_observation(), context)
+        adapter.plan(task, _make_observation(camera=camera), context)
 
     assert captured.get("instruction") == "冻结指令（来自 FixedDualVLAPlanner）"
 
 
-def test_task_instruction_fallback_when_original_is_none():
+def test_task_instruction_fallback_when_original_is_none(resolved_camera):
     """context.original_instruction 为 None 时回退到 task.instruction。"""
     captured: dict = {}
 
@@ -302,11 +340,12 @@ def test_task_instruction_fallback_when_original_is_none():
         captured["instruction"] = obs.instruction
         return _make_mock_canonical()
 
+    resolver, camera, _ = resolved_camera
     with patch.object(Pi05Executor, "infer", side_effect=capture_infer):
-        adapter = Pi05ContractAdapter()
+        adapter = Pi05ContractAdapter(resolver=resolver)
         task = _make_task()
         context = _make_context(original_instruction=None)
-        adapter.plan(task, _make_observation(), context)
+        adapter.plan(task, _make_observation(camera=camera), context)
 
     assert captured.get("instruction") == task.instruction
 
@@ -344,4 +383,4 @@ def test_arm_a_rgb_not_decodable_raises_executor_error():
         adapter.plan(_make_task(), observation, _make_context())
 
     assert exc_info.value.code == FailureCode.EXECUTOR_BAD_RESPONSE
-    assert "decode" in str(exc_info.value)
+    assert "frozen ImageReference" in str(exc_info.value)

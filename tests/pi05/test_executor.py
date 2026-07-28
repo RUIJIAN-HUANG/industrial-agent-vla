@@ -35,8 +35,11 @@ from services.pi05.src.pi05 import (
     SOURCE_POLICY,
     SPACE_ID,
     Pi05Executor,
+    InferenceError,
+    _compute_dir_sha,
     _image_checksum,
     _prep_image,
+    _sha256_file,
 )
 
 # 影响执行器初始化的环境变量全集（fixture 统一清空，保证初态确定）
@@ -48,6 +51,7 @@ _PI05_ENV_VARS = (
     "PI05_WS_PORT",
     "PI05_NORM_STATS_PATH",
     "PI05_CHECKPOINT_SHA",
+    "PI05_NORM_STATS_SHA",
 )
 
 
@@ -112,6 +116,37 @@ def _make_minimal_obs(step_id: int = 1, episode_id: str = "mini") -> ObsPacket:
     )
 
 
+def _configure_real_assets(monkeypatch, tmp_path) -> tuple[str, str]:
+    """Create tiny local assets and configure their exact declared digests."""
+
+    checkpoint = tmp_path / "checkpoint"
+    (checkpoint / "params").mkdir(parents=True)
+    (checkpoint / "params" / "part-000").write_bytes(b"weights-a")
+    (checkpoint / "metadata.json").write_text('{"format":"test"}', encoding="utf-8")
+    norm_stats = tmp_path / "norm_stats.json"
+    norm_stats.write_text('{"norm_stats":{}}', encoding="utf-8")
+
+    checkpoint_sha = _compute_dir_sha(checkpoint)
+    norm_sha = _sha256_file(norm_stats)
+    monkeypatch.setenv("PI05_MODE", "real")
+    monkeypatch.setenv("PI05_CONFIG_NAME", "pi05_industrial")
+    monkeypatch.setenv("PI05_CHECKPOINT_DIR", str(checkpoint))
+    monkeypatch.setenv("PI05_NORM_STATS_PATH", str(norm_stats))
+    monkeypatch.setenv("PI05_CHECKPOINT_SHA", checkpoint_sha)
+    monkeypatch.setenv("PI05_NORM_STATS_SHA", norm_sha)
+    return checkpoint_sha, norm_sha
+
+
+def _make_real_executor(monkeypatch, tmp_path, *, actions: np.ndarray) -> Pi05Executor:
+    _configure_real_assets(monkeypatch, tmp_path)
+    fake_policy = MagicMock()
+    fake_policy.client_type = "local"
+    fake_policy.checkpoint_dir = str(tmp_path / "checkpoint")
+    fake_policy.infer.return_value = {"actions": actions}
+    with patch.object(pi05_mod, "make_policy_client", return_value=fake_policy):
+        return Pi05Executor()
+
+
 # ---------------------------------------------------------------------------
 # 用例 1：执行器初始化
 # ---------------------------------------------------------------------------
@@ -131,7 +166,7 @@ def test_executor_init(mock_executor):
     hc = mock_executor.health_check()
     assert hc["mode"] == "dummy"
     assert hc["policy_type"] == "mock"
-    assert hc["config_name"] == "pi05_droid"
+    assert hc["config_name"] == "pi05_industrial"
     assert hc["vram_usage_mb"] is None
     assert hc["last_latency_ms"] is None
 
@@ -144,23 +179,23 @@ def test_executor_init_requires_explicit_mode(clean_pi05_env, monkeypatch):
         Pi05Executor()
 
 
-def test_executor_init_real_mode_degrades_when_no_client(clean_pi05_env, monkeypatch):
+def test_executor_init_real_mode_degrades_when_no_client(
+    clean_pi05_env, monkeypatch, tmp_path
+):
     """用例1补充：real 模式无可用策略客户端时 fail-closed，禁止降级 Mock。"""
-    monkeypatch.setenv("PI05_MODE", "real")
+    _configure_real_assets(monkeypatch, tmp_path)
     with pytest.raises(RuntimeError, match="禁止降级到 Dummy"):
         with patch.object(pi05_mod, "make_policy_client", return_value=None):
             Pi05Executor()
 
 
-def test_executor_init_real_mode_mounts_client(clean_pi05_env, monkeypatch):
+def test_executor_init_real_mode_mounts_client(clean_pi05_env, monkeypatch, tmp_path):
     """用例1补充：real 模式挂载 mock 策略客户端——验证挂载、类型、checkpoint_sha。"""
-    monkeypatch.setenv("PI05_MODE", "real")
-    monkeypatch.setenv("PI05_CHECKPOINT_DIR", "/fake/ckpt")
-    monkeypatch.setenv("PI05_CHECKPOINT_SHA", "deadbeefcafef00d")
+    checkpoint_sha, norm_sha = _configure_real_assets(monkeypatch, tmp_path)
 
     fake_policy = MagicMock()
     fake_policy.client_type = "local"
-    fake_policy.checkpoint_dir = "/fake/ckpt"
+    fake_policy.checkpoint_dir = str(tmp_path / "checkpoint")
     with patch.object(pi05_mod, "make_policy_client", return_value=fake_policy):
         ex = Pi05Executor()
 
@@ -168,8 +203,54 @@ def test_executor_init_real_mode_mounts_client(clean_pi05_env, monkeypatch):
     assert ex._policy_type == "local"
     assert ex._policy is fake_policy
     # 显式指定的 checkpoint_sha 被记录，不再走 _compute_dir_sha
-    assert ex._checkpoint_sha == "deadbeefcafef00d"
-    assert ex.health_check()["checkpoint_sha"] == "deadbeefcafef00d"
+    assert ex._checkpoint_sha == checkpoint_sha
+    assert ex._norm_stats_sha == norm_sha
+    assert ex.health_check()["checkpoint_sha"] == checkpoint_sha
+
+
+def test_checkpoint_manifest_sha_is_complete_and_mount_path_independent(tmp_path):
+    """目录摘要覆盖全部文件，且相同内容挂载到不同根路径时摘要一致。"""
+
+    left = tmp_path / "mount-a" / "checkpoint"
+    right = tmp_path / "mount-b" / "checkpoint"
+    for root in (left, right):
+        for index in range(64):
+            target = root / f"shard-{index // 8}" / f"part-{index:03d}.bin"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(f"payload-{index}".encode())
+
+    left_sha = _compute_dir_sha(left)
+    assert left_sha == _compute_dir_sha(right)
+
+    # 修改第 64 个文件可证明实现没有旧的“只取前 50 个文件”捷径。
+    (right / "shard-7" / "part-063.bin").write_bytes(b"tampered")
+    assert _compute_dir_sha(right) != left_sha
+
+
+def test_real_mode_declared_checkpoint_sha_mismatch_fails_closed(
+    clean_pi05_env, monkeypatch, tmp_path
+):
+    """声明摘要与完整 checkpoint 内容不一致时，模型客户端不得初始化。"""
+
+    _configure_real_assets(monkeypatch, tmp_path)
+    monkeypatch.setenv("PI05_CHECKPOINT_SHA", f"sha256:{'0' * 64}")
+    with patch.object(pi05_mod, "make_policy_client") as make_client:
+        with pytest.raises(RuntimeError, match="checkpoint SHA 不匹配"):
+            Pi05Executor()
+    make_client.assert_not_called()
+
+
+def test_real_mode_declared_norm_sha_mismatch_fails_closed(
+    clean_pi05_env, monkeypatch, tmp_path
+):
+    """声明 norm stats 摘要不一致时同样 fail-closed。"""
+
+    _configure_real_assets(monkeypatch, tmp_path)
+    monkeypatch.setenv("PI05_NORM_STATS_SHA", f"sha256:{'f' * 64}")
+    with patch.object(pi05_mod, "make_policy_client") as make_client:
+        with pytest.raises(RuntimeError, match="norm stats SHA 不匹配"):
+            Pi05Executor()
+    make_client.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -184,8 +265,7 @@ def test_process_observation(mock_executor, sample_observation):
     example = mock_executor._build_example(sample_observation)
 
     # openpi example 关键字段存在
-    assert "observation/exterior_image_1_left" in example
-    assert "observation/wrist_image_left" in example
+    assert "observation/image" in example
     assert "observation/state" in example
     assert example["prompt"] == sample_observation.instruction
 
@@ -195,7 +275,7 @@ def test_process_observation(mock_executor, sample_observation):
     np.testing.assert_array_equal(state, sample_observation.robot_state)
 
     # 前视 RGB 预处理：uint8 / HWC（ndim=3, shape[2]=3）/ 连续内存
-    rgb = example["observation/exterior_image_1_left"]
+    rgb = example["observation/image"]
     assert rgb.dtype == np.uint8
     assert rgb.ndim == 3  # HWC 而非 CHW
     assert rgb.shape[2] == 3  # 3 通道
@@ -203,16 +283,16 @@ def test_process_observation(mock_executor, sample_observation):
     # 像素与输入完全一致：无翻转、无通道交换、无 resize
     np.testing.assert_array_equal(rgb, sample_observation.rgb_front)
 
-    # 腕部图同样保持 HWC/RGB
-    wrist = example["observation/wrist_image_left"]
-    assert wrist.dtype == np.uint8
-    assert wrist.ndim == 3 and wrist.shape[2] == 3
-    np.testing.assert_array_equal(wrist, sample_observation.rgb_wrist)
+    # 冻结三相机方案不使用腕部流；即使 ObsPacket 带有旧字段也不得注入模型输入。
+    assert "observation/wrist_image_left" not in example
+    assert "observation/exterior_image_1_left" not in example
 
 
-def test_real_mode_without_wrist_omits_policy_input(clean_pi05_env, monkeypatch):
+def test_real_mode_without_wrist_omits_policy_input(
+    clean_pi05_env, monkeypatch, tmp_path
+):
     """Real + wrist_image=None 时不得向 policy 注入全零腕部图。"""
-    monkeypatch.setenv("PI05_MODE", "real")
+    _configure_real_assets(monkeypatch, tmp_path)
     captured: dict = {}
 
     def fake_infer(example):
@@ -221,7 +301,7 @@ def test_real_mode_without_wrist_omits_policy_input(clean_pi05_env, monkeypatch)
 
     fake_policy = MagicMock()
     fake_policy.client_type = "local"
-    fake_policy.checkpoint_dir = None
+    fake_policy.checkpoint_dir = str(tmp_path / "checkpoint")
     fake_policy.infer.side_effect = fake_infer
     with patch.object(pi05_mod, "make_policy_client", return_value=fake_policy):
         ex = Pi05Executor()
@@ -301,52 +381,68 @@ def test_action_chunking(mock_executor, sample_observation):
     assert np.all(np.abs(chunk.actions[:, 3:6]) <= MAX_ROTATION_RAD)
 
 
-def test_action_chunking_pads_short_dim(clean_pi05_env, monkeypatch):
-    """用例3补充：模型输出不足 7 维时适配器 pad 0（方案书 §3.3：不足维度由适配器 padding）。"""
-    monkeypatch.setenv("PI05_MODE", "real")
-    fake_policy = MagicMock()
-    fake_policy.client_type = "local"
-    fake_policy.checkpoint_dir = None
-    fake_policy.infer.return_value = {
-        "actions": np.full((4, 5), 0.001, dtype=np.float32)
-    }
-    with patch.object(pi05_mod, "make_policy_client", return_value=fake_policy):
-        ex = Pi05Executor()
+@pytest.mark.parametrize(
+    "bad_actions",
+    [
+        np.full((4, 5), 0.001, dtype=np.float32),
+        np.full((4, 8), 0.001, dtype=np.float32),
+        np.zeros(7, dtype=np.float32),
+    ],
+    ids=["short-dimension", "long-dimension", "one-dimensional"],
+)
+def test_action_chunking_rejects_padding_truncation_and_promotion(
+    clean_pi05_env, monkeypatch, tmp_path, bad_actions
+):
+    """模型输出必须原生为 N×7；禁止补零、截断或自动升维。"""
 
-    chunk = ex.infer(_make_minimal_obs(step_id=1))
-    assert chunk.actions.shape == (4, ACTION_DIM)
-    # 后 2 维被 pad 为 0
-    np.testing.assert_array_equal(chunk.actions[:, 5:], 0.0)
+    ex = _make_real_executor(monkeypatch, tmp_path, actions=bad_actions)
+    with pytest.raises(InferenceError, match="invalid action shape"):
+        ex.infer(_make_minimal_obs(step_id=1))
+    assert ex._pending_chunk is None
 
 
-def test_action_chunking_promotes_1d(clean_pi05_env, monkeypatch):
-    """用例3补充：1D 动作输入升维为 [1, 7]。"""
-    monkeypatch.setenv("PI05_MODE", "real")
-    fake_policy = MagicMock()
-    fake_policy.client_type = "local"
-    fake_policy.checkpoint_dir = None
-    fake_policy.infer.return_value = {
-        "actions": np.array([0.001, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0], dtype=np.float32)
-    }
-    with patch.object(pi05_mod, "make_policy_client", return_value=fake_policy):
-        ex = Pi05Executor()
+@pytest.mark.parametrize("step_count", [0, 33])
+def test_action_chunking_rejects_step_count_outside_contract(
+    clean_pi05_env, monkeypatch, tmp_path, step_count
+):
+    """动作块长度只能是 1..32。"""
 
-    chunk = ex.infer(_make_minimal_obs(step_id=2))
-    assert chunk.actions.shape == (1, ACTION_DIM)
-    np.testing.assert_allclose(chunk.actions[0, 6], 1.0)  # 夹爪 1.0 保留
+    ex = _make_real_executor(
+        monkeypatch,
+        tmp_path,
+        actions=np.zeros((step_count, ACTION_DIM), dtype=np.float32),
+    )
+    with pytest.raises(InferenceError, match="empty|expected 1..32"):
+        ex.infer(_make_minimal_obs(step_id=2))
+    assert ex._pending_chunk is None
+
+
+@pytest.mark.parametrize("step_count", [1, 32])
+def test_action_chunking_accepts_contract_boundaries(
+    clean_pi05_env, monkeypatch, tmp_path, step_count
+):
+    """N×7 在 N=1 和 N=32 两个边界均保持原形状。"""
+
+    ex = _make_real_executor(
+        monkeypatch,
+        tmp_path,
+        actions=np.zeros((step_count, ACTION_DIM), dtype=np.float32),
+    )
+    chunk = ex.infer(_make_minimal_obs(step_id=3))
+    assert chunk.actions.shape == (step_count, ACTION_DIM)
 
 
 # ---------------------------------------------------------------------------
 # 用例 4：归一化/反归一化（透传 + 无双重反归一化）
 # ---------------------------------------------------------------------------
-def test_norm_stats_no_double_denormalization(clean_pi05_env, monkeypatch):
+def test_norm_stats_no_double_denormalization(clean_pi05_env, monkeypatch, tmp_path):
     """用例4：适配器透传，不做二次反归一化（方案书 §3.3.1 Para185/186）。
 
     归一化（state 减 mean 除 std）由 openpi input_transform 在 policy.infer 内完成；
     反归一化（输出乘 std 加 mean）由 openpi output_transform 在 policy.infer 内完成。
     适配器只透传原始 state、直接使用已反归一化的 actions，严禁二次反归一化。
     """
-    monkeypatch.setenv("PI05_MODE", "real")
+    _configure_real_assets(monkeypatch, tmp_path)
 
     # 已知 norm_stats（仅用于断言适配器不应用它们做归一化/反归一化）
     mean = np.array([0.1, -0.2, 0.0, 0.3, -0.1, 0.2, 0.5], dtype=np.float32)
@@ -366,7 +462,7 @@ def test_norm_stats_no_double_denormalization(clean_pi05_env, monkeypatch):
 
     fake_policy = MagicMock()
     fake_policy.client_type = "local"
-    fake_policy.checkpoint_dir = None
+    fake_policy.checkpoint_dir = str(tmp_path / "checkpoint")
     fake_policy.infer.side_effect = fake_infer
     with patch.object(pi05_mod, "make_policy_client", return_value=fake_policy):
         ex = Pi05Executor()
@@ -469,16 +565,16 @@ def test_out_of_bounds_rejection(mock_executor):
 # ---------------------------------------------------------------------------
 # 用例 7：异常处理与重置
 # ---------------------------------------------------------------------------
-def test_exception_during_inference_propagates(clean_pi05_env, monkeypatch):
+def test_exception_during_inference_propagates(clean_pi05_env, monkeypatch, tmp_path):
     """用例7·异常处理：real 模式推理抛出异常时不被吞没，上抛交由总 Agent 处理。
 
     方案书 §3.3.1 Para186：失败切换由总 Agent 触发（cancel_pending_chunk + 切换执行器），
     适配器不静默吞掉推理异常，保证 fail-fast。
     """
-    monkeypatch.setenv("PI05_MODE", "real")
+    _configure_real_assets(monkeypatch, tmp_path)
     fake_policy = MagicMock()
     fake_policy.client_type = "local"
-    fake_policy.checkpoint_dir = None
+    fake_policy.checkpoint_dir = str(tmp_path / "checkpoint")
     fake_policy.infer.side_effect = RuntimeError("openpi inference boom")
     with patch.object(pi05_mod, "make_policy_client", return_value=fake_policy):
         ex = Pi05Executor()
@@ -561,36 +657,40 @@ def test_descriptor_dummy_without_sha_env(clean_pi05_env, monkeypatch):
     )
 
 
-def test_descriptor_real_mode_requires_sha(clean_pi05_env, monkeypatch):
-    """用例8补充：real 模式缺少 SHA 环境变量时 descriptor 抛 ValueError。
+def test_real_mode_requires_declared_sha_before_client_init(
+    clean_pi05_env, monkeypatch, tmp_path
+):
+    """real 模式缺少声明 SHA 时必须在模型加载前 fail-closed。"""
 
-    生产 real 模式必须配置 PI05_CHECKPOINT_SHA / PI05_NORM_STATS_SHA。
-    """
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    (checkpoint / "weights.bin").write_bytes(b"weights")
+    norm_stats = tmp_path / "norm.json"
+    norm_stats.write_text("{}", encoding="utf-8")
     monkeypatch.setenv("PI05_MODE", "real")
-    fake_policy = MagicMock()
-    fake_policy.client_type = "local"
-    fake_policy.checkpoint_dir = None
-    with patch.object(pi05_mod, "make_policy_client", return_value=fake_policy):
-        ex = Pi05Executor()
+    monkeypatch.setenv("PI05_CONFIG_NAME", "pi05_industrial")
+    monkeypatch.setenv("PI05_CHECKPOINT_DIR", str(checkpoint))
+    monkeypatch.setenv("PI05_NORM_STATS_PATH", str(norm_stats))
+    with patch.object(pi05_mod, "make_policy_client") as make_client:
+        with pytest.raises(RuntimeError, match="PI05_CHECKPOINT_SHA"):
+            Pi05Executor()
+    make_client.assert_not_called()
 
-    with pytest.raises(ValueError, match="PI05_CHECKPOINT_SHA"):
-        _ = ex.descriptor
 
+def test_descriptor_with_valid_local_asset_sha(clean_pi05_env, monkeypatch, tmp_path):
+    """用例8补充：descriptor 返回实际读取的本地资产摘要。"""
 
-def test_descriptor_with_valid_sha_env(clean_pi05_env, monkeypatch):
-    """用例8补充：设置合规 SHA 环境变量后 descriptor 正常返回。"""
+    norm_stats = tmp_path / "norm.json"
+    norm_stats.write_text("{}", encoding="utf-8")
     monkeypatch.setenv("PI05_MODE", "dummy")
     monkeypatch.setenv(
         "PI05_CHECKPOINT_SHA",
         "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     )
-    monkeypatch.setenv(
-        "PI05_NORM_STATS_SHA",
-        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-    )
+    monkeypatch.setenv("PI05_NORM_STATS_PATH", str(norm_stats))
     with patch.object(pi05_mod, "make_policy_client", return_value=None):
         ex = Pi05Executor()
 
     desc = ex.descriptor
     assert "aaaa" in desc.checkpoint_sha
-    assert "bbbb" in desc.norm_stats_sha
+    assert desc.norm_stats_sha == _sha256_file(norm_stats)

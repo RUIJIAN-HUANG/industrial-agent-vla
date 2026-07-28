@@ -9,68 +9,16 @@ services/pi05/src/pi05.py 的 Pi05Executor.infer()（体系A），再把 Canonic
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Mapping
-from typing import Any
 
 import numpy as np
 
-from services.pi05.src.observation import (
-    ObsPacket,
-    image_reference_to_placeholder,
-    is_image_reference,
-)
-from services.pi05.src.pi05 import Pi05Executor
 from industrial_agent.contracts import ActionChunk, Observation, TaskSchema
-from industrial_agent.errors import ExecutorError, FailureCode
+from industrial_agent.errors import ExecutorError, FailureCode, ImageCasError
 from industrial_agent.executor import ExecutionContext, ExecutorDescriptor
-
-try:
-    from configs.pi05.train_config import STATE_DIM  # type: ignore
-except Exception:
-    STATE_DIM = 8  # Franka 7-DOF + 1 gripper
-
-logger = logging.getLogger("pi05.contract_adapter")
-
-
-def _decode_image(raw: Any) -> np.ndarray | None:
-    """容错解码图像为 numpy uint8[H,W,3]；无法识别返回 None。
-
-    支持：numpy 数组直通；ImageReference dict（无像素→None，调用方应提前用
-    image_reference_to_placeholder 创建占位）；dict 内嵌 numpy 或 base64 data；
-    bytes/str 走 base64+PIL。
-    """
-    if raw is None:
-        return None
-    if isinstance(raw, np.ndarray):
-        return raw
-    if isinstance(raw, Mapping):
-        # ImageReference 不含原始像素，返回 None
-        if is_image_reference(raw):
-            return None
-        for key in ("data", "array", "image"):
-            child = raw.get(key)
-            if isinstance(child, np.ndarray):
-                return child
-        raw = raw.get("data") or raw.get("b64")
-        if raw is None:
-            return None
-    if isinstance(raw, (bytes, bytearray, str)):
-        try:
-            import base64
-            import io
-
-            from PIL import Image  # type: ignore
-
-            data = raw.encode("ascii") if isinstance(raw, str) else bytes(raw)
-            try:
-                data = base64.b64decode(data, validate=True)
-            except Exception:
-                pass  # 可能本身就是 raw image bytes
-            return np.array(Image.open(io.BytesIO(data)).convert("RGB"), dtype=np.uint8)
-        except Exception:
-            return None
-    return None
+from industrial_agent.service_images import CasRequestImageResolver
+from services.pi05.src.observation import ObsPacket, is_image_reference
+from services.pi05.src.pi05 import Pi05Executor
 
 
 class Pi05ContractAdapter:
@@ -80,8 +28,14 @@ class Pi05ContractAdapter:
     调 Pi05Executor.infer()，再把 CanonicalActionChunk 包成 ActionChunk。
     """
 
-    def __init__(self, executor: Pi05Executor | None = None) -> None:
+    def __init__(
+        self,
+        executor: Pi05Executor | None = None,
+        *,
+        resolver: CasRequestImageResolver | None = None,
+    ) -> None:
         self._executor: Pi05Executor = executor or Pi05Executor()
+        self._resolver = resolver
 
     @property
     def descriptor(self) -> ExecutorDescriptor:
@@ -108,33 +62,43 @@ class Pi05ContractAdapter:
         if not isinstance(robot, Mapping):
             robot = {}
 
-        # ---- arm_a_rgb（框架固定 camera_key，不使用 camera.full_image）----
+        # ---- arm_a_rgb：只接受冻结 ImageReference，并统一通过公共 CAS resolver ----
         raw_front = camera.get("arm_a_rgb")
-        if raw_front is None:
+        if not is_image_reference(raw_front):
             raise ExecutorError(
                 FailureCode.EXECUTOR_BAD_RESPONSE,
-                "camera.arm_a_rgb is required (Pi05Adapter._phase_vla_inputs "
-                "guarantees this field; observation may be corrupted)",
+                "camera.arm_a_rgb must be a frozen ImageReference",
             )
-        if is_image_reference(raw_front):
-            # ImageReference 不含原始像素 → 零图占位（dummy 模式不依赖像素内容）
-            rgb_front = image_reference_to_placeholder(raw_front)
-        else:
-            rgb_front = _decode_image(raw_front)
-        if rgb_front is None:
+        if self._resolver is None:
             raise ExecutorError(
-                FailureCode.EXECUTOR_BAD_RESPONSE,
-                "camera.arm_a_rgb could not be decoded to uint8[H,W,3]",
+                FailureCode.CAS_UNAVAILABLE,
+                "Pi05ContractAdapter requires the shared CasRequestImageResolver",
+                retryable=True,
             )
 
-        # ---- wrist_image（ImageReference 或 null）----
+        # 冻结三相机配置没有腕部相机；resolver 会拒绝非 null wrist_image。
         raw_wrist = camera.get("wrist_image")
-        if raw_wrist is None:
-            rgb_wrist = None
-        elif is_image_reference(raw_wrist):
-            rgb_wrist = image_reference_to_placeholder(raw_wrist)
-        else:
-            rgb_wrist = _decode_image(raw_wrist)
+        request = {
+            "executor": "pi05",
+            "model_input": {
+                "observation": {
+                    "camera": {
+                        "full_image": raw_front,
+                        "wrist_image": raw_wrist,
+                    }
+                }
+            },
+        }
+        try:
+            resolved = self._resolver.resolve_vla_request(request)
+        except ImageCasError as exc:
+            raise ExecutorError(
+                exc.code,
+                str(exc),
+                retryable=exc.retryable,
+            ) from exc
+        rgb_front = resolved.full_image.rgb
+        rgb_wrist = None
 
         # ---- arm_a.state（框架 _phase_vla_inputs arm_key="arm_a"）----
         arm_a = robot.get("arm_a", {})
@@ -142,18 +106,21 @@ class Pi05ContractAdapter:
             arm_a = {}
         robot_raw = arm_a.get("state", arm_a.get("tcp_pose_m_rad"))
         if robot_raw is None:
-            logger.warning(
-                "robot.arm_a state is missing, falling back to zero state "
-                "vector of dim %d (task_id=%s step=%d)",
-                STATE_DIM,
-                task.task_id,
-                context.step_id,
+            raise ExecutorError(
+                FailureCode.EXECUTOR_BAD_RESPONSE,
+                "robot.arm_a.state is required; zero-state fallback is forbidden",
             )
-        robot_state = (
-            np.asarray(robot_raw, dtype=np.float32)
-            if robot_raw is not None
-            else np.zeros(STATE_DIM, dtype=np.float32)
-        )
+        robot_state = np.asarray(robot_raw, dtype=np.float32)
+        if robot_state.ndim != 1 or robot_state.size == 0:
+            raise ExecutorError(
+                FailureCode.EXECUTOR_BAD_RESPONSE,
+                "robot.arm_a.state must be a non-empty one-dimensional vector",
+            )
+        if not np.all(np.isfinite(robot_state)):
+            raise ExecutorError(
+                FailureCode.EXECUTOR_BAD_RESPONSE,
+                "robot.arm_a.state contains NaN or Infinity",
+            )
 
         # 优先使用 context.original_instruction（FixedDualVLAPlanner 设定的冻结指令）
         # 回退 task.instruction（方案书 executor.py Pi05Adapter.plan() L771）

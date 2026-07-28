@@ -7,14 +7,11 @@
 
 from __future__ import annotations
 
-import logging
 import re
 from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
-
-logger = logging.getLogger("pi05.observation")
 
 # ── ImageReference 约束（对齐 schemas/executor-infer.schema.json #$defs/imageReference）──
 IMAGE_REF_REQUIRED_FIELDS = frozenset(
@@ -90,40 +87,6 @@ def validate_image_reference(
             )
 
     return value
-
-
-def image_reference_to_placeholder(image_ref: dict[str, Any]) -> np.ndarray:
-    """从 ImageReference 尺寸创建零图占位 uint8[H,W,3]。
-
-    适用于 dummy 模式：框架传入 ImageReference 不含原始像素，
-    Pi05Executor._infer_mock 不依赖像素内容，按尺寸创建零图即可。
-    真实部署需在调用前解析 CAS URI 获取真实像素。
-
-    单边尺寸超过 MAX_IMAGE_DIMENSION (4096) 时记录 warning 并钳制，
-    防止恶意超大请求导致内存溢出。
-    """
-    width = image_ref.get("width", 640)
-    height = image_ref.get("height", 480)
-    # 类型/值域校验（对齐 _canonical_image_reference 的正整数约束）
-    if isinstance(width, bool) or not isinstance(width, int):
-        width = 640
-    if isinstance(height, bool) or not isinstance(height, int):
-        height = 640
-    if width < 1:
-        width = 640
-    if height < 1:
-        height = 480
-    if width > MAX_IMAGE_DIMENSION:
-        logger.warning(
-            "ImageReference width=%d 超过上限 %d，钳制", width, MAX_IMAGE_DIMENSION
-        )
-        width = MAX_IMAGE_DIMENSION
-    if height > MAX_IMAGE_DIMENSION:
-        logger.warning(
-            "ImageReference height=%d 超过上限 %d，钳制", height, MAX_IMAGE_DIMENSION
-        )
-        height = MAX_IMAGE_DIMENSION
-    return np.zeros((height, width, 3), dtype=np.uint8)
 
 
 @dataclass

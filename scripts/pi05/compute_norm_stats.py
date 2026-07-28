@@ -15,9 +15,10 @@
 - §8.5 model_manifest.yaml：norm stats SHA 用于资产追溯。
 
 字段名 / 维度唯一真相源：configs/pi05/train_config.py
-  - Pi0Config.action_dim = 7（方案书 §3.4）
+  - CANONICAL_ACTION_DIM = 7（方案书 §3.4）
+  - Pi0Config.action_dim = 32，仅用于兼容 pi05_base 投影层与模型内部 padding
   - 统计键严格沿用官方 openpi scripts/compute_norm_stats.py：["state", "actions"]
-  - state 维度由数据决定（convert_openpi.py DEFAULT_STATE_DIM=8，Franka 7-DOF+gripper）
+  - state 维度由数据决定（convert_openpi.py DEFAULT_STATE_DIM=7，TCP pose 6D + gripper）
 
 输出 JSON Schema（与 src/openpi/shared/normalize.py 的 NormStats 100% 一致）：
 {
@@ -115,7 +116,7 @@ except Exception:
 # ---------------------------------------------------------------------------
 # 常量（维度 / 字段名严格以 train_config.py 为准）
 # ---------------------------------------------------------------------------
-# action_dim 源：configs/pi05/train_config.py -> Pi0Config(action_dim=7)
+# action_dim 源：configs/pi05/train_config.py -> CANONICAL_ACTION_DIM=7
 # 默认 7；真正值在 main() 中由 _load_action_dim_from_train_config() 覆写
 # （延迟到 main() 是为了在 --quiet 模式下先调整日志级别，避免泄漏进度信息）。
 # C1 修复：state_dim 不再硬编码，统一从 train_config.STATE_DIM 读取。
@@ -177,17 +178,15 @@ def _load_train_config_module() -> Any:
 
 
 def _load_action_dim_from_train_config() -> int:
-    """从缓存 train_config 模块读取 Pi0Config.action_dim（红线：维度严格按 train_config）。"""
+    """读取归一化前的 canonical action_dim，而非 32-D 模型 padding 维度。"""
     mod = _load_train_config_module()
     if mod is None:
         logger.warning("train_config 不可用，action_dim 回退到 7")
         return 7
     try:
-        cfg = getattr(mod, "PI05_INDUSTRIAL_CONFIG", None)
-        if cfg is not None and getattr(cfg, "model", None) is not None:
-            dim = int(getattr(cfg.model, "action_dim", 7))
-            logger.info("从 train_config.py 读取 action_dim=%d", dim)
-            return dim
+        dim = int(getattr(mod, "CANONICAL_ACTION_DIM", 7))
+        logger.info("从 train_config.py 读取 canonical action_dim=%d", dim)
+        return dim
     except Exception as e:
         logger.warning("读取 action_dim 失败，回退到 7: %s", e)
     return 7
@@ -196,15 +195,15 @@ def _load_action_dim_from_train_config() -> int:
 def _load_state_dim_from_train_config() -> int:
     """从缓存 train_config 模块读取 STATE_DIM（C1 修复：唯一真相源）。
 
-    train_config.STATE_DIM 为 state 维度唯一定义，默认 8（Franka 7-DOF+gripper）。
+    train_config.STATE_DIM 为 state 维度唯一定义，默认 7（TCP pose 6D + gripper）。
     """
     mod = _load_train_config_module()
     if mod is None:
-        return 8
+        return 7
     try:
-        return int(getattr(mod, "STATE_DIM", 8))
+        return int(getattr(mod, "STATE_DIM", 7))
     except Exception:
-        return 8
+        return 7
 
 
 def _resolve_output_path_from_config(config_name: str) -> Path:
@@ -494,7 +493,7 @@ def compute_sha256(path: Path) -> str:
 # Mock 数据生成（CPU 兼容验证，固定种子保证 SHA256 可复现）
 # ---------------------------------------------------------------------------
 def generate_mock_data(state_dim: int, action_dim: int) -> dict[str, np.ndarray]:
-    """生成合成随机数据，模拟 Franka 7-DOF+gripper 状态与 7 维动作。
+    """生成合成随机数据，模拟 TCP pose 6D + gripper 状态与 7 维动作。
 
     W3 修复：state_dim 与 action_dim 改为显式参数，消除对全局变量 ACTION_DIM
     的隐式时序依赖；调用方（main()）负责从 train_config 读取后传入。
@@ -513,15 +512,12 @@ def generate_mock_data(state_dim: int, action_dim: int) -> dict[str, np.ndarray]
     n_valid = 1000
     n_pad = 100
 
-    # state 维度：前 7 维关节角 Uniform(-pi, pi)，余下为夹爪/额外维度
+    # state 维度：前 6 维 TCP pose，最后一维为夹爪
     state_valid = np.zeros((n_valid, state_dim), dtype=np.float64)
-    state_valid[:, :7] = rng.uniform(-np.pi, np.pi, size=(n_valid, min(7, state_dim)))
-    if state_dim > 7:
-        # 夹爪位（若 state_dim>7，惯例最后一维为夹爪 binary）
-        state_valid[:, 7] = rng.integers(0, 2, size=n_valid).astype(np.float64)
-        # 额外维度（如有）置零
-        if state_dim > 8:
-            state_valid[:, 8:] = 0.0
+    pose_dims = min(6, state_dim)
+    state_valid[:, :pose_dims] = rng.uniform(-0.5, 0.5, size=(n_valid, pose_dims))
+    if state_dim >= 7:
+        state_valid[:, 6] = rng.integers(0, 2, size=n_valid).astype(np.float64)
 
     # actions 维度：前 6 维末端增量 Normal(0, 0.05)，最后一维夹爪 Bernoulli
     actions_valid = np.zeros((n_valid, action_dim), dtype=np.float64)

@@ -12,7 +12,10 @@
 #    - π0.5 推理依赖 JAX CUDA 后端，必须基于官方 CUDA 镜像
 #    - CUDA 12.4 与 jax[cuda12] 轮子 ABI 匹配，避免运行时报错
 # -----------------------------------------------------------------------------
-FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
+FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04@sha256:0a1cb6e7bd047a1067efe14efdf0276352d5ca643dfd77963dab1a4f05a003a4
+
+ARG OPENPI_COMMIT=15a9616a00943ada6c20a0f158e3adb39df2ccac
+LABEL org.opencontainers.image.openpi-revision="${OPENPI_COMMIT}"
 
 # -----------------------------------------------------------------------------
 # 2. 系统依赖
@@ -46,8 +49,8 @@ RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
 #    官方步骤：pip install uv
 #    uv 用于 uv sync 锁定 openpi 依赖并创建虚拟环境
 # -----------------------------------------------------------------------------
-RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir uv
+RUN pip install --no-cache-dir "pip==25.1.1" \
+    && pip install --no-cache-dir "uv==0.7.19"
 
 # -----------------------------------------------------------------------------
 # 4. clone openpi 仓库（含子模块）
@@ -56,7 +59,9 @@ RUN pip install --no-cache-dir --upgrade pip \
 #    镜像只保留代码与依赖定义，不打包模型权重与训练数据
 # -----------------------------------------------------------------------------
 ENV GIT_LFS_SKIP_SMUDGE=1
-RUN git clone --recurse-submodules https://github.com/Physical-Intelligence/openpi.git /workspace/openpi
+RUN git clone https://github.com/Physical-Intelligence/openpi.git /workspace/openpi \
+    && git -C /workspace/openpi checkout --detach "${OPENPI_COMMIT}" \
+    && git -C /workspace/openpi submodule update --init --recursive
 
 WORKDIR /workspace/openpi
 
@@ -67,15 +72,8 @@ WORKDIR /workspace/openpi
 #    - uv pip install -e .: 以可编辑模式安装 openpi 本体，便于后续 patch
 #    GIT_LFS_SKIP_SMUDGE=1 已在 ENV 设置，避免安装过程触发 LFS 拉取
 # -----------------------------------------------------------------------------
-RUN uv sync \
+RUN uv sync --frozen \
     && uv pip install -e .
-
-# -----------------------------------------------------------------------------
-# 6. 安装 GPU 版 JAX
-#    基础镜像已带 CUDA 12.4 + cuDNN，仅需 jax[cuda12] 轮子
-#    覆盖 openpi 默认安装的 CPU 版 jax（若 pyproject.toml 默认拉的是 CPU 版）
-# -----------------------------------------------------------------------------
-RUN uv pip install --upgrade "jax[cuda12]"
 
 # -----------------------------------------------------------------------------
 # 7. 复制本项目代码（角色 E 交付物）
@@ -110,12 +108,12 @@ ENV PYTHONPATH=/workspace/project:/workspace/project/src:${PYTHONPATH}
 #    msgpack 用于高性能序列化（与 openpi 官方兼容，fallback JSON）。
 #    numpy 已由 openpi 依赖树安装，此处不重复安装以避免版本冲突。
 # -----------------------------------------------------------------------------
-RUN /workspace/openpi/.venv/bin/pip install --no-cache-dir \
-    fastapi \
-    "uvicorn[standard]" \
-    jsonschema \
-    "Pillow>=10,<13" \
-    msgpack
+RUN uv pip install --python /workspace/openpi/.venv/bin/python \
+    "fastapi==0.116.1" \
+    "uvicorn[standard]==0.35.0" \
+    "jsonschema==4.25.0" \
+    "Pillow==11.3.0" \
+    "msgpack==1.1.1"
 
 # -----------------------------------------------------------------------------
 # 8. 运行时环境变量
@@ -139,6 +137,7 @@ RUN /workspace/openpi/.venv/bin/pip install --no-cache-dir \
 # -----------------------------------------------------------------------------
 ENV PI05_SERVICE_HOST=0.0.0.0 \
     PI05_SERVICE_PORT=8101 \
+    PI05_CONFIG_NAME=pi05_industrial \
     PI05_CHECKPOINT_SHA=sha256:0000000000000000000000000000000000000000000000000000000000000000 \
     PI05_NORM_STATS_SHA=sha256:0000000000000000000000000000000000000000000000000000000000000000 \
     INDUSTRIAL_AGENT_CAS_ROOT=/var/lib/industrial-agent/cas \

@@ -28,6 +28,7 @@ import logging
 import os
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -107,9 +108,6 @@ SPACE_ID = "eef_delta_xyz_axisangle_gripper_v1"
 FRAME_ID = "robot_base"
 EXPIRES_AFTER_MS = 1000  # 动作块超时丢弃（方案书 §3.4 动作过期）
 
-# 预分配零图占位，仅供显式 Dummy 模式使用
-_BLACK_640x480: np.ndarray = np.zeros((480, 640, 3), dtype=np.uint8)
-
 
 # ---------------------------------------------------------------------------
 # 图像预处理（委托 openpi transform；适配器只保证 RGB/dtype/方向不被破坏）
@@ -151,28 +149,46 @@ FIXED_TEST_IMAGE_CHECKSUM: str = _image_checksum(_prep_image(FIXED_TEST_IMAGE))
 # ---------------------------------------------------------------------------
 # 辅助函数
 # ---------------------------------------------------------------------------
-def _compute_dir_sha(path: str, max_files: int = 50) -> str:
-    """计算目录下文件的聚合 sha（用于 checkpoint_sha 标识，方案书 §7.2）。"""
-    if not path or not os.path.isdir(path):
-        return ""
-    h = hashlib.sha256()
-    count = 0
-    for root, _, files in os.walk(path):
-        for fn in sorted(files):
-            fp = os.path.join(root, fn)
-            try:
-                h.update(fp.encode())
-                with open(fp, "rb") as f:
-                    for chunk in iter(lambda: f.read(1 << 16), b""):
-                        h.update(chunk)
-                count += 1
-                if count >= max_files:
-                    break
-            except Exception:
-                continue
-        if count >= max_files:
-            break
-    return "sha256:" + h.hexdigest()
+def _sha256_file(path: str | Path) -> str:
+    """Hash every byte in one immutable asset file."""
+
+    asset = Path(path)
+    if not asset.is_file():
+        raise FileNotFoundError(f"asset file does not exist: {asset}")
+    digest = hashlib.sha256()
+    with asset.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1 << 20), b""):
+            digest.update(chunk)
+    return "sha256:" + digest.hexdigest()
+
+
+def _compute_dir_sha(path: str | Path) -> str:
+    """Compute a complete, path-independent checkpoint manifest digest.
+
+    The digest covers every regular file, its relative POSIX path, byte length and
+    content digest.  It is stable when the same checkpoint is mounted elsewhere and
+    deliberately has no file-count shortcut.
+    """
+
+    root = Path(path)
+    if not root.is_dir():
+        raise FileNotFoundError(f"checkpoint directory does not exist: {root}")
+    files = sorted(
+        (item for item in root.rglob("*") if item.is_file()),
+        key=lambda item: item.relative_to(root).as_posix(),
+    )
+    if not files:
+        raise ValueError(f"checkpoint directory is empty: {root}")
+
+    manifest = hashlib.sha256(b"industrial-agent-checkpoint-manifest-v1\0")
+    for item in files:
+        relative = item.relative_to(root).as_posix().encode("utf-8")
+        content_sha = bytes.fromhex(_sha256_file(item).removeprefix("sha256:"))
+        manifest.update(len(relative).to_bytes(8, "big"))
+        manifest.update(relative)
+        manifest.update(item.stat().st_size.to_bytes(8, "big"))
+        manifest.update(content_sha)
+    return "sha256:" + manifest.hexdigest()
 
 
 # ---------------------------------------------------------------------------
@@ -183,11 +199,10 @@ class Pi05Executor(BaseExecutor):
 
     支持 Mock（dummy）与真实（real）两种模式，通过环境变量 PI05_MODE 切换：
       - PI05_MODE=dummy|real（必须显式配置）
-      - PI05_CONFIG_NAME（默认 pi05_droid）
+      - PI05_CONFIG_NAME（real 模式固定 pi05_industrial）
       - PI05_CHECKPOINT_DIR（本地 checkpoint 路径）
-      - PI05_WS_HOST / PI05_WS_PORT（远程 WebSocket 服务）
-      - PI05_NORM_STATS_PATH（本项目 norm_stats 路径，仅用于 SHA 追溯）
-      - PI05_CHECKPOINT_SHA（显式指定 checkpoint sha）
+      - PI05_NORM_STATS_PATH（实际加载且校验的本项目 norm_stats 文件）
+      - PI05_CHECKPOINT_SHA / PI05_NORM_STATS_SHA（声明的完整资产摘要）
     """
 
     def __init__(self) -> None:
@@ -201,7 +216,9 @@ class Pi05Executor(BaseExecutor):
             raise ValueError(
                 f"未知 PI05_MODE={self.mode!r}；只允许显式配置 dummy 或 real"
             )
-        self.config_name: str = os.environ.get("PI05_CONFIG_NAME", "pi05_droid")
+        self.config_name: str = os.environ.get(
+            "PI05_CONFIG_NAME", "pi05_industrial"
+        ).strip()
         self.checkpoint_dir: str | None = os.environ.get("PI05_CHECKPOINT_DIR")
         self.ws_host: str | None = os.environ.get("PI05_WS_HOST")
         self.ws_port: str | None = os.environ.get("PI05_WS_PORT")
@@ -211,7 +228,7 @@ class Pi05Executor(BaseExecutor):
         self._policy: Any = None  # PolicyClient 实例（real 模式）
         self._policy_type: str | None = None  # "local" | "ws" | "mock"
         self._norm_stats_sha: str = ""
-        self._checkpoint_sha: str = os.environ.get("PI05_CHECKPOINT_SHA", "")
+        self._checkpoint_sha: str = os.environ.get("PI05_CHECKPOINT_SHA", "").strip()
         self._pending_chunk: np.ndarray | None = None  # 当前动作队列（切换时清空）
         self._pending_generated_step: int = -1
         self._current_episode_id: str | None = None
@@ -220,10 +237,11 @@ class Pi05Executor(BaseExecutor):
         self._state_lock = threading.Lock()  # 保护 _pending_chunk 并发读写
 
         # ---- 初始化 ----
-        self._load_norm_stats_sha()
         if self.mode == "real":
+            self._verify_real_configuration_and_assets()
             self._init_real_policy()
         else:
+            self._load_norm_stats_sha(required=False)
             self._init_mock_policy()
 
     # ===================== 模式初始化 =====================
@@ -241,6 +259,7 @@ class Pi05Executor(BaseExecutor):
         self._policy = make_policy_client(
             config_name=self.config_name,
             checkpoint_dir=self.checkpoint_dir,
+            norm_stats_path=self.norm_stats_path,
             ws_host=self.ws_host,
             ws_port=self.ws_port,
         )
@@ -251,9 +270,6 @@ class Pi05Executor(BaseExecutor):
             )
 
         self._policy_type = self._policy.client_type
-        # 本地客户端可从 checkpoint 目录计算 sha；远程客户端用环境变量指定
-        if not self._checkpoint_sha and self._policy.checkpoint_dir:
-            self._checkpoint_sha = _compute_dir_sha(self._policy.checkpoint_dir)
         logger.info(
             "【Real 模式·%s】策略客户端就绪 (sha=%s)",
             self._policy_type,
@@ -261,7 +277,7 @@ class Pi05Executor(BaseExecutor):
         )
 
     # ===================== norm_stats（仅 SHA 追溯） =====================
-    def _load_norm_stats_sha(self) -> None:
+    def _load_norm_stats_sha(self, *, required: bool = False) -> None:
         """记录本项目 norm_stats 的 SHA（方案书 §7.2：日志定位唯一统计资产）。
 
         反归一化由 openpi output_transform 在 policy.infer 内完成，使用 compute_norm_stats
@@ -269,19 +285,53 @@ class Pi05Executor(BaseExecutor):
         此处只读取 SHA 用于追溯。
         """
         path = self.norm_stats_path
-        if not path or not os.path.exists(path):
-            if self.mode == "real":
-                logger.warning(
-                    "未提供 PI05_NORM_STATS_PATH 或文件不存在，norm_stats_sha 为空"
-                    "（建议指向 compute_norm_stats 输出，用于 §7.2 追溯）。"
+        if not path or not os.path.isfile(path):
+            if required:
+                raise RuntimeError(
+                    "real 模式必须设置 PI05_NORM_STATS_PATH，且目标必须是 norm_stats 文件"
                 )
             return
-        try:
-            with open(path, "rb") as f:
-                self._norm_stats_sha = "sha256:" + hashlib.sha256(f.read()).hexdigest()
-            logger.info("记录 norm_stats SHA: %s (sha=%s)", path, self._norm_stats_sha)
-        except Exception as e:
-            logger.warning("norm_stats SHA 计算失败：%s", e)
+        self._norm_stats_sha = _sha256_file(path)
+        logger.info("记录 norm_stats SHA: %s (sha=%s)", path, self._norm_stats_sha)
+
+    def _verify_real_configuration_and_assets(self) -> None:
+        """Fail closed unless the frozen fine-tuned policy and assets are exact."""
+
+        if self.config_name != "pi05_industrial":
+            raise RuntimeError(
+                "real 模式只允许 PI05_CONFIG_NAME=pi05_industrial，"
+                f"当前值为 {self.config_name!r}"
+            )
+        if self.ws_host or self.ws_port:
+            raise RuntimeError(
+                "冻结 π0.5 服务禁止链式 WebSocket 模型代理；"
+                "必须在本服务中加载本地已校验 checkpoint"
+            )
+        if not self.checkpoint_dir or not os.path.isdir(self.checkpoint_dir):
+            raise RuntimeError(
+                "real 模式必须显式设置 PI05_CHECKPOINT_DIR，且目标必须是 checkpoint 目录"
+            )
+        declared_checkpoint_sha = os.environ.get("PI05_CHECKPOINT_SHA", "").strip()
+        declared_norm_sha = os.environ.get("PI05_NORM_STATS_SHA", "").strip()
+        if not is_pinned_artifact_digest(declared_checkpoint_sha):
+            raise RuntimeError("real 模式必须设置 PI05_CHECKPOINT_SHA=sha256:<64hex>")
+        if not is_pinned_artifact_digest(declared_norm_sha):
+            raise RuntimeError("real 模式必须设置 PI05_NORM_STATS_SHA=sha256:<64hex>")
+
+        actual_checkpoint_sha = _compute_dir_sha(self.checkpoint_dir)
+        if actual_checkpoint_sha != declared_checkpoint_sha:
+            raise RuntimeError(
+                "checkpoint SHA 不匹配："
+                f"declared={declared_checkpoint_sha} actual={actual_checkpoint_sha}"
+            )
+        self._checkpoint_sha = actual_checkpoint_sha
+
+        self._load_norm_stats_sha(required=True)
+        if self._norm_stats_sha != declared_norm_sha:
+            raise RuntimeError(
+                "norm stats SHA 不匹配："
+                f"declared={declared_norm_sha} actual={self._norm_stats_sha}"
+            )
 
     # ===================== 预处理 =====================
     def _build_example(self, obs: ObsPacket) -> dict:
@@ -290,24 +340,20 @@ class Pi05Executor(BaseExecutor):
         传原始 RGB（仅保证 uint8/HWC/RGB），resize/pad/normalize 由 openpi input_transform
         内部完成；prompt 传原文（不手动 tokenize）。
         """
-        example: dict[str, Any] = {
-            "observation/exterior_image_1_left": _prep_image(obs.rgb_front),  # 前视 RGB
+        # ``IndustrialLeRobotDataConfig`` uses this exact inference key.  The
+        # corresponding training converter emits dataset key ``image`` and the
+        # repack transform maps it to ``observation/image``.
+        return {
+            "observation/image": _prep_image(obs.rgb_front),
             "observation/state": np.asarray(obs.robot_state, dtype=np.float32),
-            "prompt": obs.instruction,  # 完整自然语言，不拆槽位
-            # ---- 通信字段（WebSocket 客户端透传至 openpi_service 构建 ObsPacket） ----
+            "prompt": obs.instruction,
+            # Legacy WebSocket transport metadata.  The frozen production path
+            # is HTTP + CAS; these fields are ignored by local OpenPI transforms.
             "episode_id": obs.episode_id,
             "step_id": obs.step_id,
             "timestamp_ns": obs.timestamp_ns,
             "runtime_flags": obs.runtime_flags,
         }
-        if obs.rgb_wrist is not None:
-            example["observation/wrist_image_left"] = _prep_image(obs.rgb_wrist)
-        elif self.mode == "dummy":
-            logger.warning("rgb_wrist 为空，使用黑图占位（pi05 通常需要腕部图）")
-            example["observation/wrist_image_left"] = _BLACK_640x480
-        else:
-            logger.info("real 模式 rgb_wrist 为空，省略腕部图输入键")
-        return example
 
     def _pixel_audit_if_test(self, obs: ObsPacket) -> None:
         """若传入固定测试图，校验预处理未破坏 RGB/方向/dtype（方案书 §7.5 image_pipeline）。"""
@@ -453,13 +499,15 @@ class Pi05Executor(BaseExecutor):
         raw = np.asarray(raw, dtype=np.float32)
         if raw.size == 0 or raw.ndim == 0:
             raise InferenceError("Policy returned empty or invalid actions")
-        if raw.ndim == 1:
-            raw = raw[None, :]
-        if raw.shape[1] < ACTION_DIM:
-            # 不足 7 维 pad 0（方案书 §3.3：不足维度由适配器 padding）
-            pad = np.zeros((raw.shape[0], ACTION_DIM - raw.shape[1]), dtype=np.float32)
-            raw = np.concatenate([raw, pad], axis=1)
-        actions_7 = raw[:, :ACTION_DIM]  # 裁维到前 7 维
+        if raw.ndim != 2 or raw.shape[1] != ACTION_DIM:
+            raise InferenceError(
+                f"Policy returned invalid action shape {raw.shape}; expected [N,{ACTION_DIM}]"
+            )
+        if raw.shape[0] < 1 or raw.shape[0] > 32:
+            raise InferenceError(
+                f"Policy returned {raw.shape[0]} steps; expected 1..32"
+            )
+        actions_7 = raw
         # 反归一化由 openpi output_transform 在 policy.infer 内完成（用本项目 compute_norm_stats，
         # 满足 §3.3.1 Para185/186），适配器不再二次反归一化。
         actions_7 = self._clip_actions(actions_7)  # 安全限幅
@@ -600,12 +648,12 @@ class Pi05Executor(BaseExecutor):
           instruction_interaction；action_contract_version="1.0"。
         - checkpoint_sha / norm_stats_sha 从环境变量 PI05_CHECKPOINT_SHA /
           PI05_NORM_STATS_SHA 读取，必须为完整 sha256:<64hex>。
-        - ★禁止使用 self._checkpoint_sha（hexdigest()[:16] 截断值，不符合契约）。
+        - 使用启动时全量重算并与声明值比对过的完整 SHA，不直接回显未校验环境变量。
         - 环境变量缺失或格式不符时，dummy 模式使用占位 SHA（不抛异常），
           real 模式抛出 ValueError（必须配置）。
         """
-        checkpoint_sha = os.environ.get("PI05_CHECKPOINT_SHA", "")
-        norm_stats_sha = os.environ.get("PI05_NORM_STATS_SHA", "")
+        checkpoint_sha = self._checkpoint_sha
+        norm_stats_sha = self._norm_stats_sha
         if not is_pinned_artifact_digest(checkpoint_sha):
             if self.mode == "real":
                 raise ValueError(
@@ -652,11 +700,18 @@ class Pi05Executor(BaseExecutor):
         - 构造完调 validate_contract() 自校验。
         """
         actions = np.asarray(canonical.actions, dtype=np.float32)
+        if actions.ndim != 2 or actions.shape[1] != ACTION_DIM:
+            raise ValueError(
+                f"CanonicalActionChunk.actions must be [N,{ACTION_DIM}], got {actions.shape}"
+            )
+        if actions.shape[0] < 1 or actions.shape[0] > 32:
+            raise ValueError(
+                f"CanonicalActionChunk.actions step count must be 1..32, got {actions.shape[0]}"
+            )
         # duration_ms 是传输元数据（非第 8 维模型输出），schema 要求 int∈[1,10000]；
         # 这里用固定 100ms 作为默认控制周期，与 HTTP 路径动态推导无冲突（两者都满足契约下限）。
         steps = tuple(
-            ActionStep.from_sequence(row[:7].tolist(), duration_ms=100)
-            for row in actions
+            ActionStep.from_sequence(row.tolist(), duration_ms=100) for row in actions
         )
         chunk = ActionChunk(
             contract_version=ACTION_CONTRACT_VERSION,
