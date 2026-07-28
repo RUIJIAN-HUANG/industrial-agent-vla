@@ -113,6 +113,7 @@ python3 -m unittest tests.test_scene_layout -v
 
 ```bash
 export ISAAC_SIM_ROOT=/你的/isaacsim/实际路径
+export EXPECTED_GIT_SHA="$(git rev-parse HEAD)"
 bash scripts/run_g0_linux.sh
 ```
 
@@ -167,6 +168,7 @@ ERROR: Isaac Sim python.sh is not executable
 
 ```bash
 export ISAAC_SIM_ROOT=/正确的/isaacsim/路径
+export EXPECTED_GIT_SHA="$(git rev-parse HEAD)"
 bash scripts/run_g0_linux.sh
 ```
 

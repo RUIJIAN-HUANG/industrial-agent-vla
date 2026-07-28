@@ -1,5 +1,9 @@
 # G0 - Isaac Sim 5.1 平台验收报告
 
+> **当前 PR 合并门禁：未通过。** 本页 PASS 证据仅对应 `b1e6a05`，
+> 不适用于 PR #7 当前 head。请以当前 head 在 Linux Isaac Sim 5.1
+> 重跑三次并生成新 SHA256 证据后，再由 F/A 签署。
+>
 > Gate：G0
 >
 > Owner：B；复核：F

@@ -8,6 +8,7 @@ system Python interpreter. It deliberately keeps every Omniverse import after
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import platform
@@ -53,8 +54,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--reset-settle-steps",
         type=int,
-        default=None,
-        help="Defaults to physics.reset_settle_steps in the scene config.",
+        default=120,
+        help="Physics steps to wait after every reset (default: 120).",
     )
     parser.add_argument(
         "--capture-cameras",
@@ -109,8 +110,13 @@ def _all_finite(values: Any) -> bool:
     return walk(flattened)
 
 
-def _write_ppm(path: Path, rgb: Any) -> None:
-    """Write an RGB/RGBA numpy-like array without adding a Pillow dependency."""
+def _write_ppm(
+    path: Path,
+    rgb: Any,
+    *,
+    expected_resolution: tuple[int, int] = (1280, 720),
+) -> dict[str, Any]:
+    """Validate and write one frozen RGB camera frame."""
 
     import numpy as np
 
@@ -123,10 +129,28 @@ def _write_ppm(path: Path, rgb: Any) -> None:
             array = array * 255.0
         array = np.clip(array, 0, 255).astype(np.uint8)
     height, width, _channels = array.shape
+    if (width, height) != expected_resolution:
+        raise ValueError(
+            "Camera resolution mismatch: "
+            f"got {width}x{height}, expected "
+            f"{expected_resolution[0]}x{expected_resolution[1]}"
+        )
+    channel_ranges = np.ptp(array, axis=(0, 1))
+    if not np.any(channel_ranges):
+        raise ValueError("Camera frame is spatially uniform (blank/solid color)")
+    pixel_sha256 = hashlib.sha256(array.tobytes()).hexdigest()
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("wb") as stream:
         stream.write(f"P6\n{width} {height}\n255\n".encode("ascii"))
         stream.write(array.tobytes())
+    return {
+        "actual_resolution_px": [width, height],
+        "pixel_min": int(array.min()),
+        "pixel_max": int(array.max()),
+        "pixel_mean": float(array.mean()),
+        "channel_ranges": [int(value) for value in channel_ranges],
+        "pixel_sha256": pixel_sha256,
+    }
 
 
 def _world_position(stage: Any, prim_path: str) -> list[float]:
@@ -225,6 +249,10 @@ def _capture_cameras(
         camera_id = str(camera["id"])
         prim_path = f"/World/Cameras/{camera_id}"
         resolution = tuple(int(value) for value in camera["resolution_px"])
+        if resolution != (1280, 720):
+            raise RuntimeError(
+                f"{camera_id} must use frozen 1280x720 resolution, got {resolution!r}"
+            )
         render_product = rep.create.render_product(
             prim_path,
             resolution,
@@ -244,7 +272,11 @@ def _capture_cameras(
         camera_id = str(camera["id"])
         image_path = evidence_dir / "cameras" / f"{camera_id}.ppm"
         rgb = annotator.get_data()
-        _write_ppm(image_path, rgb)
+        image_stats = _write_ppm(
+            image_path,
+            rgb,
+            expected_resolution=tuple(int(value) for value in camera["resolution_px"]),
+        )
         captures.append(
             {
                 "camera_id": camera_id,
@@ -252,6 +284,7 @@ def _capture_cameras(
                 "resolution_px": camera["resolution_px"],
                 "horizontal_fov_deg": camera["horizontal_fov_deg"],
                 "file": image_path,
+                "image_stats": image_stats,
                 "online_gt_included": False,
             }
         )
@@ -266,6 +299,8 @@ def _run(args: argparse.Namespace, result: dict[str, Any]) -> None:
         raise ValueError("--steps must be at least 1")
     if args.resets < 0:
         raise ValueError("--resets cannot be negative")
+    if args.reset_settle_steps < 1:
+        raise ValueError("--reset-settle-steps must be at least 1")
 
     args.evidence_dir = args.evidence_dir.expanduser().resolve()
     args.evidence_dir.mkdir(parents=True, exist_ok=True)
@@ -279,15 +314,12 @@ def _run(args: argparse.Namespace, result: dict[str, Any]) -> None:
     errors = scene_layout.validate_scene_config(config)
     if errors:
         raise ValueError("Frozen scene contract failed: " + "; ".join(errors))
-    settle_steps = (
-        args.reset_settle_steps
-        if args.reset_settle_steps is not None
-        else int(config["physics"].get("reset_settle_steps", 120))
-    )
+    settle_steps = args.reset_settle_steps
 
     simulation_app = isaac_compat.launch_simulation_app(headless=True)
     result["simulation_app_started"] = True
     try:
+        result["isaac_sim_version"] = isaac_compat.require_isaac_sim_51()
         import single_bin_scene_builder
         from isaacsim.core.api import World
         from isaacsim.core.prims import SingleArticulation

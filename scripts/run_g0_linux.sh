@@ -3,7 +3,8 @@
 # Member-B G0 wrapper for an Isaac Sim 5.1 Linux workstation.
 #
 # Usage:
-#   ISAAC_SIM_ROOT="$HOME/isaacsim" bash scripts/run_g0_linux.sh
+#   EXPECTED_GIT_SHA="$(git rev-parse HEAD)" \
+#     ISAAC_SIM_ROOT="$HOME/isaacsim" bash scripts/run_g0_linux.sh
 #
 set -uo pipefail
 
@@ -16,12 +17,32 @@ EVIDENCE_ROOT="${G0_EVIDENCE_ROOT:-${REPO_ROOT}/artifacts/g0/${TIMESTAMP}}"
 SCENE_OUTPUT="${REPO_ROOT}/simulation/generated/single_bin_scene_v1.usda"
 SUMMARY_FILE="${EVIDENCE_ROOT}/restart-summary.tsv"
 
+EXPECTED_GIT_SHA="${EXPECTED_GIT_SHA:-}"
+CURRENT_GIT_SHA="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
+if [[ -z "${EXPECTED_GIT_SHA}" ]]; then
+  printf 'ERROR: EXPECTED_GIT_SHA is required for traceable G0 evidence.\n' >&2
+  printf 'Run: EXPECTED_GIT_SHA=%s ISAAC_SIM_ROOT=... bash %s\n' \
+    "${CURRENT_GIT_SHA}" "$0" >&2
+  exit 2
+fi
+if [[ "${CURRENT_GIT_SHA}" != "${EXPECTED_GIT_SHA}" ]]; then
+  printf 'ERROR: repository HEAD %s does not match EXPECTED_GIT_SHA %s.\n' \
+    "${CURRENT_GIT_SHA}" "${EXPECTED_GIT_SHA}" >&2
+  exit 2
+fi
+if [[ -n "$(git -C "${REPO_ROOT}" status --porcelain)" ]]; then
+  printf 'ERROR: G0 evidence requires a clean repository worktree.\n' >&2
+  git -C "${REPO_ROOT}" status --short >&2
+  exit 2
+fi
+
 mkdir -p "${EVIDENCE_ROOT}"
 
 if [[ ! -x "${ISAAC_PYTHON}" ]]; then
   printf 'ERROR: Isaac Sim python.sh is not executable: %s\n' "${ISAAC_PYTHON}" >&2
   printf 'Set the correct path, for example:\n' >&2
-  printf '  ISAAC_SIM_ROOT=/opt/isaacsim bash scripts/run_g0_linux.sh\n' >&2
+  printf '  EXPECTED_GIT_SHA=%s ISAAC_SIM_ROOT=/opt/isaacsim bash scripts/run_g0_linux.sh\n' \
+    "${CURRENT_GIT_SHA}" >&2
   exit 2
 fi
 
@@ -42,7 +63,8 @@ fi
   printf '\n[gpu]\n'
   nvidia-smi
   printf '\n[git]\n'
-  git -C "${REPO_ROOT}" rev-parse HEAD
+  printf 'expected_git_sha=%s\n' "${EXPECTED_GIT_SHA}"
+  printf 'actual_git_sha=%s\n' "${CURRENT_GIT_SHA}"
   git -C "${REPO_ROOT}" status --short
   printf '\n[isaac-files]\n'
   ls -l "${ISAAC_SIM_ROOT}/python.sh" "${ISAAC_SIM_ROOT}/isaac-sim.sh"
@@ -65,6 +87,7 @@ for run_number in 1 2 3; do
       --output-scene "${SCENE_OUTPUT}"
       --steps 1000
       --resets 20
+      --reset-settle-steps 120
       --capture-cameras
     )
   else
@@ -76,6 +99,7 @@ for run_number in 1 2 3; do
       --output-scene "${SCENE_OUTPUT}"
       --steps 20
       --resets 0
+      --reset-settle-steps 120
       --no-capture-cameras
     )
   fi
@@ -132,10 +156,27 @@ for run_number in 1 2 3; do
 done
 
 if command -v sha256sum >/dev/null 2>&1; then
-  find "${EVIDENCE_ROOT}" -type f ! -name 'SHA256SUMS.txt' -print0 \
-    | sort -z \
-    | xargs -0 sha256sum \
-    >"${EVIDENCE_ROOT}/SHA256SUMS.txt"
+  if ! (
+    cd "${EVIDENCE_ROOT}" || exit 1
+    find . -type f ! -name 'SHA256SUMS.txt' -print0 \
+      | sort -z \
+      | xargs -0 sha256sum
+  ) >"${EVIDENCE_ROOT}/SHA256SUMS.txt"; then
+    printf 'Failed to generate SHA256SUMS.txt.\n' >&2
+    overall_exit=1
+  elif [[ ! -s "${EVIDENCE_ROOT}/SHA256SUMS.txt" ]]; then
+    printf 'SHA256SUMS.txt is missing or empty.\n' >&2
+    overall_exit=1
+  elif ! (
+    cd "${EVIDENCE_ROOT}" || exit 1
+    sha256sum -c SHA256SUMS.txt
+  ) >/dev/null; then
+    printf 'SHA256SUMS.txt verification failed.\n' >&2
+    overall_exit=1
+  fi
+else
+  printf 'sha256sum is required to produce portable G0 evidence.\n' >&2
+  overall_exit=1
 fi
 
 printf '\nEvidence directory: %s\n' "${EVIDENCE_ROOT}"

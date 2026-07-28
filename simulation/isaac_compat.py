@@ -18,6 +18,56 @@ FRANKA_ASSET_CANDIDATES = (
 )
 
 
+def require_isaac_sim_51() -> dict[str, str]:
+    """Return build metadata and fail closed unless Isaac Sim is 5.1.x."""
+
+    try:
+        import omni.kit.app
+
+        extension_manager = omni.kit.app.get_app().get_extension_manager()
+        extension_id = "isaacsim.core.version"
+        if not extension_manager.is_extension_enabled(extension_id):
+            enable_result = extension_manager.set_extension_enabled_immediate(
+                extension_id,
+                True,
+            )
+            if enable_result is False or not extension_manager.is_extension_enabled(
+                extension_id
+            ):
+                raise RuntimeError(
+                    "Isaac Sim rejected enabling 'isaacsim.core.version'."
+                )
+        from isaacsim.core.version import Version
+    except (ImportError, RuntimeError) as exc:
+        raise RuntimeError(
+            "Isaac Sim version metadata is unavailable. Enable the "
+            "'isaacsim.core.version' extension in the 5.1 runtime."
+        ) from exc
+
+    raw_version = tuple(str(item) for item in Version().get_version())
+    if len(raw_version) < 8:
+        raise RuntimeError(
+            f"Isaac Sim returned an incomplete version tuple: {raw_version!r}"
+        )
+    info = {
+        "core_version": raw_version[0],
+        "prerelease_and_build": raw_version[1],
+        "major": raw_version[2],
+        "minor": raw_version[3],
+        "patch": raw_version[4],
+        "prerelease": raw_version[5],
+        "build_number": raw_version[6],
+        "build_tag": raw_version[7],
+    }
+    if (info["major"], info["minor"]) != ("5", "1"):
+        raise RuntimeError(
+            "G0 requires Isaac Sim 5.1.x, but the active runtime reports "
+            f"{info['major']}.{info['minor']}.{info['patch']} "
+            f"(core={info['core_version']!r})."
+        )
+    return info
+
+
 def launch_simulation_app(*, headless: bool) -> Any:
     """Launch Isaac Sim, preferring the 5.x namespace."""
 
@@ -119,9 +169,7 @@ def validate_stage_contract(
 
     actual_up_axis = str(UsdGeom.GetStageUpAxis(stage)).upper()
     actual_meters_per_unit = float(UsdGeom.GetStageMetersPerUnit(stage))
-    actual_kilograms_per_unit = float(
-        UsdPhysics.GetStageKilogramsPerUnit(stage)
-    )
+    actual_kilograms_per_unit = float(UsdPhysics.GetStageKilogramsPerUnit(stage))
     errors: list[str] = []
     if actual_up_axis != expected_up_axis.upper():
         errors.append(
@@ -132,10 +180,7 @@ def validate_stage_contract(
             "metersPerUnit is "
             f"{actual_meters_per_unit}, expected {expected_meters_per_unit}"
         )
-    if (
-        abs(actual_kilograms_per_unit - expected_kilograms_per_unit)
-        > 1e-12
-    ):
+    if abs(actual_kilograms_per_unit - expected_kilograms_per_unit) > 1e-12:
         errors.append(
             "kilogramsPerUnit is "
             f"{actual_kilograms_per_unit}, "

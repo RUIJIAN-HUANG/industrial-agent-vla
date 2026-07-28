@@ -1,5 +1,16 @@
 # B - Isaac Sim 仿真平台盘点
 
+> **当前 PR 合并门禁：未通过。** 本文原始 PASS 证据只对应提交
+> `b1e6a05fc52ef95a576442bacff96dbe699920b9`，不能证明 PR #7 当前 head。
+> 当前脚本已要求 13 个 Prim，并新增 Isaac Sim 5.1 版本、相机像素质量和
+> 显式 reset 参数校验。必须在 Linux Isaac Sim 5.1 上对待合并 head 重新
+> 执行 `scripts/run_g0_linux.sh`，上传新的三次冷启动、13/13、commit 与
+> SHA256 证据，再由 F 复核、A 签署。
+>
+> 重跑时必须显式设置
+> `EXPECTED_GIT_SHA=$(git rev-parse HEAD)`，且工作树必须保持 clean；
+> 脚本会在启动 Isaac Sim 前强制核对这两个条件。
+>
 > 日期：2026-07-27
 >
 > 执行人：成员 B

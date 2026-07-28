@@ -1,8 +1,16 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
-from simulation.run_g0_acceptance import REQUIRED_PRIMS, _robot_state
+import numpy as np
+
+from simulation.run_g0_acceptance import (
+    REQUIRED_PRIMS,
+    _robot_state,
+    _write_ppm,
+)
 
 
 class FakeArticulation:
@@ -28,6 +36,31 @@ class G0AcceptanceTests(unittest.TestCase):
                 "/World/Stations/FINISHED_01",
             }.issubset(REQUIRED_PRIMS)
         )
+        self.assertEqual(len(REQUIRED_PRIMS), 13)
+
+    def test_camera_evidence_requires_frozen_resolution(self) -> None:
+        with TemporaryDirectory() as directory:
+            frame = np.zeros((480, 640, 3), dtype=np.uint8)
+            with self.assertRaisesRegex(ValueError, "resolution mismatch"):
+                _write_ppm(Path(directory) / "frame.ppm", frame)
+
+    def test_camera_evidence_rejects_uniform_frame(self) -> None:
+        with TemporaryDirectory() as directory:
+            frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+            with self.assertRaisesRegex(ValueError, "spatially uniform"):
+                _write_ppm(Path(directory) / "frame.ppm", frame)
+
+    def test_camera_evidence_records_pixel_digest(self) -> None:
+        with TemporaryDirectory() as directory:
+            frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+            frame[0, 0, :] = 255
+            path = Path(directory) / "frame.ppm"
+
+            stats = _write_ppm(path, frame)
+
+            self.assertTrue(path.is_file())
+            self.assertEqual(stats["actual_resolution_px"], [1280, 720])
+            self.assertEqual(len(stats["pixel_sha256"]), 64)
 
     def test_robot_state_uses_isaac_51_dof_names(self) -> None:
         arm = FakeArticulation(dof_names=["joint_a", "joint_b"])

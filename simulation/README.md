@@ -59,7 +59,8 @@ Reset 后的物理稳定步数也不属于静态 USD 场景合同；应由 G0 �
 双臂状态和三相机样本的 G0 验收。Linux 一键入口与逐步说明分别是：
 
 ```bash
-ISAAC_SIM_ROOT=/absolute/path/to/isaacsim \
+EXPECTED_GIT_SHA="$(git rev-parse HEAD)" \
+  ISAAC_SIM_ROOT=/absolute/path/to/isaacsim \
   bash scripts/run_g0_linux.sh
 ```
 

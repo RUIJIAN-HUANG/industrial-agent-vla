@@ -13,6 +13,89 @@ class FakeUsdStage:
 
 
 class IsaacCompatibilityTests(unittest.TestCase):
+    def test_version_gate_accepts_isaac_sim_51(self) -> None:
+        extension_manager = types.SimpleNamespace(
+            is_extension_enabled=lambda extension_id: True,
+        )
+        app_module = types.SimpleNamespace(
+            get_app=lambda: types.SimpleNamespace(
+                get_extension_manager=lambda: extension_manager
+            )
+        )
+
+        class FakeVersion:
+            def get_version(self):
+                return ("5.1.0", "", "5", "1", "0", "", "123", "release")
+
+        isaacsim_version = types.SimpleNamespace(Version=FakeVersion)
+        with patch.dict(
+            sys.modules,
+            {
+                "omni": types.SimpleNamespace(
+                    kit=types.SimpleNamespace(app=app_module)
+                ),
+                "omni.kit": types.SimpleNamespace(app=app_module),
+                "omni.kit.app": app_module,
+                "isaacsim.core.version": isaacsim_version,
+            },
+        ):
+            info = isaac_compat.require_isaac_sim_51()
+
+        self.assertEqual(info["core_version"], "5.1.0")
+        self.assertEqual((info["major"], info["minor"]), ("5", "1"))
+
+    def test_version_gate_rejects_other_isaac_sim_release(self) -> None:
+        extension_manager = types.SimpleNamespace(
+            is_extension_enabled=lambda extension_id: True,
+        )
+        app_module = types.SimpleNamespace(
+            get_app=lambda: types.SimpleNamespace(
+                get_extension_manager=lambda: extension_manager
+            )
+        )
+
+        class FakeVersion:
+            def get_version(self):
+                return ("4.5.0", "", "4", "5", "0", "", "123", "release")
+
+        with patch.dict(
+            sys.modules,
+            {
+                "omni": types.SimpleNamespace(
+                    kit=types.SimpleNamespace(app=app_module)
+                ),
+                "omni.kit": types.SimpleNamespace(app=app_module),
+                "omni.kit.app": app_module,
+                "isaacsim.core.version": types.SimpleNamespace(Version=FakeVersion),
+            },
+        ):
+            with self.assertRaisesRegex(RuntimeError, "requires Isaac Sim 5.1"):
+                isaac_compat.require_isaac_sim_51()
+
+    def test_version_gate_rejects_extension_enable_failure(self) -> None:
+        extension_manager = types.SimpleNamespace(
+            is_extension_enabled=lambda extension_id: False,
+            set_extension_enabled_immediate=lambda extension_id, enabled: False,
+        )
+        app_module = types.SimpleNamespace(
+            get_app=lambda: types.SimpleNamespace(
+                get_extension_manager=lambda: extension_manager
+            )
+        )
+
+        with patch.dict(
+            sys.modules,
+            {
+                "omni": types.SimpleNamespace(
+                    kit=types.SimpleNamespace(app=app_module)
+                ),
+                "omni.kit": types.SimpleNamespace(app=app_module),
+                "omni.kit.app": app_module,
+            },
+        ):
+            with self.assertRaisesRegex(RuntimeError, "version metadata"):
+                isaac_compat.require_isaac_sim_51()
+
     def test_isaac_51_boolean_stage_result_uses_current_stage(self) -> None:
         expected_stage = FakeUsdStage()
 
@@ -23,11 +106,14 @@ class IsaacCompatibilityTests(unittest.TestCase):
             }
             return functions[name]
 
-        with patch.object(
-            isaac_compat,
-            "_stage_function",
-            side_effect=stage_function,
-        ), patch.object(isaac_compat, "_usd_stage_type", return_value=FakeUsdStage):
+        with (
+            patch.object(
+                isaac_compat,
+                "_stage_function",
+                side_effect=stage_function,
+            ),
+            patch.object(isaac_compat, "_usd_stage_type", return_value=FakeUsdStage),
+        ):
             self.assertIs(isaac_compat.create_new_stage(), expected_stage)
 
     def test_isaac_51_false_stage_result_fails_closed(self) -> None:
@@ -47,21 +133,27 @@ class IsaacCompatibilityTests(unittest.TestCase):
                 self.fail(f"Unexpected stage utility request: {name}")
             return lambda: expected_stage
 
-        with patch.object(
-            isaac_compat,
-            "_stage_function",
-            side_effect=stage_function,
-        ), patch.object(isaac_compat, "_usd_stage_type", return_value=FakeUsdStage):
+        with (
+            patch.object(
+                isaac_compat,
+                "_stage_function",
+                side_effect=stage_function,
+            ),
+            patch.object(isaac_compat, "_usd_stage_type", return_value=FakeUsdStage),
+        ):
             self.assertIs(isaac_compat.create_new_stage(), expected_stage)
 
     def test_get_current_stage_returns_fresh_valid_handle(self) -> None:
         expected_stage = FakeUsdStage()
 
-        with patch.object(
-            isaac_compat,
-            "_stage_function",
-            return_value=lambda: expected_stage,
-        ), patch.object(isaac_compat, "_usd_stage_type", return_value=FakeUsdStage):
+        with (
+            patch.object(
+                isaac_compat,
+                "_stage_function",
+                return_value=lambda: expected_stage,
+            ),
+            patch.object(isaac_compat, "_usd_stage_type", return_value=FakeUsdStage),
+        ):
             self.assertIs(isaac_compat.get_current_stage(), expected_stage)
 
     def test_get_current_stage_rejects_boolean_result(self) -> None:
@@ -74,11 +166,14 @@ class IsaacCompatibilityTests(unittest.TestCase):
                 isaac_compat.get_current_stage()
 
     def test_get_current_stage_rejects_non_stage_object(self) -> None:
-        with patch.object(
-            isaac_compat,
-            "_stage_function",
-            return_value=lambda: object(),
-        ), patch.object(isaac_compat, "_usd_stage_type", return_value=FakeUsdStage):
+        with (
+            patch.object(
+                isaac_compat,
+                "_stage_function",
+                return_value=lambda: object(),
+            ),
+            patch.object(isaac_compat, "_usd_stage_type", return_value=FakeUsdStage),
+        ):
             with self.assertRaisesRegex(TypeError, "expected pxr.Usd.Stage"):
                 isaac_compat.get_current_stage()
 
@@ -116,9 +211,7 @@ class IsaacCompatibilityTests(unittest.TestCase):
                 SetStageKilogramsPerUnit=lambda value, unit: metadata.update(
                     kilograms_per_unit=unit
                 ),
-                GetStageKilogramsPerUnit=lambda value: metadata[
-                    "kilograms_per_unit"
-                ],
+                GetStageKilogramsPerUnit=lambda value: metadata["kilograms_per_unit"],
             ),
         )
 
