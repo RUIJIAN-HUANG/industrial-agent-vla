@@ -234,9 +234,15 @@ Arm_A 交接条件：
 | YOLO | 8103 | 检测和证据 |
 | Isaac Adapter | 8200 | 仿真循环、控制器 ACK、独立急停 |
 
+Isaac Adapter 额外负责把三台相机的新鲜 RGB 原子写入共享图像 CAS。最终 Docker
+使用同一个 `image-cas` volume：Isaac Adapter 读写挂载，π0.5、OpenVLA-OFT、
+YOLO 只读挂载；Supervisor 不挂载、不解码图像。CAS 根目录统一通过
+`INDUSTRIAL_AGENT_CAS_ROOT` 注入。完整规则见
+[`ADR-0004-shared-image-cas.md`](ADR-0004-shared-image-cas.md)。
+
 启动顺序：
 
-1. Isaac Sim 场景、物理、双臂和三相机；
+1. 共享 CAS 卷、Isaac Sim 场景、物理、双臂和三相机；
 2. 受控仿真循环与独立急停通道；
 3. YOLO；
 4. π0.5；

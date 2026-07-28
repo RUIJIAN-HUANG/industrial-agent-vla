@@ -75,13 +75,24 @@ A_ONLY
   "uri": "cas://sha256/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "image_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "camera_id": "CAM_A_TOP",
-  "width": 640,
-  "height": 480
+  "width": 1280,
+  "height": 720
 }
 ```
 
 `uri` 中的摘要必须与 `image_sha256` 完全一致。真实 Adapter 只能从只读 CAS
 解析图像；不得跟随重定向或读取任意主机路径。
+
+权威实现是 `industrial_agent.image_cas.ImageCas`，完整决策见
+[`ADR-0004-shared-image-cas.md`](ADR-0004-shared-image-cas.md)。固定规则为：
+
+- Producer 将 `uint8 H×W×3 RGB` 编码为 PNG；
+- `image_sha256` 对 PNG 编码文件的完整字节计算；
+- 路径为 `${INDUSTRIAL_AGENT_CAS_ROOT}/sha256/<前两位>/<完整 digest>`；
+- Isaac Adapter 原子写入成功后才能发布 `ImageReference`；
+- π0.5、OpenVLA-OFT、YOLO 在自身服务入口调用同一个 `resolve_rgb()`；
+- Supervisor 只转发引用，不读取或通过 JSON 传输像素；
+- Real 模式解析失败必须返回 CAS/观测错误，禁止使用零图继续推理。
 
 ### 2.4 Ground Truth 隔离
 

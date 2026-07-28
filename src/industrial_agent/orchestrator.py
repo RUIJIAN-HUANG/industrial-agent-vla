@@ -32,6 +32,7 @@ from .executor import (
     is_pinned_artifact_digest,
 )
 from .fsm import AgentFSM, AgentState, StateTransition
+from .image_cas import ImageCasConfig
 from .lifecycle import (
     ControlToken,
     FixedDualVLAPlanner,
@@ -261,6 +262,7 @@ class IndustrialAgent:
             "config_version",
             "verification_frames",
             "executor_timeout_ms",
+            "image_cas",
             "lifecycle",
             "recovery",
             "safety",
@@ -272,6 +274,7 @@ class IndustrialAgent:
             raise ValueError(
                 f"agent config must contain exactly {sorted(expected_top_level_keys)}"
             )
+        ImageCasConfig.from_mapping(config.get("image_cas"))
         raw_lifecycle = config.get("lifecycle")
         if not isinstance(raw_lifecycle, Mapping):
             raise ValueError("lifecycle config must be an object")

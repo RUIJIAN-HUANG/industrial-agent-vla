@@ -64,6 +64,14 @@ class ConfigTests(unittest.TestCase):
             self.skipTest("jsonschema is not installed")
         jsonschema.Draft202012Validator(self.schema).validate(self.config)
 
+    def test_default_config_freezes_shared_image_cas(self) -> None:
+        image_cas = self.config["image_cas"]
+        self.assertEqual(image_cas["layout"], "sha256-v1")
+        self.assertEqual(image_cas["encoding"], "png")
+        self.assertEqual(image_cas["digest_scope"], "encoded_bytes")
+        self.assertGreaterEqual(image_cas["max_pixels"], 1280 * 720)
+        self.assertEqual(image_cas["missing_retry_count"], 1)
+
     def test_default_config_builds_fixed_dual_vla_core(self) -> None:
         executors = self._executors()
         agent = IndustrialAgent.from_config(
