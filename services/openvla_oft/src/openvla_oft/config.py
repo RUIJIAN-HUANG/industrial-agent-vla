@@ -8,9 +8,11 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Mapping
 
+from industrial_agent.executor import OPENVLA_OFT_TASK_TYPES
+
 SHA256_PREFIX = "sha256:"
 ZERO_SHA256 = f"{SHA256_PREFIX}{'0' * 64}"
-IMAGE_CAS_DEFAULT_ROOT = "artifacts/cas/openvla_oft"
+IMAGE_CAS_DEFAULT_ROOT = "artifacts/cas"
 
 
 def service_root() -> Path:
@@ -39,7 +41,12 @@ def _env_bool(name: str, default: bool) -> bool:
     raw = os.getenv(name)
     if raw is None:
         return default
-    return raw.casefold() in {"1", "true", "yes", "on"}
+    normalized = raw.casefold()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be an explicit boolean value")
 
 
 def looks_like_sha256(value: Any) -> bool:
@@ -116,10 +123,15 @@ def validate_config(config: Mapping[str, Any]) -> None:
         raise ValueError("OpenVLA-OFT service is frozen to arm_id='Arm_B'")
     if config["required_subtask_id"] != "S02_ARM_B_TRANSPORT":
         raise ValueError("OpenVLA-OFT service only accepts S02_ARM_B_TRANSPORT")
+    if config.get("supported_task_types") != sorted(OPENVLA_OFT_TASK_TYPES):
+        raise ValueError(
+            "supported_task_types must exactly match the Supervisor "
+            "OpenVLA-OFT descriptor"
+        )
     if config["action_contract_version"] != "1.0":
         raise ValueError("action_contract_version must be '1.0'")
-    if config["camera_order"] != ["CAM_B_TOP", "CAM_B_WRIST"]:
-        raise ValueError("camera_order must be ['CAM_B_TOP', 'CAM_B_WRIST']")
+    if config["camera_order"] != ["CAM_B_TOP"]:
+        raise ValueError("camera_order must be ['CAM_B_TOP']")
     image_size = config["image_size"]
     if (
         not isinstance(image_size, list)
@@ -163,8 +175,8 @@ def validate_config(config: Mapping[str, Any]) -> None:
         raise ValueError("model.architecture must be openvla-oft")
     if model.get("input_image_size") != [1280, 720]:
         raise ValueError("model.input_image_size must be [1280, 720]")
-    if model.get("uses_wrist_camera") is not True:
-        raise ValueError("model.uses_wrist_camera must be true")
+    if model.get("uses_wrist_camera") is not False:
+        raise ValueError("model.uses_wrist_camera must be false")
     if model.get("proprio_dim") != 7:
         raise ValueError("model.proprio_dim must be 7")
     if model.get("action_dim") != 7:
@@ -175,6 +187,13 @@ def validate_config(config: Mapping[str, Any]) -> None:
     for field in ("checkpoint_sha", "norm_stats_sha"):
         if not looks_like_sha256(artifacts.get(field)):
             raise ValueError(f"artifacts.{field} must be sha256:<64 hex characters>")
+        if (
+            not bool(config.get("mock_mode"))
+            and artifacts[field].casefold() == ZERO_SHA256
+        ):
+            raise ValueError(
+                f"artifacts.{field} cannot use the all-zero mock digest in real mode"
+            )
     image_cas = config["image_cas"]
     if not isinstance(image_cas, Mapping):
         raise ValueError("image_cas must be an object")
@@ -203,6 +222,7 @@ def validate_config(config: Mapping[str, Any]) -> None:
         "default_deadline_ms",
         "max_deadline_ms",
         "max_concurrent_requests",
+        "completed_cache_max_entries",
     ):
         value = api.get(field)
         if isinstance(value, bool) or not isinstance(value, int) or value < 1:

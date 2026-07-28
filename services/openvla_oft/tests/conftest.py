@@ -7,12 +7,12 @@ from typing import Any
 
 import numpy as np
 import pytest
+from industrial_agent.image_cas import ImageCas
 
 SERVICE_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SERVICE_ROOT / "src"))
 
 from openvla_oft.config import load_config  # noqa: E402
-from openvla_oft.image_cas import ImageCas  # noqa: E402
 from openvla_oft.routes import OpenVLAOFTService  # noqa: E402
 
 
@@ -20,6 +20,7 @@ from openvla_oft.routes import OpenVLAOFTService  # noqa: E402
 def cas_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "cas"
     monkeypatch.setenv("INDUSTRIAL_AGENT_CAS_ROOT", str(root))
+    monkeypatch.setenv("OPENVLA_OFT_USE_MOCK", "1")
     return root
 
 
@@ -35,12 +36,12 @@ def service(config: dict[str, Any]) -> OpenVLAOFTService:
 
 @pytest.fixture
 def valid_infer_request(config: dict[str, Any]) -> dict[str, Any]:
-    cas = ImageCas.from_mapping(config["image_cas"])
+    cas = ImageCas.from_agent_config(config)
     full_rgb = np.zeros((720, 1280, 3), dtype=np.uint8)
     full_rgb[..., 1] = 64
     checkpoint_sha = config["artifacts"]["checkpoint_sha"]
     norm_stats_sha = config["artifacts"]["norm_stats_sha"]
-    full_ref = cas.write_rgb(full_rgb, camera_id="CAM_B_TOP")
+    full_ref = cas.write_rgb(full_rgb, camera_id="CAM_B_TOP").to_dict()
     return {
         "schema_version": "1.0",
         "request_id": "req-1",
@@ -62,13 +63,6 @@ def valid_infer_request(config: dict[str, Any]) -> dict[str, Any]:
             "state": [0.4, 0.0, 0.4, 0.0, 0.0, 0.0, 0.5],
         },
     }
-
-
-@pytest.fixture
-def valid_wrist_image(config: dict[str, Any]) -> dict[str, Any]:
-    cas = ImageCas.from_mapping(config["image_cas"])
-    wrist_rgb = np.full((720, 1280, 3), 32, dtype=np.uint8)
-    return cas.write_rgb(wrist_rgb, camera_id="CAM_B_WRIST")
 
 
 @pytest.fixture

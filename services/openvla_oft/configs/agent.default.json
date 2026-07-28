@@ -6,12 +6,13 @@
   "required_subtask_id": "S02_ARM_B_TRANSPORT",
   "instruction": "收到 handoff_ready 后，观察中央交接位，抓稳 Bin_01 并保持水平，将其搬到 FINISHED_01，松开夹爪并返回 HOME_B。",
   "supported_task_types": [
-    "fixed_dual_vla_pack_transport"
+    "object_localization",
+    "pick_place",
+    "visual_manipulation"
   ],
   "action_contract_version": "1.0",
   "camera_order": [
-    "CAM_B_TOP",
-    "CAM_B_WRIST"
+    "CAM_B_TOP"
   ],
   "image_size": [
     1280,
@@ -46,6 +47,7 @@
     "default_deadline_ms": 5000,
     "max_deadline_ms": 15000,
     "max_concurrent_requests": 1,
+    "completed_cache_max_entries": 1024,
     "max_chunk_steps": 32,
     "health_timeout_ms": 1000,
     "cancel_timeout_ms": 1000,

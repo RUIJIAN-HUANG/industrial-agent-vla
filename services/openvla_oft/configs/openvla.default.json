@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "mock_mode": true,
+  "mock_mode": false,
   "upstream": {
     "repo": "https://github.com/moojink/openvla-oft",
     "commit_sha": "UNPINNED_REPLACE_BEFORE_REAL_INFERENCE",
@@ -27,7 +27,7 @@
     "device": "cuda",
     "torch_dtype": "float16",
     "input_image_size": [1280, 720],
-    "uses_wrist_camera": true,
+    "uses_wrist_camera": false,
     "proprio_dim": 7,
     "action_dim": 7
   },

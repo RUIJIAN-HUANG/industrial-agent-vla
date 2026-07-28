@@ -7,7 +7,6 @@ from typing import Any, Mapping
 
 from .config import looks_like_sha256
 from .exceptions import ServiceError
-from .image_cas import validate_image_reference
 from .utils import finite_vector
 
 SCHEMA_VERSION = "1.0"
@@ -147,29 +146,26 @@ def validate_infer_request(payload: Any, config: Mapping[str, Any]) -> dict[str,
             "TASK_1001_INVALID",
             "task_description must match the frozen Arm_B downstream instruction",
         )
-    image_size = tuple(config["image_size"])
-    full_image = validate_image_reference(
-        model_input["full_image"],
-        field_name="model_input.full_image",
-        expected_camera_id="CAM_B_TOP",
-        expected_size=image_size,
-    )
-    wrist_raw = model_input["wrist_image"]
-    wrist_image = None
-    if wrist_raw is not None:
-        wrist_image = validate_image_reference(
-            wrist_raw,
-            field_name="model_input.wrist_image",
-            expected_camera_id="CAM_B_WRIST",
-            expected_size=image_size,
+    full_image = model_input["full_image"]
+    if not isinstance(full_image, Mapping):
+        raise ServiceError(
+            "CAS_1304_METADATA_MISMATCH",
+            "model_input.full_image must be an ImageReference object",
+            retryable=False,
+        )
+    if model_input["wrist_image"] is not None:
+        raise ServiceError(
+            "CAS_1304_METADATA_MISMATCH",
+            "frozen three-camera profile requires model_input.wrist_image=null",
+            retryable=False,
         )
     state = finite_vector(model_input["state"], "model_input.state", min_length=7)
     return {
         **dict(payload),
         "model_input": {
             "task_description": model_input["task_description"],
-            "full_image": full_image,
-            "wrist_image": wrist_image,
+            "full_image": dict(full_image),
+            "wrist_image": None,
             "state": state,
         },
     }

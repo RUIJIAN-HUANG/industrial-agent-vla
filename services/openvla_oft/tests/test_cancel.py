@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor
+from threading import Event
 from time import sleep
 
 from openvla_oft.exceptions import ServiceError
@@ -87,3 +88,43 @@ def test_cancel_cooperative_infer_stops_running_request(
         assert infer_status == 409
         assert infer_response["status"] == "error"
         assert infer_response["error"]["code"] == "EXEC_2107_CANCELLED"
+
+
+def test_cancel_wins_when_model_ignores_cancel_event(
+    config,
+    valid_infer_request,
+):
+    class NonCooperativeModel:
+        ready = True
+
+        def __init__(self):
+            self.entered = Event()
+            self.release = Event()
+
+        def predict(self, request, cancel_event=None):
+            del request, cancel_event
+            self.entered.set()
+            assert self.release.wait(timeout=2)
+            return [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]
+
+    from openvla_oft.routes import OpenVLAOFTService
+
+    model = NonCooperativeModel()
+    service = OpenVLAOFTService(config, model=model)
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        infer_future = executor.submit(service.infer, valid_infer_request)
+        assert model.entered.wait(timeout=2)
+
+        status, response = service.cancel(
+            _cancel_request(valid_infer_request["task_id"])
+        )
+        assert status == 200
+        assert response["status"] == "cancelled"
+        model.release.set()
+
+        infer_status, infer_response = infer_future.result(timeout=2)
+
+    assert infer_status == 409
+    assert infer_response["error"]["code"] == "EXEC_2107_CANCELLED"
+    assert valid_infer_request["request_id"] not in service._completed_by_request

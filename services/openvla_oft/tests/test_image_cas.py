@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
-
-from openvla_oft.image_cas import ImageCas, ImageCasConfig
+from industrial_agent.image_cas import ImageCas, ImageCasConfig
 
 
 def test_image_cas_roundtrip_reads_verified_rgb(tmp_path):
@@ -29,6 +28,6 @@ def test_image_cas_roundtrip_reads_verified_rgb(tmp_path):
     assert resolved.width == 5
     assert resolved.height == 4
     assert resolved.camera_id == "CAM_B_TOP"
-    assert resolved.image_sha256 == reference["image_sha256"]
+    assert resolved.image_sha256 == reference.image_sha256
     assert resolved.rgb.shape == (4, 5, 3)
     assert np.array_equal(resolved.rgb, rgb)
