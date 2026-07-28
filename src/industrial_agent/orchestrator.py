@@ -26,6 +26,7 @@ from .environment import (
 )
 from .errors import AgentError, FailureCode
 from .executor import (
+    EXECUTOR_CONFIG_FIELDS,
     ExecutionContext,
     Executor,
     ExecutorRegistry,
@@ -34,12 +35,18 @@ from .executor import (
 from .fsm import AgentFSM, AgentState, StateTransition
 from .image_cas import ImageCasConfig
 from .lifecycle import (
+    ARM_A_PACK_HANDOFF_SUBTASK_ID,
+    ARM_B_TRANSPORT_SUBTASK_ID,
     ControlToken,
     FixedDualVLAPlanner,
     FixedLifecycle,
     FixedTaskProfile,
+    FROZEN_TOKEN_SEQUENCE,
+    HANDOFF_CANDIDATE_CHECKED_EVENT_TYPE,
+    HANDOFF_READY_EVENT_TYPE,
+    HANDOFF_VERIFIED_EVENT_TYPE,
 )
-from .observation import ObservationGateway
+from .observation import FROZEN_IMAGE_HEIGHT, FROZEN_IMAGE_WIDTH, ObservationGateway
 from .perception import (
     DetectionEvidenceSink,
     DetectionPacket,
@@ -48,6 +55,7 @@ from .perception import (
     PerceptionContext,
     PerceptionError,
     PerceptionMode,
+    PERCEPTION_CONFIG_FIELDS,
 )
 from .safety import ActionSafetyValidator, SafetyPolicy, safety_state_failure
 from .telemetry import EventRecord, EventSink, MemoryStore, RunMemory
@@ -130,7 +138,7 @@ class IndustrialAgent:
         perception_iou_threshold: float = 0.45,
         max_decisions_per_strategy_attempt: int = 8,
         task_profile: FixedTaskProfile | None = None,
-        require_durable_handoff: bool = False,
+        require_durable_handoff: bool = True,
         safe_stop_timeout_ms: int = 2_000,
     ):
         if verification_frames < 1 or verification_frames > 9:
@@ -141,9 +149,16 @@ class IndustrialAgent:
             raise ValueError("perception_timeout_ms must be in [1, 120000]")
         if not 1 <= safe_stop_timeout_ms <= 30_000:
             raise ValueError("safe_stop_timeout_ms must be in [1, 30000]")
+        try:
+            normalized_perception_mode = PerceptionMode(perception_mode)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"unsupported perception_mode: {perception_mode!r}"
+            ) from exc
         if max_perception_attempts != 1:
             raise ValueError(
-                "SHADOW_SCORE uses exactly one failure-non-gating sidecar attempt"
+                f"{normalized_perception_mode.value} uses exactly one "
+                "failure-non-gating sidecar attempt"
             )
         for name, value in (
             ("perception_confidence_threshold", perception_confidence_threshold),
@@ -188,20 +203,18 @@ class IndustrialAgent:
             )
         if perception is not None and perception.descriptor.name != "yolo":
             raise ValueError("the independent perception Agent must be named 'yolo'")
-        try:
-            normalized_perception_mode = PerceptionMode(perception_mode)
-        except ValueError as exc:
-            raise ValueError(
-                f"unsupported perception_mode: {perception_mode!r}"
-            ) from exc
         self.executors = ExecutorRegistry(executors)
         self.gateway = gateway or ObservationGateway()
         self.safety = safety or ActionSafetyValidator()
         self.verifier = verifier or PostconditionVerifier()
         self.events = events or EventSink()
-        if require_durable_handoff and not self.events.durable:
+        if require_durable_handoff is not True:
+            raise ValueError(
+                "fixed dual-VLA handoff cannot disable durable event persistence"
+            )
+        if not self.events.durable:
             raise ValueError("durable handoff requires an fsync-backed EventSink path")
-        self.require_durable_handoff = require_durable_handoff
+        self.require_durable_handoff = True
         self.memory_store = memory_store or MemoryStore()
         self.topology_mode = "FIXED_DUAL_VLA_SERIAL"
         self.task_profile = profile
@@ -285,10 +298,10 @@ class IndustrialAgent:
                 "lifecycle.supervisor_nlp is frozen false; π0.5 handles language"
             )
         token_sequence = raw_lifecycle.get("token_sequence")
-        if token_sequence != ["A_ONLY", "HANDOFF_VERIFY", "B_ONLY", "NONE"]:
+        expected_token_sequence = [token.value for token in FROZEN_TOKEN_SEQUENCE]
+        if token_sequence != expected_token_sequence:
             raise ValueError(
-                "lifecycle.token_sequence must be "
-                "['A_ONLY', 'HANDOFF_VERIFY', 'B_ONLY', 'NONE']"
+                f"lifecycle.token_sequence must be {expected_token_sequence!r}"
             )
         profile = FixedTaskProfile.from_mapping(raw_lifecycle.get("task_profile", {}))
 
@@ -450,7 +463,10 @@ class IndustrialAgent:
         raw_executors = config.get("executors")
         if not isinstance(raw_executors, Mapping):
             raise ValueError("executors config must be an object")
-        required_executor_names = {"openvla_oft", "pi05"}
+        required_executor_names = {
+            profile.primary_executor,
+            profile.collaborative_executor,
+        }
         if set(raw_executors) != required_executor_names:
             raise ValueError(
                 "config.executors must declare exactly "
@@ -460,16 +476,10 @@ class IndustrialAgent:
         for name, raw in raw_executors.items():
             if not isinstance(raw, Mapping):
                 raise ValueError(f"config.executors.{name} must be an object")
-            expected_executor_keys = {
-                "enabled",
-                "base_url",
-                "checkpoint_sha",
-                "norm_stats_sha",
-            }
-            if set(raw) != expected_executor_keys:
+            if set(raw) != EXECUTOR_CONFIG_FIELDS:
                 raise ValueError(
                     f"config.executors.{name} must contain exactly "
-                    f"{sorted(expected_executor_keys)}"
+                    f"{sorted(EXECUTOR_CONFIG_FIELDS)}"
                 )
             base_url = raw.get("base_url")
             if not isinstance(base_url, str) or not base_url.startswith(
@@ -565,24 +575,10 @@ class IndustrialAgent:
         descriptor = perception.descriptor
         if descriptor.name != "yolo":
             raise ValueError("config.perception requires the Agent named 'yolo'")
-        expected_perception_keys = {
-            "required",
-            "mode",
-            "base_url",
-            "evidence_jsonl_path",
-            "detection_contract_version",
-            "checkpoint_sha",
-            "class_map_sha",
-            "config_sha",
-            "timeout_ms",
-            "max_attempts",
-            "confidence_threshold",
-            "iou_threshold",
-        }
-        if set(raw_perception) != expected_perception_keys:
+        if set(raw_perception) != PERCEPTION_CONFIG_FIELDS:
             raise ValueError(
                 "config.perception must contain exactly "
-                f"{sorted(expected_perception_keys)}"
+                f"{sorted(PERCEPTION_CONFIG_FIELDS)}"
             )
         expected_contract = raw_perception.get("detection_contract_version")
         if descriptor.detection_contract_version != expected_contract:
@@ -1041,6 +1037,14 @@ class IndustrialAgent:
                 "CAM_B_TOP",
             }:
                 return "camera.full_image must reference a frozen RGB camera"
+            if image_key in required_phase_cameras and (
+                image_reference.width,
+                image_reference.height,
+            ) != (FROZEN_IMAGE_WIDTH, FROZEN_IMAGE_HEIGHT):
+                return (
+                    f"camera.{image_key} must use frozen "
+                    f"{FROZEN_IMAGE_WIDTH}x{FROZEN_IMAGE_HEIGHT} resolution"
+                )
         if not isinstance(robot, Mapping):
             return "robot state is missing or invalid"
         if set(robot) != {"active_arm", "arm_a", "arm_b"}:
@@ -1377,6 +1381,16 @@ class IndustrialAgent:
                 f"camera.{camera_key}.camera_id must be {expected_camera_id!r}",
                 retryable=False,
             )
+        if camera_key in {"full_image", "arm_a_rgb", "handoff_rgb", "arm_b_rgb"} and (
+            image.width,
+            image.height,
+        ) != (FROZEN_IMAGE_WIDTH, FROZEN_IMAGE_HEIGHT):
+            raise PerceptionError(
+                FailureCode.OBSERVATION_INVALID,
+                f"camera.{camera_key} must use frozen "
+                f"{FROZEN_IMAGE_WIDTH}x{FROZEN_IMAGE_HEIGHT} resolution",
+                retryable=False,
+            )
         return image
 
     @staticmethod
@@ -1449,8 +1463,8 @@ class IndustrialAgent:
         image: ImageReference | None = None
         try:
             phase_camera_key = {
-                "S01_ARM_A_PACK_HANDOFF": "arm_a_rgb",
-                "S02_ARM_B_TRANSPORT": "arm_b_rgb",
+                ARM_A_PACK_HANDOFF_SUBTASK_ID: "arm_a_rgb",
+                ARM_B_TRANSPORT_SUBTASK_ID: "arm_b_rgb",
             }.get(subtask_id, "full_image")
             image = self._image_reference(
                 observation,
@@ -1916,8 +1930,14 @@ class IndustrialAgent:
             self._plan = self.planner.plan(task, self._run_id)
             self._plan.validate()
             expected_assignments = (
-                ("S01_ARM_A_PACK_HANDOFF", "pi05"),
-                ("S02_ARM_B_TRANSPORT", "openvla_oft"),
+                (
+                    ARM_A_PACK_HANDOFF_SUBTASK_ID,
+                    self.task_profile.primary_executor,
+                ),
+                (
+                    ARM_B_TRANSPORT_SUBTASK_ID,
+                    self.task_profile.collaborative_executor,
+                ),
             )
             actual_assignments = tuple(
                 (item.subtask_id, item.assigned_executor)
@@ -2684,7 +2704,7 @@ class IndustrialAgent:
             self._transition(AgentState.VERIFYING, "verify subtask postconditions")
             handoff_subtask = (
                 self._lifecycle is not None
-                and subtask.subtask_id == "S01_ARM_A_PACK_HANDOFF"
+                and subtask.subtask_id == ARM_A_PACK_HANDOFF_SUBTASK_ID
             )
             initial_frames: list[Observation] = [last_observation]
             if handoff_subtask and self._lifecycle.token is ControlToken.A_ONLY:
@@ -2700,7 +2720,7 @@ class IndustrialAgent:
                     [last_observation],
                 )
                 self._emit(
-                    "handoff.candidate_checked",
+                    HANDOFF_CANDIDATE_CHECKED_EVENT_TYPE,
                     {
                         "verdict": candidate.verdict.value,
                         "observation_id": last_observation.observation_id,
@@ -2783,7 +2803,7 @@ class IndustrialAgent:
             if verification.verdict is Verdict.PASS:
                 subtask.status = SubtaskStatus.VERIFIED
                 if self._lifecycle is not None:
-                    if subtask.subtask_id == "S01_ARM_A_PACK_HANDOFF":
+                    if subtask.subtask_id == ARM_A_PACK_HANDOFF_SUBTASK_ID:
                         interlock_failure = self._fixed_arm_interlock_failure(
                             frames[-1],
                             arm_id=self.task_profile.arm_b_id,
@@ -2808,9 +2828,10 @@ class IndustrialAgent:
                                 event_start,
                             )
                         self._emit(
-                            "handoff.verified",
+                            HANDOFF_VERIFIED_EVENT_TYPE,
                             {
-                                "handoff_ready": True,
+                                "quorum_passed": True,
+                                "grants_b_only": False,
                                 "stable_frames": len(frames),
                                 "required_frames": (
                                     self.task_profile.handoff_verification_frames
@@ -2825,26 +2846,22 @@ class IndustrialAgent:
                             },
                         )
                         self._emit(
-                            "handoff_ready",
+                            HANDOFF_READY_EVENT_TYPE,
                             {
                                 "bin_id": self.task_profile.bin_id,
                                 "from_arm": self.task_profile.arm_a_id,
                                 "to_arm": self.task_profile.arm_b_id,
-                                "durable_ack": self.events.durable,
+                                "durable_ack": True,
+                                "grants_b_only": True,
                             },
                         )
                         previous, current_token = self._lifecycle.grant_arm_b()
                         self._record_control_token(
                             previous,
                             current_token,
-                            (
-                                "durable handoff_ready grants Arm B exclusive control"
-                                if self.events.durable
-                                else "acknowledged handoff_ready grants Arm B "
-                                "exclusive control in non-production mode"
-                            ),
+                            "durable handoff.ready grants Arm B exclusive control",
                         )
-                    elif subtask.subtask_id == "S02_ARM_B_TRANSPORT":
+                    elif subtask.subtask_id == ARM_B_TRANSPORT_SUBTASK_ID:
                         final_interlock_failure = (
                             self._fixed_observation_consistency_failure(frames[-1])
                         )

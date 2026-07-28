@@ -93,9 +93,20 @@ A_ONLY -> HANDOFF_VERIFY -> B_ONLY -> NONE
 | 阶段 | 可运动机械臂 | 进入条件 | 离开条件 |
 |---|---|---|---|
 | `A_ONLY` | 仅 Arm_A | 任务、双 VLA、相机和安全预检通过 | 料箱已交接、Arm_A 释放并退避 |
-| `HANDOFF_VERIFY` | 无 | Arm_A 阶段动作结束 | 三帧两票复合 PASS，事件持久化 |
-| `B_ONLY` | 仅 Arm_B | `handoff.verified` 已持久化 | 同一料箱到完成区、Arm_B 释放并退避 |
+| `HANDOFF_VERIFY` | 无 | `A_ONLY` 下候选预检通过，旧动作已清空且双臂锁定 | 锁臂后新采三帧取得两票，`handoff.verified` 与 `handoff.ready` 依次持久化 |
+| `B_ONLY` | 仅 Arm_B | durable `handoff.ready` 已确认 | 同一料箱到完成区、Arm_B 释放并退避 |
 | `NONE` | 无 | 最终核验成功或安全停止 | 新 episode reset |
+
+交接事件类型采用唯一的点号命名：
+
+| `event_type` | 语义 | 能否授权 Arm_B |
+|---|---|---|
+| `handoff.candidate_checked` | `A_ONLY` 下的单帧候选预检结果 | 否 |
+| `handoff.verified` | 双臂锁定后，三张新鲜帧的 2/3 复合投票证据已持久化 | 否 |
+| `handoff.ready` | 核验证据 durable 后发布的就绪事件 | 是，durable ACK 后才可授予 `B_ONLY` |
+
+冻结自然语言中的 `handoff_ready` 只是业务信号名称，不得用作
+`event_type`；事件类型禁止下划线拼写。
 
 ## 7. 单步闭环
 
@@ -123,7 +134,7 @@ A_ONLY -> HANDOFF_VERIFY -> B_ONLY -> NONE
 
 1. 部署配置已经固定第一阶段一定由 π0.5/Arm_A 执行；
 2. Supervisor 原样传递 Arm_A 预设指令；
-3. π0.5 用视觉和语言决定零件最多的区域、姿态和抓放动作；
+3. π0.5 用视觉和语言识别 P01–P04、判断倒放姿态并生成装箱、交接动作；
 4. Arm_A 完成后，Supervisor 根据传感事实而不是 NLP 切换生命周期；
 5. Arm_B 使用另一条冻结协作指令，由 OpenVLA-OFT 执行。
 
@@ -152,7 +163,11 @@ bbox + class + confidence + latency
 
 ## 10. 交接核验
 
-Supervisor 在 `HANDOFF_VERIFY` 采集三个不同 observation。采用整帧复合投票：
+Arm_A 释放并退避后，Supervisor 先在 `A_ONLY` 下用当前新鲜 observation 做一次
+候选预检并记录 `handoff.candidate_checked`。候选通过只允许进入锁臂阶段，不算
+最终票，也不表示 ready。随后清空动作队列、撤销 A 的运动权限并进入
+`HANDOFF_VERIFY`，再采集**恰好三个**不同的新 observation。最终投票只使用这
+三张锁臂后帧：
 
 ```text
 一帧通过 = 该帧所有必需条件同时成立
@@ -160,6 +175,8 @@ Supervisor 在 `HANDOFF_VERIFY` 采集三个不同 observation。采用整帧复
 ```
 
 不得从不同帧拼条件。
+候选帧和锁臂前的任何帧都会被丢弃，因此不存在“1 + 3 + 3 共 7 帧参与投票”的
+路径。
 
 Arm_A 交接条件：
 
@@ -171,7 +188,8 @@ Arm_A 交接条件：
 - 两臂静止；
 - 无急停、保护停和系统故障。
 
-通过后先 fsync 持久化 `handoff.verified`，然后授予 `B_ONLY`。
+通过后先 fsync 持久化 `handoff.verified`，再 fsync 持久化
+`handoff.ready`；只有后者收到 durable ACK 后才授予 `B_ONLY`。
 
 最终完成条件：
 
@@ -240,6 +258,10 @@ YOLO 只读挂载；Supervisor 不挂载、不解码图像。CAS 根目录统一
 `INDUSTRIAL_AGENT_CAS_ROOT` 注入。完整规则见
 [`ADR-0004-shared-image-cas.md`](ADR-0004-shared-image-cas.md)。
 
+冻结场景只有 `CAM_A_TOP`、`CAM_HANDOFF`、`CAM_B_TOP` 三台物理 RGB 相机；
+没有腕部相机 Prim。统一 VLA 请求中的 `wrist_image` 在本版本必须为 JSON
+`null`，不得用任一顶视相机回填。
+
 启动顺序：
 
 1. 共享 CAS 卷、Isaac Sim 场景、物理、双臂和三相机；
@@ -261,6 +283,7 @@ SIGINT、SIGTERM、异常和容器关闭都不得绕过急停；外部 watchdog 
 - [ ] Arm_A 装入 P01–P04，并将 `Bin_01` 放到中央交接位；
 - [ ] 三个不同帧至少两个整帧 PASS 后才出现 `B_ONLY`；
 - [ ] `handoff.verified` 在令牌切换前已 durable；
+- [ ] `handoff.ready` 在授予 `B_ONLY` 前已 durable，且不存在下划线事件类型；
 - [ ] Arm_B 搬运同一个 `Bin_01` 到 `FINISHED_01`；
 - [ ] 每个物理动作后都有新 observation 和新 VLA 决策；
 - [ ] 两臂从未同时拥有共享区控制权；

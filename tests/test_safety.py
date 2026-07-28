@@ -3,7 +3,12 @@ from __future__ import annotations
 import math
 import unittest
 
-from industrial_agent.contracts import ACTION_CONTRACT_VERSION, ActionChunk, ActionStep
+from industrial_agent.contracts import (
+    ACTION_CONTRACT_VERSION,
+    PI05_EXECUTOR_NAME,
+    ActionChunk,
+    ActionStep,
+)
 from industrial_agent.errors import FailureCode
 from industrial_agent.observation import ObservationGateway
 from industrial_agent.safety import ActionSafetyValidator, safety_state_failure
@@ -16,7 +21,7 @@ def chunk(values: list[float]) -> ActionChunk:
         contract_version=ACTION_CONTRACT_VERSION,
         chunk_id="c1",
         task_id="t1",
-        executor="mock",
+        executor=PI05_EXECUTOR_NAME,
         steps=(ActionStep.from_sequence(values),),
     )
 

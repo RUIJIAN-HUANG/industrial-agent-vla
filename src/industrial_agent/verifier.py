@@ -19,6 +19,8 @@ class Verdict(str, Enum):
 
 @dataclass(frozen=True)
 class ConditionResult:
+    """Runtime-only evidence used to assemble a supervisor verification event."""
+
     kind: str
     verdict: Verdict
     pass_votes: int
@@ -30,6 +32,8 @@ class ConditionResult:
 
 @dataclass(frozen=True)
 class VerificationResult:
+    """Runtime-only aggregate; transport persists its explicit event projection."""
+
     verdict: Verdict
     code: FailureCode
     conditions: tuple[ConditionResult, ...]

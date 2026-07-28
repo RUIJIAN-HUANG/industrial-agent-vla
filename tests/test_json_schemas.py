@@ -142,6 +142,31 @@ class JsonSchemaTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             validator.validate(mutable_alias)
 
+    def test_vla_request_schemas_require_null_wrist_images(self) -> None:
+        schema = json.loads(
+            (self.root / "schemas" / "executor-infer.schema.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        definitions = schema["$defs"]
+        self.assertIsNone(
+            definitions["openVlaModelInput"]["properties"]["wrist_image"]["const"]
+        )
+        self.assertIsNone(
+            definitions["pi05ModelInput"]["properties"]["observation"]["properties"][
+                "camera"
+            ]["properties"]["wrist_image"]["const"]
+        )
+        openvla_image = definitions["openVlaModelInput"]["properties"]["full_image"][
+            "allOf"
+        ][1]["properties"]
+        pi05_image = definitions["pi05ModelInput"]["properties"]["observation"][
+            "properties"
+        ]["camera"]["properties"]["full_image"]["allOf"][1]["properties"]
+        for image_schema in (openvla_image, pi05_image):
+            self.assertEqual(image_schema["width"]["const"], 1280)
+            self.assertEqual(image_schema["height"]["const"], 720)
+
 
 if __name__ == "__main__":
     unittest.main()

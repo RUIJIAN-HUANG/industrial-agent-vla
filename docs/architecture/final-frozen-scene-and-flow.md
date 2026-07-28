@@ -50,27 +50,55 @@ Isaac Sim 中验证预抓取、抓取、抬升、放置 IK、碰撞和关节余�
 | 交接 RGB | `/World/Cameras/CAM_HANDOFF` | `(0.00,-0.45,1.18)` | 箱体进入 ROI、稳定、夹爪释放 |
 | B 区顶视 RGB | `/World/Cameras/CAM_B_TOP` | `(+0.60,-0.18,1.45)` | Arm_B 抓箱、成品位放置 |
 
+冻结 MVP **恰好只有以上三台物理 RGB 相机**，没有腕部相机，也不存在
+`CAM_A_WRIST` 或 `CAM_B_WRIST` Prim。VLA 服务请求为保持统一接口仍包含
+`wrist_image` 字段，但在本 TaskProfile 中必须逐次传 JSON `null`；不得从其他顶视
+相机伪造或回退该字段。未来增加腕部相机必须发布新的场景和 TaskProfile 版本。
+
 VLA 接收未叠加检测框的完整 RGB 图像。YOLO 使用同一原始帧的不可变副本，
 以 `observation_id + image_sha256` 与动作和事件关联。
 
 ## 4. 固定角色指令
 
+以下两条是 `single_bin_pack_handoff_v1` 的唯一逐字冻结值，不是任务语义示例。
+机器可执行真源与版本变更规则见
+[`interface-contracts.md`](interface-contracts.md#1-冻结边界)。
+
 ### π0.5 / Arm_A
 
-> 将工作区中的四个红色零件依次装入料箱；倒放零件先调整为正向。装箱完成后，
-> 将料箱放到中央交接位并返回 HOME_A。失败时重新观察后继续。
+```text
+将工作区中的四个红色零件依次装入料箱；倒放零件先调整为正向。装箱完成后，将料箱放到中央交接位并返回 HOME_A。失败时重新观察后继续。
+```
 
 ### OpenVLA-OFT / Arm_B
 
-> 收到 handoff_ready 后，观察中央交接位，抓稳料箱并保持水平，将其搬到
-> FINISHED_01，松开夹爪并返回 HOME_B。
+```text
+收到 handoff_ready 后，观察中央交接位，抓稳 Bin_01 并保持水平，将其搬到 FINISHED_01，松开夹爪并返回 HOME_B。
+```
 
 两条自然语言均在任务配置中预设。Supervisor 只原样传输，不识别关键词、
 不判断任务难度、不生成新子指令。
 
 ## 5. 完整闭环例子
 
-| 步骤 | FSM 状态 | 令牌 | 执行者 | 动作与证据 | 通过条件 |
+下表第二列是便于答辩和数据标注的**业务操作阶段**，不是
+`industrial_agent.fsm.AgentState` 枚举。监控、事件 `state` 字段和代码分支只能
+使用下列真实 AgentState；不得把 `OBSERVE_A`、`INFER_A`、`HANDOFF_READY` 等
+业务名称当作 FSM 状态。
+
+| 业务操作阶段 | 对应真实 `AgentState` |
+|---|---|
+| 初始化、Reset、任务校验 | `IDLE → VALIDATING_TASK` |
+| 生成固定双子任务计划 | `PLANNING` |
+| `OBSERVE_A`、`OBSERVE_B` | `OBSERVING`；YOLO 留证时短暂进入 `PERCEIVING` |
+| `INFER_A`、`INFER_B` | `ASSIGNING_ROLE → EXECUTING` |
+| `EXECUTE_A`、`EXECUTE_B` | `EXECUTING` |
+| `VERIFY_A`、`HANDOFF_VERIFY`、`FINISHED_VERIFY` | `VERIFYING` |
+| 切换子任务或继续闭环 | `ADVANCING_SUBTASK → OBSERVING` |
+| 同角色有界恢复 | `REPLANNING → OBSERVING` |
+| 成功或终止 | `SUCCEEDED`、`FAILED`、`SAFE_STOPPED`、`SAFE_STOP_FAILED` |
+
+| 步骤 | 业务操作阶段（非 FSM 枚举） | 令牌 | 执行者 | 动作与证据 | 通过条件 |
 |---:|---|---|---|---|---|
 | 1 | `IDLE → RESET` | `NONE` | Supervisor、Isaac | 双臂归零、清动作队列、确认交接位为空 | `HOME_A && HOME_B` |
 | 2 | `RESET → OBSERVE_A` | `A_ONLY` | Supervisor、相机 | 获取 A 区新鲜 RGB；同步调用 YOLO 保存 P01–P04 bbox，失败只留证 | 图像与机器人状态有效 |
@@ -81,9 +109,9 @@ VLA 接收未叠加检测框的完整 RGB 图像。YOLO 使用同一原始帧的
 | 7 | `VERIFY_A → PACK_COMPLETE` | `A_ONLY` | Supervisor | 核对四个零件、料箱身份和 Arm_B 仍在 HOME_B | `pack_complete` |
 | 8 | `PACK_COMPLETE → ARM_A_HANDOFF` | `A_ONLY` | π0.5、Arm_A | 重新观察后抓料箱，将其放到固定中央 ROI | 箱体已释放 |
 | 9 | `ARM_A_HANDOFF → ARM_A_RETREAT` | `A_ONLY` | Arm_A | Arm_A 返回 `HOME_A`，清空控制队列 | Arm_A 离开共享区 |
-| 10 | `ARM_A_RETREAT → HANDOFF_VERIFY` | `HANDOFF_VERIFY` | Supervisor | 撤销 A 令牌；两臂均禁止进入共享区 | 队列清空、双臂安全 |
-| 11 | `HANDOFF_VERIFY` | `HANDOFF_VERIFY` | Supervisor、相机、Verifier | 连续采集 3 张不同帧；核对箱体在 ROI、速度低、A 已释放并退回 | 至少 2 帧 PASS |
-| 12 | `HANDOFF_VERIFY → HANDOFF_READY` | `B_ONLY` | Supervisor | 先持久化 `handoff_ready`，再授予 B 令牌 | 事件与令牌写入日志 |
+| 10 | `ARM_A_RETREAT → HANDOFF_CANDIDATE` | `A_ONLY`，通过后切 `HANDOFF_VERIFY` | Supervisor | 用当前新鲜帧做一次候选预检并记录 `handoff.candidate_checked`；预检通过后撤销 A 令牌、清空队列并锁定双臂 | 候选通过不代表 ready；双臂已禁止进入共享区 |
+| 11 | `HANDOFF_VERIFY` | `HANDOFF_VERIFY` | Supervisor、相机、Verifier | 锁臂后重新采集恰好 3 张不同帧；核对箱体在 ROI、速度低、A 已释放并退回；2/3 通过后持久化 `handoff.verified` | 至少 2 帧复合 PASS，候选帧不计票 |
+| 12 | `HANDOFF_VERIFY → HANDOFF_READY` | `HANDOFF_VERIFY → B_ONLY` | Supervisor | `handoff.verified` 已 durable 后，再持久化唯一就绪事件 `handoff.ready`；收到 durable ACK 后才授予 B 令牌 | 两个事件顺序可审计，B 此前零动作 |
 | 13 | `HANDOFF_READY → OBSERVE_B` | `B_ONLY` | 相机、YOLO | 获取 B/交接区新鲜 RGB；同步调用 YOLO 保存满箱 bbox，失败只留证 | 图像与 Arm_B 状态有效 |
 | 14 | `OBSERVE_B → INFER_B` | `B_ONLY` | OpenVLA-OFT | 接收固定 B 指令、完整图像与 Arm_B 状态 | 返回 Arm_B ActionChunk |
 | 15 | `INFER_B ↔ EXECUTE_B` | `B_ONLY` | Safety、Arm_B | 单步滚动抓稳料箱、抬升、保持水平、移动到成品位 | 每步后均有新观测 |
@@ -121,3 +149,11 @@ VLA 接收未叠加检测框的完整 RGB 图像。YOLO 使用同一原始帧的
 7. 每个物理动作后都有新 observation 和重新推理/核验；
 8. `detections.jsonl`、`events.jsonl`、`trace.json`、视频和离线
    `metrics.json` 均可关联且可复算。
+
+交接事件类型唯一采用点号风格。候选预检事件
+`handoff.candidate_checked` 在进入交接的运行中至少出现一次，并可因重试出现
+1..N 次；不可逆里程碑顺序固定为
+`handoff.verified → handoff.ready`。候选预检和 `handoff.verified` 只表示
+预检或核验证据，**均不表示 Arm_B 已获准动作**；只有 durable
+`handoff.ready` 才是授予 `B_ONLY` 的就绪事件。冻结 Arm_B 自然语言中的
+`handoff_ready` 是业务信号名称，不是 `event_type`。

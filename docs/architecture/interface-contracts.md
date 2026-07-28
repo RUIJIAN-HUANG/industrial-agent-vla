@@ -16,22 +16,42 @@
 确定性 Safety、Verifier、Isaac Sim Adapter 和离线 mAP Evaluator 不是 Agent。
 Supervisor 不做 NLP、任务复杂度判断或模型路由。部署任务指令是冻结预设：
 
-- Arm_A/π0.5：`帮我把零件最多的区域装箱`
-- Arm_B/OpenVLA-OFT：`把中央交接区的同一料箱搬到完成区并摆正`
+- Arm_A/π0.5：`将工作区中的四个红色零件依次装入料箱；倒放零件先调整为正向。装箱完成后，将料箱放到中央交接位并返回 HOME_A。失败时重新观察后继续。`
+- Arm_B/OpenVLA-OFT：`收到 handoff_ready 后，观察中央交接位，抓稳 Bin_01 并保持水平，将其搬到 FINISHED_01，松开夹爪并返回 HOME_B。`
+
+以上两条是 `single_bin_pack_handoff_v1` 的唯一逐字冻结值，不是任务语义示例。
+机器可执行真源是 `configs/agent.default.json` 中的 `lifecycle.task_profile`，
+并由 `schemas/agent-config.schema.json` 的 `const` 约束和
+`FixedTaskProfile.validate_frozen()` 双重校验。本文与
+`final-frozen-scene-and-flow.md` 必须逐字同步；若需要改写自然语言，必须发布新的
+TaskProfile ID 和接口契约版本，不能原地修改 v1。
 
 固定顺序：
 
 ```text
 A_ONLY
   -> π0.5 / Arm_A
+  -> handoff.candidate_checked（仅预检）
   -> HANDOFF_VERIFY
-  -> handoff.ready 持久化
+  -> handoff.verified 持久化（锁臂后三帧 2/3）
+  -> handoff.ready 持久化（唯一就绪事件）
   -> B_ONLY
   -> OpenVLA-OFT / Arm_B
   -> NONE
 ```
 
 禁止动态切换两个 VLA，禁止任一 VLA接管另一机械臂。
+
+事件类型统一使用点号风格：
+
+| `event_type` | 固定语义 | 是否允许授予 `B_ONLY` |
+|---|---|---|
+| `handoff.candidate_checked` | `A_ONLY` 下的单帧候选预检已经完成 | 否 |
+| `handoff.verified` | 双臂锁定后，三张新鲜帧的 2/3 复合投票证据已 durable | 否 |
+| `handoff.ready` | 已满足全部交接条件，可以让 Arm_B 开始协作 | 是，事件 durable 后 |
+
+`handoff_ready` 只允许作为冻结 Arm_B 自然语言中的业务信号名称；它不是
+`event_type`。事件生产者和消费者必须拒绝下划线形式的交接事件类型。
 
 ## 2. 通用规则
 
@@ -90,7 +110,8 @@ A_ONLY
 - `image_sha256` 对 PNG 编码文件的完整字节计算；
 - 路径为 `${INDUSTRIAL_AGENT_CAS_ROOT}/sha256/<前两位>/<完整 digest>`；
 - Isaac Adapter 原子写入成功后才能发布 `ImageReference`；
-- π0.5、OpenVLA-OFT、YOLO 在自身服务入口调用同一个 `resolve_rgb()`；
+- π0.5、OpenVLA-OFT、YOLO 在自身服务入口调用同一个
+  `CasRequestImageResolver`，再由它调用底层 `resolve_rgb()`；
 - Supervisor 只转发引用，不读取或通过 JSON 传输像素；
 - Real 模式解析失败必须返回 CAS/观测错误，禁止使用零图继续推理。
 
@@ -110,19 +131,25 @@ GT 只允许由离线 Evaluator 读取。YOLO、两个 VLA、Supervisor、在线
 
 权威 Schema：`schemas/task.schema.json`
 
+该 Schema 是通用任务信封的结构真源，只校验字段、类型和基础边界；它不会把某个
+部署 profile 的自然语言写成通用 `const`。当前部署的逐字值由
+`single_bin_pack_handoff_v1` TaskProfile 冻结，并由 Supervisor 在接受任务时执行
+第二层校验。因此“通过通用 TaskSchema”不等于“通过当前部署 profile”。
+
 Supervisor 只接受冻结部署任务，不从文本生成路由。示例：
 
 ```json
 {
   "schema_version": "1.0",
   "task_id": "episode-0001",
-  "instruction": "帮我把零件最多的区域装箱",
-  "task_type": "fixed_dual_vla_pack_transport",
+  "instruction": "将工作区中的四个红色零件依次装入料箱；倒放零件先调整为正向。装箱完成后，将料箱放到中央交接位并返回 HOME_A。失败时重新观察后继续。",
+  "task_type": "visual_manipulation",
   "postconditions": [
     {
       "kind": "field_equals",
       "path": "task.bin_at_finished",
       "expected": true,
+      "min_confidence": 0.6,
       "required_votes": 2
     }
   ],
@@ -156,7 +183,7 @@ task
 quality
 ```
 
-四路引用必须同时存在：
+四个逻辑引用必须同时存在：
 
 | 键 | 固定 `camera_id` | 用途 |
 |---|---|---|
@@ -164,6 +191,11 @@ quality
 | `camera.arm_a_rgb` | `CAM_A_TOP` | π0.5 与 A 阶段 YOLO |
 | `camera.handoff_rgb` | `CAM_HANDOFF` | 交接核验与 YOLO |
 | `camera.arm_b_rgb` | `CAM_B_TOP` | OpenVLA 与 B 阶段 YOLO |
+
+这四个键只引用 **3 台物理相机**：`CAM_A_TOP`、`CAM_HANDOFF`、
+`CAM_B_TOP`；`full_image` 是当前阶段已有顶视帧的逻辑引用，不代表第四台相机。
+冻结场景没有腕部相机 Prim。统一 VLA 请求中的 `wrist_image` 字段必须存在且值为
+JSON `null`；不得用 `full_image` 或其他顶视图伪装腕部视角。
 
 禁止相机回退。例如缺少 `arm_b_rgb` 时，不得改用 `full_image`。
 
@@ -244,8 +276,8 @@ YOLO 只能收到 `PerceptionContext`，不得收到完整 TaskSchema 或完整 
     "uri": "cas://sha256/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "image_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "camera_id": "CAM_A_TOP",
-    "width": 640,
-    "height": 480
+    "width": 1280,
+    "height": 720
   },
   "allowed_class_names": ["part", "bin"],
   "confidence_threshold": 0.25,
@@ -314,10 +346,10 @@ AP50、AP75、mAP50:95、Precision、Recall 和时延。
 
 ### 6.1 固定所有权
 
-| Agent | 机械臂 | 输入图像 | 指令 |
-|---|---|---|---|
-| `pi05` | `Arm_A` | `CAM_A_TOP` | Arm_A 冻结原始自然语言 |
-| `openvla_oft` | `Arm_B` | `CAM_B_TOP` | Arm_B 冻结协作指令 |
+| Agent | 机械臂 | `full_image` | `wrist_image` | 指令 |
+|---|---|---|---|---|
+| `pi05` | `Arm_A` | `CAM_A_TOP` | `null` | Arm_A 冻结原始自然语言 |
+| `openvla_oft` | `Arm_B` | `CAM_B_TOP` | `null` | Arm_B 冻结协作指令 |
 
 两个 VLA 都在独立进程/容器加载模型，不得在 Supervisor 进程内加载权重。
 
@@ -345,6 +377,7 @@ VLA 请求包含：
 - 全部关联 ID；
 - 固定 executor 名称和部署 SHA；
 - 当前机械臂专属 RGB；
+- `wrist_image=null`；当前冻结场景没有腕部相机；
 - 当前机械臂状态和 TCP 位姿；
 - 当前阶段冻结指令；
 - `timeout_ms`。
@@ -414,13 +447,13 @@ VLA 不接收另一机械臂的控制目标、YOLO DetectionPacket 或 GT。
   "workspace_by_arm": {
     "Arm_A": {
       "frame": "robot_base",
-      "min_xyz_m": [0.0, -0.60, 0.0],
-      "max_xyz_m": [0.70, 0.45, 1.0]
+      "min_m": [0.0, -0.60, 0.0],
+      "max_m": [0.70, 0.45, 1.0]
     },
     "Arm_B": {
       "frame": "robot_base",
-      "min_xyz_m": [0.0, -0.25, 0.0],
-      "max_xyz_m": [0.70, 0.60, 1.0]
+      "min_m": [0.0, -0.25, 0.0],
+      "max_m": [0.70, 0.60, 1.0]
     }
   }
 }
@@ -513,7 +546,11 @@ VLA 推理完成后，Supervisor 必须重新采集观测：
 
 ## 10. 交接核验
 
-三个不同 `observation_id` 组成一组，采用“整帧复合投票”：
+Arm_A 释放并退避后，Supervisor 先在 `A_ONLY` 下对当前新鲜帧做一次候选预检，
+并记录 `handoff.candidate_checked`。该帧只决定是否进入锁臂阶段，不进入最终
+投票，也不能授权 Arm_B。候选通过后必须清空旧动作、撤销 A 的运动权限并进入
+`HANDOFF_VERIFY`；随后重新采集恰好三个不同 `observation_id`，采用“整帧复合
+投票”：
 
 ```text
 一帧 PASS = 该帧内全部必需条件同时成立
@@ -521,6 +558,8 @@ VLA 推理完成后，Supervisor 必须重新采集观测：
 ```
 
 禁止从不同帧拼接不同条件形成成功。
+候选帧及所有锁臂前帧必须丢弃；最终 2/3 只统计锁臂后新采的三帧，不能把预检
+描述成七帧投票。
 
 Arm_A 交接帧必须同时满足：
 
@@ -532,8 +571,10 @@ Arm_A 交接帧必须同时满足：
 - 两臂均静止；
 - 质量字段有效。
 
-通过后先将 `handoff.verified` 事件 fsync 到 durable JSONL，再允许
-`HANDOFF_VERIFY -> B_ONLY`。内存 EventSink 只可用于单元测试，不能作为生产持久化证明。
+通过后先将 `handoff.verified` 事件 fsync 到 durable JSONL，再发布并 fsync
+唯一就绪事件 `handoff.ready`；只有 `handoff.ready` 的 durable ACK 到达后才允许
+`HANDOFF_VERIFY -> B_ONLY`。内存 EventSink 只可用于单元测试，不能作为生产
+持久化证明。
 
 最终完成帧必须同时满足：
 
@@ -620,6 +661,7 @@ SIGINT、SIGTERM、`KeyboardInterrupt` 或未处理异常均不得绕过 safe-st
 ### D：OpenVLA-OFT
 
 - [ ] 只接收 Arm_B 指令、相机和状态；
+- [ ] `full_image=CAM_B_TOP`，`wrist_image=null`；
 - [ ] 自己的 checkpoint/norm stats SHA 可追溯；
 - [ ] 输出 canonical ActionChunk；
 - [ ] cancel、超时、坏包和 base/tuned 对照可复现。
@@ -627,6 +669,7 @@ SIGINT、SIGTERM、`KeyboardInterrupt` 或未处理异常均不得绕过 safe-st
 ### E：π0.5
 
 - [ ] 只接收 Arm_A 原始冻结指令、相机和状态；
+- [ ] `full_image=CAM_A_TOP`，`wrist_image=null`；
 - [ ] LeRobot/openpi 映射、norm stats 与动作单位有测试；
 - [ ] 输出 canonical ActionChunk；
 - [ ] cancel、超时、坏包和 base/tuned 对照可复现。
@@ -656,6 +699,8 @@ SIGINT、SIGTERM、`KeyboardInterrupt` 或未处理异常均不得绕过 safe-st
 | 推理期间物体区域变化 | 丢弃 chunk，同角色有界重规划 |
 | step 写后丢 ACK | 状态未知，独立 safe-stop |
 | 交接 3 帧中 2 个整帧 PASS | durable handoff 后授予 `B_ONLY` |
+| 只有 `handoff.candidate_checked` 或 `handoff.verified` | 不得授予 `B_ONLY` |
+| durable `handoff.ready` 到达且交接证据有效 | 才可授予 `B_ONLY` |
 | 不同帧分别满足不同条件 | 不得通过 |
 | safe-stop receipt 缺项 | `SAFE_STOP_FAILED` |
 | receipt 成功但传感器仍在运动 | `SAFE_STOP_FAILED` |

@@ -41,6 +41,17 @@ from .perception import (
     YoloHTTPAdapter,
     build_perception_from_config,
 )
+from .service_images import (
+    FROZEN_RGB_CAMERA_IDS,
+    FROZEN_RGB_SIZE,
+    CasRequestImageResolver,
+    ResolvedVlaModelImages,
+    ResolvedYoloModelImage,
+)
+from .service_handlers import (
+    VlaInferRequestHandler,
+    YoloDetectRequestHandler,
+)
 
 __all__ = [
     "ACTION_CONTRACT_VERSION",
@@ -77,4 +88,11 @@ __all__ = [
     "build_executors_from_config",
     "build_perception_from_config",
     "CAS_ROOT_ENV",
+    "CasRequestImageResolver",
+    "FROZEN_RGB_CAMERA_IDS",
+    "FROZEN_RGB_SIZE",
+    "ResolvedVlaModelImages",
+    "ResolvedYoloModelImage",
+    "VlaInferRequestHandler",
+    "YoloDetectRequestHandler",
 ]

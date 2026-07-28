@@ -15,9 +15,11 @@
 
 采用“公共实现、服务侧调用”：
 
-1. `industrial_agent.image_cas.ImageCas` 是唯一 CAS Writer/Resolver；
+1. `industrial_agent.image_cas.ImageCas` 是唯一 CAS Writer/底层 Resolver；
 2. Isaac Adapter 使用 `write_rgb()` 原子写入，再发布 `ImageReference`；
-3. π0.5、OpenVLA-OFT、YOLO 在各自服务入口调用 `resolve_rgb()`；
+3. π0.5、OpenVLA-OFT、YOLO 在各自服务入口调用公共
+   `industrial_agent.service_images.CasRequestImageResolver`，由它调用
+   `resolve_rgb()` 并冻结相机、尺寸和腕部图像规则；
 4. Supervisor 只校验和转发 `ImageReference`，不解码、不转发像素数组；
 5. 真实模式解析失败必须 fail-closed，禁止自动创建黑图或 Mock 动作。
 
@@ -55,16 +57,14 @@ reference = image_cas.write_rgb(
 消费端：
 
 ```python
-frame = image_cas.resolve_rgb(
-    reference,
-    expected_camera_id="CAM_A_TOP",
-    expected_size=(1280, 720),
-)
-model_input = frame.rgb
+resolver = CasRequestImageResolver.from_agent_config(agent_config)
+images = resolver.resolve_vla_request(infer_request)
+model_input = images.full_image.rgb
 ```
 
 返回数组是不可写的 `numpy.uint8[H,W,3]` RGB。缓存只能保存已经完成字节 SHA、
-PNG 解码和尺寸检查的帧。
+PNG 解码和尺寸检查的帧。YOLO 服务使用 `resolve_yolo_request()`；任何服务都
+不得直接从 URI 构造路径，也不得用零图替代解析失败。
 
 ## 5. Docker 挂载
 
