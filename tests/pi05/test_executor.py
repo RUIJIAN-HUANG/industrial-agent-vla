@@ -56,9 +56,10 @@ _PI05_ENV_VARS = (
 # ---------------------------------------------------------------------------
 @pytest.fixture
 def clean_pi05_env(monkeypatch):
-    """清空所有 PI05_* 环境变量，保证执行器从确定初态初始化。"""
+    """清空其余 PI05_* 变量，并显式启用 Dummy，保证测试初态确定。"""
     for var in _PI05_ENV_VARS:
         monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("PI05_MODE", "dummy")
     yield
 
 
@@ -135,14 +136,20 @@ def test_executor_init(mock_executor):
     assert hc["last_latency_ms"] is None
 
 
+def test_executor_init_requires_explicit_mode(clean_pi05_env, monkeypatch):
+    """PI05_MODE 缺失时执行器必须 fail-closed，不能隐式创建 Dummy。"""
+    monkeypatch.delenv("PI05_MODE", raising=False)
+
+    with pytest.raises(RuntimeError, match="PI05_MODE 未设置"):
+        Pi05Executor()
+
+
 def test_executor_init_real_mode_degrades_when_no_client(clean_pi05_env, monkeypatch):
-    """用例1补充：请求 real 模式但无可用策略客户端时降级到 mock（方案书 §3.3）。"""
+    """用例1补充：real 模式无可用策略客户端时 fail-closed，禁止降级 Mock。"""
     monkeypatch.setenv("PI05_MODE", "real")
-    with patch.object(pi05_mod, "make_policy_client", return_value=None):
-        ex = Pi05Executor()
-    assert ex.mode == "dummy"
-    assert ex._policy_type == "mock"
-    assert ex._policy is None
+    with pytest.raises(RuntimeError, match="禁止降级到 Dummy"):
+        with patch.object(pi05_mod, "make_policy_client", return_value=None):
+            Pi05Executor()
 
 
 def test_executor_init_real_mode_mounts_client(clean_pi05_env, monkeypatch):
@@ -201,6 +208,29 @@ def test_process_observation(mock_executor, sample_observation):
     assert wrist.dtype == np.uint8
     assert wrist.ndim == 3 and wrist.shape[2] == 3
     np.testing.assert_array_equal(wrist, sample_observation.rgb_wrist)
+
+
+def test_real_mode_without_wrist_omits_policy_input(clean_pi05_env, monkeypatch):
+    """Real + wrist_image=None 时不得向 policy 注入全零腕部图。"""
+    monkeypatch.setenv("PI05_MODE", "real")
+    captured: dict = {}
+
+    def fake_infer(example):
+        captured.update(example)
+        return {"actions": np.zeros((1, ACTION_DIM), dtype=np.float32)}
+
+    fake_policy = MagicMock()
+    fake_policy.client_type = "local"
+    fake_policy.checkpoint_dir = None
+    fake_policy.infer.side_effect = fake_infer
+    with patch.object(pi05_mod, "make_policy_client", return_value=fake_policy):
+        ex = Pi05Executor()
+
+    obs = _make_minimal_obs(step_id=4)
+    obs.rgb_wrist = None
+    ex.infer(obs)
+
+    assert "observation/wrist_image_left" not in captured
 
 
 def test_process_observation_pixel_audit(mock_executor, caplog):

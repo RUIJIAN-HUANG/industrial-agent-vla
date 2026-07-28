@@ -31,7 +31,7 @@ from pathlib import Path
 import re
 import sys
 import time
-from typing import Any
+from typing import Any, Mapping
 from uuid import uuid4
 
 from jsonschema import Draft202012Validator, ValidationError as _SchemaValidationError
@@ -65,13 +65,15 @@ import numpy as np
 # ---------------------------------------------------------------------------
 # 环境变量配置
 # ---------------------------------------------------------------------------
-SERVICE_MODE = os.environ.get("PI05_SERVICE_MODE", "dummy").lower()
-if SERVICE_MODE not in ("dummy", "real"):
-    print(
-        f"[openpi_service] 未知 PI05_SERVICE_MODE={SERVICE_MODE}，回退到 dummy",
-        file=sys.stderr,
+SERVICE_MODE = os.environ.get("PI05_SERVICE_MODE", "").strip().lower()
+if not SERVICE_MODE:
+    raise RuntimeError(
+        "PI05_SERVICE_MODE 未设置；必须显式配置为 dummy 或 real，禁止隐式 Dummy"
     )
-    SERVICE_MODE = "dummy"
+if SERVICE_MODE not in ("dummy", "real"):
+    raise ValueError(
+        f"未知 PI05_SERVICE_MODE={SERVICE_MODE!r}；只允许显式配置 dummy 或 real"
+    )
 
 # 把服务层模式桥接给执行器（执行器读 PI05_MODE），保证服务层为唯一真相源
 os.environ["PI05_MODE"] = SERVICE_MODE
@@ -89,11 +91,14 @@ SCHEMA_VERSION = "v1"
 # 对齐 schemas/*.json 的 schema_version pattern "^1\.[0-9]+$"（方案书 §4 公共标识）
 CONTRACT_SCHEMA_VERSION = "1.0"
 POLICY_ID = "pi05"
+EXPECTED_SUBTASK_ID = "S01_ARM_A_PACK_HANDOFF"
 DEFAULT_CONTROL_HZ = 10
 DEFAULT_EXPIRES_AFTER_MS = 1000
+EXPECTED_FULL_IMAGE_SIZE = (1280, 720)
 
 # sha256:<64hex> 校验模式（方案书 §4：checkpoint_sha/norm_stats_sha 必须为完整不可变摘要）
 _SHA_PATTERN = re.compile(r"^sha256:[0-9a-fA-F]{64}$")
+_UNSET_ARTIFACT_SHA = "sha256:" + "0" * 64
 # HTTP 路由声明的支持任务类型（方案书 §6.2 / Pi05Adapter.descriptor.task_types）
 SUPPORTED_TASK_TYPES: list[str] = [
     "pick_place",
@@ -108,6 +113,26 @@ SUPPORTED_ACTION_CONTRACTS: list[str] = [CONTRACT_SCHEMA_VERSION]
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _INFER_SCHEMA_PATH = _PROJECT_ROOT / "schemas" / "executor-infer.schema.json"
 _CANCEL_SCHEMA_PATH = _PROJECT_ROOT / "schemas" / "executor-cancel.schema.json"
+_AGENT_CONFIG_PATH = _PROJECT_ROOT / "configs" / "agent.default.json"
+
+
+def _load_expected_prompt() -> str:
+    """从框架机读配置加载冻结的 Arm_A 指令。"""
+    agent_config = json.loads(_AGENT_CONFIG_PATH.read_text(encoding="utf-8"))
+    lifecycle = agent_config.get("lifecycle")
+    task_profile = (
+        lifecycle.get("task_profile") if isinstance(lifecycle, dict) else None
+    )
+    prompt = (
+        task_profile.get("arm_a_instruction")
+        if isinstance(task_profile, dict)
+        else None
+    )
+    if not isinstance(prompt, str) or not prompt.strip():
+        raise RuntimeError(
+            "agent.default.json 缺少 lifecycle.task_profile.arm_a_instruction"
+        )
+    return prompt
 
 
 def _load_request_validator(schema_path: Path) -> Draft202012Validator:
@@ -124,19 +149,7 @@ def _load_request_validator(schema_path: Path) -> Draft202012Validator:
 
 _INFER_REQUEST_VALIDATOR = _load_request_validator(_INFER_SCHEMA_PATH)
 _CANCEL_REQUEST_VALIDATOR = _load_request_validator(_CANCEL_SCHEMA_PATH)
-
-# ---------------------------------------------------------------------------
-# CAS resolver gate（E-04：全仓缺少 CAS resolver，real 模式拒绝零图占位）
-# ---------------------------------------------------------------------------
-
-
-def _raise_cas_resolver_pending() -> None:
-    raise ExecutorError(
-        FailureCode.EXECUTOR_UNAVAILABLE,
-        "CAS resolver pending implementation by Role A — "
-        "真实模式禁止使用零图占位替代 CAS 图像下载",
-        retryable=True,
-    )
+EXPECTED_PROMPT = _load_expected_prompt()
 
 # ---------------------------------------------------------------------------
 # 日志
@@ -167,56 +180,15 @@ except Exception as _e:
     ObsPacket = None  # type: ignore
     logger.error("Pi05Executor 导入失败：%s；服务将以错误状态启动", _e)
 
-# 统一 ImageReference 工具（与 pi05_contract_adapter.py 共享）
-try:
-    from services.pi05.src.observation import (  # type: ignore
-        image_reference_to_placeholder,
-        is_image_reference,
-        validate_image_reference,
-    )
-except Exception:
-    # 回退（不应发生；observation.py 与 openpi_service.py 同包）
-    def is_image_reference(value: Any) -> bool:  # type: ignore[no-redef]
-        return isinstance(value, dict) and all(
-            value.get(key)
-            for key in ("uri", "image_sha256", "camera_id", "width", "height")
-        )
-
-    def image_reference_to_placeholder(image_ref: dict[str, Any]) -> np.ndarray:  # type: ignore[no-redef]
-        w = max(1, min(int(image_ref.get("width", 640)), 4096))
-        h = max(1, min(int(image_ref.get("height", 480)), 4096))
-        return np.zeros((h, w, 3), dtype=np.uint8)
-
-    def validate_image_reference(  # type: ignore[no-redef]
-        value: Any,
-        *,
-        expected_camera_id: str | None = None,
-    ) -> dict[str, Any]:
-        """回退版 ImageReference 校验（严格模式）。"""
-        if not isinstance(value, dict):
-            raise ValueError("ImageReference 必须是对象")
-        required = {"uri", "image_sha256", "camera_id", "width", "height"}
-        if set(value) != required:
-            raise ValueError(f"ImageReference 必须恰好包含 {required}")
-        _sha_pat = re.compile(r"^sha256:[0-9a-fA-F]{64}$")
-        if not isinstance(value["uri"], str) or not value["uri"].startswith("cas://sha256/"):
-            raise ValueError("ImageReference.uri 格式非法")
-        if not _sha_pat.fullmatch(value.get("image_sha256", "")):
-            raise ValueError("ImageReference.image_sha256 格式非法")
-        if expected_camera_id is not None and value.get("camera_id") != expected_camera_id:
-            raise ValueError(
-                f"ImageReference.camera_id 必须为 {expected_camera_id!r}"
-            )
-        for k in ("width", "height"):
-            v = value.get(k)
-            if isinstance(v, bool) or not isinstance(v, int) or v < 1:
-                raise ValueError(f"ImageReference.{k} 必须是正整数")
-        return value
-
+from services.pi05.handler import build_v1_infer_handler
 
 # 稳定错误码枚举（方案书 §13；src/industrial_agent/errors.py 为冻结文件，仅 import）
 try:
-    from src.industrial_agent.errors import ExecutorError, FailureCode  # type: ignore
+    from industrial_agent.errors import (  # type: ignore
+        ExecutorError,
+        FailureCode,
+        ImageCasError,
+    )
 
     _FAILURE_CODE_AVAILABLE = True
 except Exception as _e:  # 退化：错误码用字符串常量兜底
@@ -231,6 +203,12 @@ except Exception as _e:  # 退化：错误码用字符串常量兜底
         EXECUTOR_BACKPRESSURE = "EXEC_2106_BACKPRESSURE"
         EXECUTOR_CANCELLED = "EXEC_2107_CANCELLED"
         INVALID_TASK = "TASK_1001_INVALID"
+        CAS_NOT_FOUND = "CAS_1301_NOT_FOUND"
+        CAS_DIGEST_MISMATCH = "CAS_1302_DIGEST_MISMATCH"
+        CAS_DECODE_FAILED = "CAS_1303_DECODE_FAILED"
+        CAS_METADATA_MISMATCH = "CAS_1304_METADATA_MISMATCH"
+        CAS_LIMIT_EXCEEDED = "CAS_1305_LIMIT_EXCEEDED"
+        CAS_UNAVAILABLE = "CAS_1306_UNAVAILABLE"
 
     FailureCode = _FailureCodeFallback  # type: ignore[assignment, misc]
 
@@ -240,10 +218,22 @@ except Exception as _e:  # 退化：错误码用字符串常量兜底
             self.code = code
             self.retryable = retryable
 
+    class ImageCasError(Exception):  # type: ignore[no-redef]
+        def __init__(self, code: Any, message: str, *, retryable: bool = False):
+            super().__init__(message)
+            self.code = code
+            self.retryable = retryable
+
+
 # ---------------------------------------------------------------------------
 # 全局执行器实例 + 运行时状态
 # ---------------------------------------------------------------------------
 executor: Any | None = None
+_executor_init_error: str | None = None
+image_cas: Any | None = None
+request_image_resolver: Any | None = None
+v1_infer_handler: Any | None = None
+_image_cas_init_error: str | None = None
 _START_TIME = time.time()
 
 # 动作块过期丢弃状态（方案书 §3.4 动作过期）
@@ -261,16 +251,53 @@ _pending_chunks_lock: asyncio.Lock = (
 
 def _init_executor() -> None:
     """根据 PI05_SERVICE_MODE 初始化执行器（dummy/real）。"""
-    global executor
+    global executor, _executor_init_error
     if not _EXECUTOR_AVAILABLE:
         logger.error("执行器不可用，跳过初始化。")
+        _executor_init_error = _EXECUTOR_IMPORT_ERROR or "Pi05Executor 不可用"
         return
     try:
         executor = Pi05Executor()
+        _executor_init_error = None
         logger.info("Pi05Executor 初始化完成：mode=%s", SERVICE_MODE)
     except Exception as e:
         logger.error("Pi05Executor 初始化异常：%s", e)
         executor = None
+        _executor_init_error = str(e)
+
+
+def _init_image_cas() -> None:
+    """初始化 A 提供的公共 VLA 请求图像 resolver。
+
+    HTTP 生产入口在 dummy/real 两种显式模式下都必须先解析并校验真实 CAS
+    图像，禁止以黑图或 placeholder 替代。任何导入、配置或只读就绪检查失败都
+    保持 fail-closed；本服务不复制或自行实现 CAS 路径、SHA、缓存和重试规则。
+    """
+    global image_cas, request_image_resolver, v1_infer_handler
+    global _image_cas_init_error
+    image_cas = None
+    request_image_resolver = None
+    v1_infer_handler = None
+    _image_cas_init_error = None
+
+    try:
+        from industrial_agent.service_images import CasRequestImageResolver
+
+        agent_config = json.loads(_AGENT_CONFIG_PATH.read_text(encoding="utf-8"))
+        request_image_resolver = CasRequestImageResolver.from_agent_config(agent_config)
+        image_cas = request_image_resolver.image_cas
+        image_cas.assert_ready(writable=False)
+        v1_infer_handler = build_v1_infer_handler(
+            resolver=request_image_resolver,
+            backend=_infer_backend,
+        )
+        logger.info("公共 VLA CAS resolver 初始化完成：root=%s", image_cas.config.root)
+    except Exception as exc:
+        image_cas = None
+        request_image_resolver = None
+        v1_infer_handler = None
+        _image_cas_init_error = str(exc)
+        logger.error("公共 VLA CAS resolver 初始化失败：%s", exc)
 
 
 def _checkpoint_sha() -> str:
@@ -301,7 +328,7 @@ def _resolve_checkpoint_sha() -> str:
     env_sha = os.environ.get("PI05_CHECKPOINT_SHA", "").strip()
     if env_sha:
         return env_sha
-    return _checkpoint_sha()
+    return _checkpoint_sha() or _UNSET_ARTIFACT_SHA
 
 
 def _resolve_norm_stats_sha() -> str:
@@ -309,7 +336,7 @@ def _resolve_norm_stats_sha() -> str:
     env_sha = os.environ.get("PI05_NORM_STATS_SHA", "").strip()
     if env_sha:
         return env_sha
-    return _norm_stats_sha()
+    return _norm_stats_sha() or _UNSET_ARTIFACT_SHA
 
 
 def _validate_sha_format(sha: str, field_name: str) -> None:
@@ -352,6 +379,7 @@ _cancelled_tasks_lock: asyncio.Lock = asyncio.Lock()
 async def lifespan(app: FastAPI):
     """启动时初始化执行器并打印自测日志。"""
     _init_executor()
+    _init_image_cas()
     logger.info("===== openpi_service 启动自检 =====")
     logger.info("服务监听：%s:%d", SERVICE_HOST, SERVICE_PORT)
     logger.info("服务模式：%s", SERVICE_MODE)
@@ -359,6 +387,12 @@ async def lifespan(app: FastAPI):
     logger.info("执行器可用：%s", _EXECUTOR_AVAILABLE)
     if _EXECUTOR_IMPORT_ERROR:
         logger.info("执行器导入错误：%s", _EXECUTOR_IMPORT_ERROR)
+    logger.info(
+        "公共 VLA CAS resolver：%s",
+        "ready"
+        if v1_infer_handler is not None
+        else f"unavailable: {_image_cas_init_error}",
+    )
     if executor is not None:
         try:
             logger.info("执行器健康检查：%s", executor.health_check())
@@ -384,7 +418,7 @@ app = FastAPI(title="openpi π0.5 Service", version="1.0.0", lifespan=lifespan)
 
 
 @app.get("/health")
-async def health() -> dict[str, Any]:
+async def health() -> JSONResponse:
     """健康检查端点（方案书 §6 / schemas/executor-health.schema.json）。
 
     返回 7 必填字段：schema_version / service / status / checkpoint_sha /
@@ -393,24 +427,66 @@ async def health() -> dict[str, Any]:
     """
     ckpt_sha = _resolve_checkpoint_sha()
     norm_sha = _resolve_norm_stats_sha()
+    ckpt_sha_valid = bool(_SHA_PATTERN.fullmatch(ckpt_sha))
+    norm_sha_valid = bool(_SHA_PATTERN.fullmatch(norm_sha))
     if executor is None:
-        status = "loading"
+        status = "degraded" if _executor_init_error else "loading"
     else:
         try:
-            executor.health_check()
-            status = "ready"
+            executor_health = executor.health_check()
+            actual_mode = (
+                executor_health.get("mode")
+                if isinstance(executor_health, dict)
+                else None
+            )
+            policy_type = (
+                executor_health.get("policy_type")
+                if isinstance(executor_health, dict)
+                else None
+            )
+            mode_matches = actual_mode == SERVICE_MODE
+            real_policy_ready = SERVICE_MODE != "real" or (
+                actual_mode == "real" and policy_type not in (None, "mock")
+            )
+            cas_ready = False
+            if (
+                image_cas is not None
+                and v1_infer_handler is not None
+                and _image_cas_init_error is None
+            ):
+                try:
+                    image_cas.assert_ready(writable=False)
+                    cas_ready = True
+                except Exception:
+                    cas_ready = False
+            sha_ready = ckpt_sha_valid and norm_sha_valid
+            if SERVICE_MODE == "real":
+                sha_ready = (
+                    sha_ready
+                    and ckpt_sha != _UNSET_ARTIFACT_SHA
+                    and norm_sha != _UNSET_ARTIFACT_SHA
+                )
+            status = (
+                "ready"
+                if mode_matches and real_policy_ready and cas_ready and sha_ready
+                else "degraded"
+            )
         except Exception:
             status = "degraded"
-    return {
+    content = {
         "schema_version": CONTRACT_SCHEMA_VERSION,
         "service": POLICY_ID,
         "status": status,
-        "checkpoint_sha": ckpt_sha,
-        "norm_stats_sha": norm_sha,
+        "checkpoint_sha": ckpt_sha if ckpt_sha_valid else _UNSET_ARTIFACT_SHA,
+        "norm_stats_sha": norm_sha if norm_sha_valid else _UNSET_ARTIFACT_SHA,
         "supported_task_types": list(SUPPORTED_TASK_TYPES),
         "supported_action_contracts": list(SUPPORTED_ACTION_CONTRACTS),
         "uptime_ms": int((time.time() - _START_TIME) * 1000),
     }
+    return JSONResponse(
+        status_code=200 if status == "ready" else 503,
+        content=content,
+    )
 
 
 # ===========================================================================
@@ -499,18 +575,19 @@ def _make_infer_error_body(
 def _build_obs_from_model_input(
     model_input: dict[str, Any], req: dict[str, Any]
 ) -> Any:
-    """从 model_input 构造 ObsPacket。
+    """从公共 handler 已解析的 model_input 构造 ObsPacket。
 
     输入格式由 executor-infer.schema.json $defs/pi05ModelInput 冻结（E-02）：
       - additionalProperties: false（拒绝 pixels/data 等非契约字段）
-      - full_image: ImageReference {uri, image_sha256, camera_id=CAM_A_TOP, width, height}
-      - wrist_image: ImageReference | null
+      - HTTP 边界的 full_image 是 CAM_A_TOP/1280x720 ImageReference
+      - 本函数收到的 full_image 已被公共 handler 替换为只读 RGB ndarray
+      - wrist_image: null
       - robot.state: non-empty float array（isfinite 必检，E-03）
       - robot.tcp_pose_m_rad: non-empty float array (minItems=6, isfinite 必检，E-03)
       - prompt: non-empty string (minLength=1)
 
-    E-04：调用 validate_image_reference(expected_camera_id="CAM_A_TOP") 校验
-    full_image；real 模式下缺少 CAS resolver 直接拒绝，禁止零图占位。
+    CAS URI、声明摘要、文件摘要、解码、相机与尺寸校验全部由
+    CasRequestImageResolver.resolve_vla_request() 在调用 backend 前完成。
     """
     if ObsPacket is None:
         raise RuntimeError("ObsPacket 不可用（执行器未导入）")
@@ -528,35 +605,44 @@ def _build_obs_from_model_input(
     if not isinstance(camera, dict):
         raise ValueError("observation.camera 必须是对象")
 
-    # ---- full_image：E-04 显式调用 validate_image_reference + CAM_A_TOP 强制校验 ----
+    # ---- full_image：公共 handler 已替换为已校验、不可写的 RGB 像素 ----
     full_image = camera.get("full_image")
-    try:
-        validate_image_reference(full_image, expected_camera_id="CAM_A_TOP")
-    except Exception as exc:
-        raise ValueError(
-            f"observation.camera.full_image 校验失败（必须为 ImageReference "
-            f"camera_id=CAM_A_TOP）：{exc}"
-        ) from exc
+    if not isinstance(full_image, np.ndarray):
+        raise ImageCasError(
+            FailureCode.CAS_METADATA_MISMATCH,
+            "公共 CAS handler 未提供 observation.camera.full_image RGB ndarray",
+            retryable=False,
+        )
+    expected_shape = (
+        EXPECTED_FULL_IMAGE_SIZE[1],
+        EXPECTED_FULL_IMAGE_SIZE[0],
+        3,
+    )
+    if full_image.dtype != np.uint8 or full_image.shape != expected_shape:
+        raise ImageCasError(
+            FailureCode.CAS_METADATA_MISMATCH,
+            "公共 CAS handler 返回的 full_image 必须为 "
+            f"uint8{expected_shape}，收到 dtype={full_image.dtype} "
+            f"shape={full_image.shape}",
+            retryable=False,
+        )
+    if full_image.flags.writeable:
+        raise ImageCasError(
+            FailureCode.CAS_METADATA_MISMATCH,
+            "公共 CAS handler 返回的 full_image 必须为只读数组",
+            retryable=False,
+        )
+    rgb_front = full_image
 
-    # E-04：CAS resolver gate —— real 模式禁止零图占位
-    if SERVICE_MODE == "real":
-        _raise_cas_resolver_pending()
-
-    rgb_front = image_reference_to_placeholder(full_image)
-
-    # ---- wrist_image —— ImageReference 或 null（E-04 同款校验）----
-    rgb_wrist: Any = None
+    # ---- 冻结三相机配置没有腕部相机，wrist_image 必须为 null ----
     wrist_image = camera.get("wrist_image")
     if wrist_image is not None:
-        try:
-            validate_image_reference(wrist_image)
-        except Exception as exc:
-            raise ValueError(
-                f"observation.camera.wrist_image 必须为 ImageReference 或 null：{exc}"
-            ) from exc
-        if SERVICE_MODE == "real":
-            _raise_cas_resolver_pending()
-        rgb_wrist = image_reference_to_placeholder(wrist_image)
+        raise ImageCasError(
+            FailureCode.CAS_METADATA_MISMATCH,
+            "冻结三相机配置要求 observation.camera.wrist_image=null",
+            retryable=False,
+        )
+    rgb_wrist: Any = None
 
     # ---- robot state（E-03：isfinite 必检）----
     robot = observation.get("robot")
@@ -576,7 +662,9 @@ def _build_obs_from_model_input(
         raise ValueError("observation.robot.tcp_pose_m_rad 是必填字段")
     tcp_pose = np.array(tcp_src, dtype=np.float32)
     if not np.all(np.isfinite(tcp_pose)):
-        raise ValueError("observation.robot.tcp_pose_m_rad 包含 NaN 或 Infinity（E-03 拒绝）")
+        raise ValueError(
+            "observation.robot.tcp_pose_m_rad 包含 NaN 或 Infinity（E-03 拒绝）"
+        )
 
     # ---- 时间戳 ----
     ts_ms = observation.get("timestamp_ms")
@@ -599,6 +687,26 @@ def _build_obs_from_model_input(
         instruction=prompt,
         runtime_flags={"safety": dict(safety)},
     )
+
+
+def _infer_backend(prepared_request: Mapping[str, Any]) -> Mapping[str, Any]:
+    """公共 VLA handler 的 π0.5 backend；输入已完成 CAS 解析与冻结校验。"""
+    if executor is None:
+        raise ExecutorError(
+            FailureCode.EXECUTOR_UNAVAILABLE,
+            "π0.5 执行器未初始化",
+            retryable=True,
+        )
+    model_input = prepared_request.get("model_input")
+    if not isinstance(model_input, dict):
+        raise ImageCasError(
+            FailureCode.CAS_METADATA_MISMATCH,
+            "公共 CAS handler 未提供 model_input 对象",
+            retryable=False,
+        )
+    req = dict(prepared_request)
+    obs = _build_obs_from_model_input(model_input, req)
+    return {"chunk": executor.infer(obs)}
 
 
 def _canonical_chunk_to_action_chunk_dict(chunk: Any, task_id: str) -> dict[str, Any]:
@@ -705,6 +813,25 @@ async def http_infer(request: Request) -> JSONResponse:
         )
         return JSONResponse(status_code=400, content=err_body)
 
+    # ---- subtask 与 prompt 必须匹配冻结的 Arm_A S01 配置 ----
+    if req["subtask_id"] != EXPECTED_SUBTASK_ID:
+        err_body = _make_infer_error_body(
+            req,
+            code=_failure_code_value(FailureCode.INVALID_TASK),
+            message=f"subtask_id 不匹配：期望 {EXPECTED_SUBTASK_ID!r}，"
+            f"收到 {req['subtask_id']!r}",
+            retryable=False,
+        )
+        return JSONResponse(status_code=400, content=err_body)
+    if req["model_input"]["prompt"] != EXPECTED_PROMPT:
+        err_body = _make_infer_error_body(
+            req,
+            code=_failure_code_value(FailureCode.INVALID_TASK),
+            message="model_input.prompt 与冻结的 Arm_A 指令不匹配",
+            retryable=False,
+        )
+        return JSONResponse(status_code=400, content=err_body)
+
     # ---- expected_action_contract 必须为 1.0 ----
     if req.get("expected_action_contract") != CONTRACT_SCHEMA_VERSION:
         err_body = _make_infer_error_body(
@@ -759,9 +886,42 @@ async def http_infer(request: Request) -> JSONResponse:
         )
         return JSONResponse(status_code=408, content=err_body)
 
-    # ---- 构造 ObsPacket ----
+    # ---- E-05：推理前登记 task_id（修复 in-flight cancel 竞态）----
+    _seen_task_ids[req["task_id"]] = time.time()
+
+    # ---- 公共 CAS handler 解析真实图像后调用 backend 推理 ----
+    if v1_infer_handler is None:
+        err_body = _make_infer_error_body(
+            req,
+            code=_failure_code_value(FailureCode.CAS_UNAVAILABLE),
+            message=_image_cas_init_error or "公共 VLA CAS resolver 未初始化",
+            retryable=True,
+            retry_after_ms=500,
+        )
+        return JSONResponse(status_code=503, content=err_body)
+
+    t_infer_start = time.time()
     try:
-        obs = _build_obs_from_model_input(req["model_input"], req)
+        if run_in_threadpool is not None:
+            handled = await run_in_threadpool(v1_infer_handler.handle, req)
+        else:
+            loop = asyncio.get_event_loop()
+            handled = await loop.run_in_executor(
+                None,
+                lambda: v1_infer_handler.handle(req),
+            )
+        chunk = handled["chunk"]
+    except ImageCasError as e:
+        err_body = _make_infer_error_body(
+            req,
+            code=_failure_code_value(e.code),
+            message=str(e),
+            retryable=e.retryable,
+        )
+        return JSONResponse(
+            status_code=503 if e.retryable else 422,
+            content=err_body,
+        )
     except ExecutorError as e:
         err_body = _make_infer_error_body(
             req,
@@ -770,26 +930,6 @@ async def http_infer(request: Request) -> JSONResponse:
             retryable=e.retryable,
         )
         return JSONResponse(status_code=503, content=err_body)
-    except Exception as e:
-        err_body = _make_infer_error_body(
-            req,
-            code=_failure_code_value(FailureCode.INVALID_TASK),
-            message=f"model_input 解析失败：{e}",
-            retryable=False,
-        )
-        return JSONResponse(status_code=400, content=err_body)
-
-    # ---- E-05：推理前登记 task_id（修复 in-flight cancel 竞态）----
-    _seen_task_ids[req["task_id"]] = time.time()
-
-    # ---- 推理（同步调用放线程池，避免阻塞事件循环）----
-    t_infer_start = time.time()
-    try:
-        if run_in_threadpool is not None:
-            chunk = await run_in_threadpool(executor.infer, obs)
-        else:
-            loop = asyncio.get_event_loop()
-            chunk = await loop.run_in_executor(None, lambda: executor.infer(obs))
     except Exception as e:
         logger.error("HTTP /v1/infer 推理异常：%s", e)
         err_body = _make_infer_error_body(
@@ -831,9 +971,7 @@ async def http_infer(request: Request) -> JSONResponse:
 
     # ---- E-05：推理完成后检查取消状态（防止迟到结果覆盖 cancel）----
     if req["task_id"] in _cancelled_tasks:
-        logger.info(
-            "task_id=%s 在推理期间被取消，丢弃结果", req["task_id"]
-        )
+        logger.info("task_id=%s 在推理期间被取消，丢弃结果", req["task_id"])
         err_body = _make_infer_error_body(
             req,
             code=_failure_code_value(FailureCode.EXECUTOR_CANCELLED),
@@ -1174,8 +1312,6 @@ def _check_episode_step(
     return (None, new_ep, new_sid)
 
 
-
-
 def _decode_obs_image(raw: Any) -> np.ndarray:
     """将 WS 请求中的图像字段解码为 uint8[H,W,3]。
 
@@ -1195,13 +1331,9 @@ def _decode_obs_image(raw: Any) -> np.ndarray:
     if arr.dtype != np.uint8:
         raise ValueError(f"图像 dtype 非法：{arr.dtype}，期望 uint8（E-03）")
     if arr.shape[0] < 1 or arr.shape[0] > MAX_IMAGE_DIM:
-        raise ValueError(
-            f"图像高度 {arr.shape[0]} 超限（1..{MAX_IMAGE_DIM}，E-03）"
-        )
+        raise ValueError(f"图像高度 {arr.shape[0]} 超限（1..{MAX_IMAGE_DIM}，E-03）")
     if arr.shape[1] < 1 or arr.shape[1] > MAX_IMAGE_DIM:
-        raise ValueError(
-            f"图像宽度 {arr.shape[1]} 超限（1..{MAX_IMAGE_DIM}，E-03）"
-        )
+        raise ValueError(f"图像宽度 {arr.shape[1]} 超限（1..{MAX_IMAGE_DIM}，E-03）")
     return arr
 
 
@@ -1243,6 +1375,24 @@ def _build_obs(data: dict[str, Any]) -> Any:
 @app.websocket("/")
 async def ws_infer(ws: WebSocket) -> None:
     await ws.accept()
+
+    # 当前项目冻结的生产入口只有 HTTP /v1/infer，图像必须以 ImageReference
+    # 进入并由公共 ImageCas resolver 校验。旧 WS 协议直接接收内联像素，
+    # 因此只保留给显式 Dummy 本地兼容测试；Real 模式必须 fail-closed。
+    if SERVICE_MODE == "real":
+        await _send_error(
+            ws,
+            {
+                "error": "unsupported_transport",
+                "reason": (
+                    "Real 模式不接受旧 WebSocket 内联图像协议；"
+                    "请使用冻结的 HTTP /v1/infer ImageReference 契约"
+                ),
+                "schema_version": SCHEMA_VERSION,
+            },
+        )
+        await ws.close(code=1008)
+        return
 
     # 执行器未就绪：返回错误并关闭
     if executor is None:
@@ -1326,9 +1476,7 @@ async def ws_infer(ws: WebSocket) -> None:
             expired_chunk = _conn_pending.get(ep)
             if expired_chunk is not None:
                 age_ms = (time.time() - expired_chunk["timestamp"]) * 1000.0
-                ttl = expired_chunk.get(
-                    "expires_after_ms", DEFAULT_EXPIRES_AFTER_MS
-                )
+                ttl = expired_chunk.get("expires_after_ms", DEFAULT_EXPIRES_AFTER_MS)
                 if age_ms > ttl:
                     logger.warning(
                         "Action chunk expired (episode=%s age_ms=%.0f > %dms)",

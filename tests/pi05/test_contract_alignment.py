@@ -23,9 +23,15 @@ import pytest
 from services.pi05.src.observation import ObsPacket
 from services.pi05.src.pi05 import MOCK_CHUNK_LEN, Pi05Executor
 from services.pi05.src.pi05_contract_adapter import Pi05ContractAdapter
-from src.industrial_agent.contracts import Observation, TaskSchema
-from src.industrial_agent.errors import ExecutorError, FailureCode
-from src.industrial_agent.executor import ExecutionContext
+from industrial_agent.contracts import Observation, TaskSchema
+from industrial_agent.errors import ExecutorError, FailureCode
+from industrial_agent.executor import ExecutionContext
+
+
+@pytest.fixture(autouse=True)
+def explicit_dummy_mode(monkeypatch):
+    """进程内契约测试显式启用 Dummy，不依赖执行器默认值。"""
+    monkeypatch.setenv("PI05_MODE", "dummy")
 
 
 # ── 辅助函数 ──────────────────────────────────────────────────────────────────
@@ -60,15 +66,15 @@ def _make_observation(
             "uri": f"cas://sha256/{arm_a_sha}",
             "image_sha256": f"sha256:{arm_a_sha}",
             "camera_id": "CAM_HANDOFF",
-            "width": 640,
-            "height": 480,
+            "width": 1280,
+            "height": 720,
         },
         "arm_a_rgb": {
             "uri": f"cas://sha256/{arm_a_sha}",
             "image_sha256": f"sha256:{arm_a_sha}",
             "camera_id": "CAM_A_TOP",
-            "width": 640,
-            "height": 480,
+            "width": 1280,
+            "height": 720,
         },
         "wrist_image": {
             "uri": f"cas://sha256/{wrist_sha}",
@@ -199,8 +205,8 @@ def test_image_reference_wrist_is_null():
             "uri": f"cas://sha256/{arm_sha}",
             "image_sha256": f"sha256:{arm_sha}",
             "camera_id": "CAM_A_TOP",
-            "width": 640,
-            "height": 480,
+            "width": 1280,
+            "height": 720,
         },
         "wrist_image": None,
     }
@@ -223,8 +229,8 @@ def test_missing_arm_a_rgb_raises_executor_error():
                 "uri": f"cas://sha256/{'d' * 64}",
                 "image_sha256": f"sha256:{'d' * 64}",
                 "camera_id": "CAM_A_TOP",
-                "width": 640,
-                "height": 480,
+                "width": 1280,
+                "height": 720,
             },
             # arm_a_rgb 故意缺失
         }

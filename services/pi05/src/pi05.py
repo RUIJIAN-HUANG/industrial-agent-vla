@@ -73,12 +73,12 @@ except Exception:  # pi05_client 不可用时降级 Mock
 # ---------------------------------------------------------------------------
 import uuid
 
-from src.industrial_agent.contracts import (  # type: ignore
+from industrial_agent.contracts import (  # type: ignore
     ACTION_CONTRACT_VERSION,
     ActionChunk,
     ActionStep,
 )
-from src.industrial_agent.executor import (  # type: ignore
+from industrial_agent.executor import (  # type: ignore
     ExecutorDescriptor,
     is_pinned_artifact_digest,
 )
@@ -107,7 +107,7 @@ SPACE_ID = "eef_delta_xyz_axisangle_gripper_v1"
 FRAME_ID = "robot_base"
 EXPIRES_AFTER_MS = 1000  # 动作块超时丢弃（方案书 §3.4 动作过期）
 
-# 预分配零图占位，避免 _build_example 每帧 np.zeros_like
+# 预分配零图占位，仅供显式 Dummy 模式使用
 _BLACK_640x480: np.ndarray = np.zeros((480, 640, 3), dtype=np.uint8)
 
 
@@ -133,7 +133,7 @@ def _make_fixed_test_image() -> np.ndarray:
     rng = np.random.RandomState(20260720)
     img = rng.randint(0, 256, size=(480, 640, 3), dtype=np.uint8)
     # 叠加可辨识渐变，便于人眼核对方向/通道（R 通道横向渐变）
-    grad = np.linspace(0, 255, 640, dtype=np.uint8)
+    grad: np.ndarray = np.linspace(0, 255, 640, dtype=np.uint8)
     img[:, :, 0] = grad[None, :]
     return img
 
@@ -172,7 +172,7 @@ def _compute_dir_sha(path: str, max_files: int = 50) -> str:
                 continue
         if count >= max_files:
             break
-    return h.hexdigest()[:16]
+    return "sha256:" + h.hexdigest()
 
 
 # ---------------------------------------------------------------------------
@@ -182,7 +182,7 @@ class Pi05Executor(BaseExecutor):
     """π0.5 专属执行器（业务逻辑层）。
 
     支持 Mock（dummy）与真实（real）两种模式，通过环境变量 PI05_MODE 切换：
-      - PI05_MODE=dummy|real（默认 dummy）
+      - PI05_MODE=dummy|real（必须显式配置）
       - PI05_CONFIG_NAME（默认 pi05_droid）
       - PI05_CHECKPOINT_DIR（本地 checkpoint 路径）
       - PI05_WS_HOST / PI05_WS_PORT（远程 WebSocket 服务）
@@ -192,10 +192,15 @@ class Pi05Executor(BaseExecutor):
 
     def __init__(self) -> None:
         # ---- 环境变量 ----
-        self.mode: str = os.environ.get("PI05_MODE", "dummy").lower()
+        self.mode: str = os.environ.get("PI05_MODE", "").strip().lower()
+        if not self.mode:
+            raise RuntimeError(
+                "PI05_MODE 未设置；必须显式配置为 dummy 或 real，禁止隐式 Dummy"
+            )
         if self.mode not in ("dummy", "real"):
-            logger.warning("未知 PI05_MODE=%s，回退到 dummy", self.mode)
-            self.mode = "dummy"
+            raise ValueError(
+                f"未知 PI05_MODE={self.mode!r}；只允许显式配置 dummy 或 real"
+            )
         self.config_name: str = os.environ.get("PI05_CONFIG_NAME", "pi05_droid")
         self.checkpoint_dir: str | None = os.environ.get("PI05_CHECKPOINT_DIR")
         self.ws_host: str | None = os.environ.get("PI05_WS_HOST")
@@ -229,12 +234,9 @@ class Pi05Executor(BaseExecutor):
         )
 
     def _init_real_policy(self) -> None:
-        """通过 pi05_client 创建策略客户端；不可用则降级 Mock。"""
+        """通过 pi05_client 创建策略客户端；不可用时 fail-closed。"""
         if make_policy_client is None:
-            logger.warning("pi05_client 不可用，降级到 Mock 模式。")
-            self.mode = "dummy"
-            self._init_mock_policy()
-            return
+            raise RuntimeError("real 模式要求 pi05_client 可用，禁止降级到 Dummy")
 
         self._policy = make_policy_client(
             config_name=self.config_name,
@@ -243,12 +245,10 @@ class Pi05Executor(BaseExecutor):
             ws_port=self.ws_port,
         )
         if self._policy is None:
-            logger.warning(
-                "无可用 π0.5 策略客户端（openpi/WS 均不可用），降级到 Mock 模式。"
+            raise RuntimeError(
+                "real 模式无可用 π0.5 策略客户端（openpi/WS 均不可用），"
+                "禁止降级到 Dummy"
             )
-            self.mode = "dummy"
-            self._init_mock_policy()
-            return
 
         self._policy_type = self._policy.client_type
         # 本地客户端可从 checkpoint 目录计算 sha；远程客户端用环境变量指定
@@ -278,7 +278,7 @@ class Pi05Executor(BaseExecutor):
             return
         try:
             with open(path, "rb") as f:
-                self._norm_stats_sha = hashlib.sha256(f.read()).hexdigest()[:16]
+                self._norm_stats_sha = "sha256:" + hashlib.sha256(f.read()).hexdigest()
             logger.info("记录 norm_stats SHA: %s (sha=%s)", path, self._norm_stats_sha)
         except Exception as e:
             logger.warning("norm_stats SHA 计算失败：%s", e)
@@ -302,9 +302,11 @@ class Pi05Executor(BaseExecutor):
         }
         if obs.rgb_wrist is not None:
             example["observation/wrist_image_left"] = _prep_image(obs.rgb_wrist)
-        else:
+        elif self.mode == "dummy":
             logger.warning("rgb_wrist 为空，使用黑图占位（pi05 通常需要腕部图）")
             example["observation/wrist_image_left"] = _BLACK_640x480
+        else:
+            logger.info("real 模式 rgb_wrist 为空，省略腕部图输入键")
         return example
 
     def _pixel_audit_if_test(self, obs: ObsPacket) -> None:
@@ -440,11 +442,11 @@ class Pi05Executor(BaseExecutor):
         self._pixel_audit_if_test(obs)
         self._current_episode_id = obs.episode_id
 
-        if self.mode == "real" and self._policy is not None:
+        if self.mode == "real":
+            if self._policy is None or self._policy_type == "mock":
+                raise InferenceError("real 模式策略未就绪；禁止生成 Dummy 动作")
             raw = self._infer_real(obs)
         else:
-            if self.mode == "real":
-                logger.warning("real 模式但策略未就绪，本次降级使用 Mock 动作。")
             raw = self._infer_mock(obs)
 
         # ---- 动作块适配（方案书 §3.3.1 Para185）----
@@ -570,6 +572,10 @@ class Pi05Executor(BaseExecutor):
 
     def health_check(self) -> dict:
         """返回健康状态（方案书 §7.1）。"""
+        if self.mode == "real" and (
+            self._policy is None or self._policy_type == "mock"
+        ):
+            raise RuntimeError("real 模式策略未就绪")
         return {
             "mode": self.mode,
             "policy_type": self._policy_type,
@@ -672,8 +678,6 @@ class Pi05Executor(BaseExecutor):
 # 自测（构造假 ObsPacket，调用 infer，打印结果）
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    os.environ.setdefault("PI05_MODE", "dummy")
-
     ex = Pi05Executor()
     print("=== health_check ===")
     hc = ex.health_check()

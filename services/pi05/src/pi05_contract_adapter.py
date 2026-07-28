@@ -21,9 +21,9 @@ from services.pi05.src.observation import (
     is_image_reference,
 )
 from services.pi05.src.pi05 import Pi05Executor
-from src.industrial_agent.contracts import ActionChunk, Observation, TaskSchema
-from src.industrial_agent.errors import ExecutorError, FailureCode
-from src.industrial_agent.executor import ExecutionContext, ExecutorDescriptor
+from industrial_agent.contracts import ActionChunk, Observation, TaskSchema
+from industrial_agent.errors import ExecutorError, FailureCode
+from industrial_agent.executor import ExecutionContext, ExecutorDescriptor
 
 try:
     from configs.pi05.train_config import STATE_DIM  # type: ignore

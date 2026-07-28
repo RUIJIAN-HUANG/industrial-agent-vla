@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -20,6 +21,8 @@ IMAGE_REF_REQUIRED_FIELDS = frozenset(
     {"uri", "image_sha256", "camera_id", "width", "height"}
 )
 MAX_IMAGE_DIMENSION = 4096  # 单边最大像素，防止恶意请求分配超大数组
+_IMAGE_REF_URI_PATTERN = re.compile(r"^cas://sha256/([0-9a-fA-F]{64})$")
+_IMAGE_SHA_PATTERN = re.compile(r"^sha256:([0-9a-fA-F]{64})$")
 
 
 def is_image_reference(value: Any) -> bool:
@@ -36,6 +39,57 @@ def is_image_reference(value: Any) -> bool:
     return isinstance(value, dict) and all(
         value.get(key) for key in IMAGE_REF_REQUIRED_FIELDS
     )
+
+
+def validate_image_reference(
+    value: Any,
+    *,
+    expected_camera_id: str | None = None,
+) -> dict[str, Any]:
+    """严格校验冻结 ImageReference，并核对 URI 与声明摘要。
+
+    这里只验证纯输入契约，不访问 CAS。真实图像解析、只读鉴权及内容哈希复核
+    仍由部署侧 CAS Adapter 负责。
+    """
+    if not isinstance(value, dict):
+        raise ValueError("ImageReference 必须是对象")
+    if set(value) != IMAGE_REF_REQUIRED_FIELDS:
+        raise ValueError(
+            f"ImageReference 必须且只能包含 {sorted(IMAGE_REF_REQUIRED_FIELDS)}"
+        )
+
+    uri = value.get("uri")
+    image_sha256 = value.get("image_sha256")
+    if not isinstance(uri, str):
+        raise ValueError("ImageReference.uri 必须是字符串")
+    if not isinstance(image_sha256, str):
+        raise ValueError("ImageReference.image_sha256 必须是字符串")
+
+    uri_match = _IMAGE_REF_URI_PATTERN.fullmatch(uri)
+    sha_match = _IMAGE_SHA_PATTERN.fullmatch(image_sha256)
+    if uri_match is None:
+        raise ValueError("ImageReference.uri 必须匹配 cas://sha256/<64hex>")
+    if sha_match is None:
+        raise ValueError("ImageReference.image_sha256 必须匹配 sha256:<64hex>")
+    if uri_match.group(1) != sha_match.group(1):
+        raise ValueError("ImageReference.uri 摘要与 image_sha256 不一致")
+
+    camera_id = value.get("camera_id")
+    if not isinstance(camera_id, str) or not camera_id:
+        raise ValueError("ImageReference.camera_id 必须是非空字符串")
+    if expected_camera_id is not None and camera_id != expected_camera_id:
+        raise ValueError(f"ImageReference.camera_id 必须为 {expected_camera_id!r}")
+
+    for field_name in ("width", "height"):
+        dimension = value.get(field_name)
+        if isinstance(dimension, bool) or not isinstance(dimension, int):
+            raise ValueError(f"ImageReference.{field_name} 必须是整数")
+        if dimension < 1 or dimension > MAX_IMAGE_DIMENSION:
+            raise ValueError(
+                f"ImageReference.{field_name} 必须在 1..{MAX_IMAGE_DIMENSION} 范围内"
+            )
+
+    return value
 
 
 def image_reference_to_placeholder(image_ref: dict[str, Any]) -> np.ndarray:

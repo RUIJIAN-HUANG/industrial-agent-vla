@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import subprocess
 import sys
 import time
 import tracemalloc
@@ -34,7 +35,8 @@ import pytest
 # 确保服务以 dummy 模式启动（不加载真实模型 / openpi / JAX）
 # 必须在 import openpi_service 之前设置
 # ---------------------------------------------------------------------------
-os.environ.setdefault("PI05_SERVICE_MODE", "dummy")
+os.environ["PI05_SERVICE_MODE"] = "dummy"
+os.environ["PI05_MODE"] = "dummy"
 os.environ.setdefault(
     "PI05_CHECKPOINT_SHA",
     "sha256:0000000000000000000000000000000000000000000000000000000000000000",
@@ -52,6 +54,7 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 from starlette.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from services.pi05.src import openpi_service
 from services.pi05.src.action import CanonicalActionChunk
@@ -59,7 +62,11 @@ from services.pi05.src.observation import (
     ObsPacket,
     image_reference_to_placeholder,
     is_image_reference,
+    validate_image_reference,
 )
+from industrial_agent.errors import FailureCode, ImageCasError
+from industrial_agent.image_cas import ImageCas, ImageCasConfig
+from industrial_agent.service_images import CasRequestImageResolver
 
 # ---------------------------------------------------------------------------
 # 常量（严格对齐方案书 §3.4 / openpi_service.py 模块常量）
@@ -79,6 +86,7 @@ TEST_CHECKPOINT_SHA = (
 TEST_NORM_STATS_SHA = (
     "sha256:0000000000000000000000000000000000000000000000000000000000000000"
 )
+TEST_FULL_IMAGE_REFERENCE: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -208,7 +216,7 @@ def mock_executor() -> MagicMock:
 
 
 @pytest.fixture
-def test_client(mock_executor: MagicMock):
+def test_client(mock_executor: MagicMock, monkeypatch, tmp_path):
     """FastAPI TestClient：启动时用 mock_executor 替换真实 Pi05Executor。
 
     每个 test 获得：
@@ -216,11 +224,28 @@ def test_client(mock_executor: MagicMock):
     - 全局状态已重置（pending_chunks / current_episode_id / last_step_id / lock）
     - Pi05Executor 被 patch 为返回 mock_executor（彻底隔离底层执行器）
     """
+    global TEST_FULL_IMAGE_REFERENCE
+
+    # ---- 为所有 HTTP 用例创建真实临时 CAS 图像；Dummy 也不得绕过图像校验 ----
+    cas_root = tmp_path / "cas"
+    cas_root.mkdir()
+    shared_image_cas = ImageCas(ImageCasConfig(root=cas_root, cache_max_bytes=0))
+    TEST_FULL_IMAGE_REFERENCE = shared_image_cas.write_rgb(
+        np.zeros((720, 1280, 3), dtype=np.uint8),
+        camera_id="CAM_A_TOP",
+    ).to_dict()
+    monkeypatch.setenv("INDUSTRIAL_AGENT_CAS_ROOT", str(cas_root))
+
     # ---- 重置全局状态（防止跨测试串扰，方案书 §7.1 多 episode 并发安全）----
     openpi_service.executor = None
+    openpi_service._executor_init_error = None
     openpi_service.pending_chunks.clear()
     openpi_service._cancelled_tasks.clear()
     openpi_service._seen_task_ids.clear()
+    openpi_service.image_cas = None
+    openpi_service.request_image_resolver = None
+    openpi_service.v1_infer_handler = None
+    openpi_service._image_cas_init_error = None
     # 重建 lock：避免绑定到上一个 TestClient 的事件循环（Python 3.10+ _LoopBoundMixin）
     openpi_service._pending_chunks_lock = asyncio.Lock()
     openpi_service._cancelled_tasks_lock = asyncio.Lock()
@@ -232,9 +257,11 @@ def test_client(mock_executor: MagicMock):
 
     # ---- 清理全局状态 ----
     openpi_service.executor = None
+    openpi_service._executor_init_error = None
     openpi_service.pending_chunks.clear()
     openpi_service._cancelled_tasks.clear()
     openpi_service._seen_task_ids.clear()
+    TEST_FULL_IMAGE_REFERENCE = None
 
 
 @pytest.fixture
@@ -307,6 +334,241 @@ def test_service_lifecycle(test_client: TestClient, mock_executor: MagicMock):
     # 断开后服务端不崩溃：再次健康检查仍 ready
     resp2 = test_client.get("/health")
     assert resp2.json()["status"] == "ready"
+
+
+def test_service_import_requires_explicit_mode():
+    """PI05_SERVICE_MODE 缺失时模块导入即失败，禁止隐式 Dummy 启动。"""
+    env = os.environ.copy()
+    env.pop("PI05_SERVICE_MODE", None)
+    env.pop("PI05_MODE", None)
+
+    result = subprocess.run(
+        [sys.executable, "-c", "import services.pi05.src.openpi_service"],
+        cwd=_PROJECT_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "PI05_SERVICE_MODE 未设置" in result.stderr
+
+
+def test_real_init_failure_keeps_infer_unavailable(
+    test_client: TestClient,
+    mock_executor: MagicMock,
+    monkeypatch,
+):
+    """Real 初始化失败后保持 fail-closed，HTTP 不得调用既有 Dummy executor。"""
+    monkeypatch.setattr(openpi_service, "SERVICE_MODE", "real")
+    monkeypatch.setenv("PI05_MODE", "real")
+    with patch.object(
+        openpi_service,
+        "Pi05Executor",
+        side_effect=RuntimeError("real policy init failed"),
+    ):
+        openpi_service._init_executor()
+
+    response = test_client.post("/v1/infer", json=_make_http_infer_body())
+
+    assert openpi_service.executor is None
+    assert openpi_service._executor_init_error == "real policy init failed"
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "EXEC_2101_UNAVAILABLE"
+    mock_executor.infer.assert_not_called()
+
+
+def test_real_mode_rejects_legacy_websocket_inline_image_transport(
+    test_client: TestClient,
+    mock_executor: MagicMock,
+    monkeypatch,
+):
+    """Real 模式只允许冻结 HTTP ImageReference 入口，不接受旧 WS 内联像素。"""
+    monkeypatch.setattr(openpi_service, "SERVICE_MODE", "real")
+
+    with test_client.websocket_connect("/") as ws:
+        error = parse_response(ws.receive_bytes())
+        assert error["error"] == "unsupported_transport"
+        assert "HTTP /v1/infer ImageReference" in error["reason"]
+        with pytest.raises(WebSocketDisconnect) as exc_info:
+            ws.receive_bytes()
+
+    assert exc_info.value.code == 1008
+    mock_executor.infer.assert_not_called()
+
+
+def test_health_real_mode_with_dummy_executor_is_degraded(
+    test_client: TestClient,
+    monkeypatch,
+):
+    """请求 real 但执行器实际为 Dummy 时，health 必须 fail-closed。"""
+    monkeypatch.setattr(openpi_service, "SERVICE_MODE", "real")
+
+    response = test_client.get("/health")
+
+    assert response.status_code == 503
+    assert response.json()["status"] == "degraded"
+
+
+def test_health_without_initialized_executor_is_loading(
+    test_client: TestClient,
+    monkeypatch,
+):
+    """执行器尚未初始化且无已知错误时，health 返回 loading + HTTP 503。"""
+    monkeypatch.setattr(openpi_service, "executor", None)
+    monkeypatch.setattr(openpi_service, "_executor_init_error", None)
+
+    response = test_client.get("/health")
+
+    assert response.status_code == 503
+    assert response.json()["status"] == "loading"
+
+
+def test_health_invalid_artifact_sha_is_degraded_with_contract_body(
+    test_client: TestClient,
+    monkeypatch,
+):
+    """无效制品 SHA 必须降级，且响应字段仍满足冻结 digest 格式。"""
+    monkeypatch.setenv("PI05_CHECKPOINT_SHA", "not-a-sha")
+
+    response = test_client.get("/health")
+
+    assert response.status_code == 503
+    assert response.json()["status"] == "degraded"
+    assert response.json()["checkpoint_sha"] == "sha256:" + "0" * 64
+
+
+def test_init_image_cas_dummy_mode_uses_public_resolver(
+    monkeypatch,
+    tmp_path,
+):
+    """Dummy 只替换模型计算，HTTP 图像仍必须经过公共 CAS resolver。"""
+    monkeypatch.setattr(openpi_service, "SERVICE_MODE", "dummy")
+    monkeypatch.setenv("INDUSTRIAL_AGENT_CAS_ROOT", str(tmp_path))
+    monkeypatch.setattr(openpi_service, "image_cas", object())
+    monkeypatch.setattr(openpi_service, "_image_cas_init_error", "stale error")
+
+    openpi_service._init_image_cas()
+
+    assert openpi_service.image_cas is not None
+    assert openpi_service.request_image_resolver is not None
+    assert openpi_service.v1_infer_handler is not None
+    assert openpi_service._image_cas_init_error is None
+
+
+def test_init_image_cas_real_mode_uses_shared_read_only_resolver(
+    monkeypatch,
+    tmp_path,
+):
+    """Real 模式从 v1.3 配置创建 A 的公共 resolver，并执行只读就绪检查。"""
+    monkeypatch.setattr(openpi_service, "SERVICE_MODE", "real")
+    monkeypatch.setenv("INDUSTRIAL_AGENT_CAS_ROOT", str(tmp_path))
+    monkeypatch.setattr(openpi_service, "image_cas", None)
+    monkeypatch.setattr(openpi_service, "_image_cas_init_error", None)
+
+    openpi_service._init_image_cas()
+
+    assert openpi_service.image_cas is not None
+    assert openpi_service.image_cas.config.root == tmp_path
+    assert openpi_service.request_image_resolver is not None
+    assert openpi_service.v1_infer_handler is not None
+    assert openpi_service._image_cas_init_error is None
+
+
+def test_init_image_cas_real_mode_fails_closed_when_root_is_missing(
+    monkeypatch,
+    tmp_path,
+):
+    """Real 模式 CAS 根目录不可用时不得保留半初始化 resolver。"""
+    missing_root = tmp_path / "missing-cas-root"
+    monkeypatch.setattr(openpi_service, "SERVICE_MODE", "real")
+    monkeypatch.setenv("INDUSTRIAL_AGENT_CAS_ROOT", str(missing_root))
+    monkeypatch.setattr(openpi_service, "image_cas", object())
+    monkeypatch.setattr(openpi_service, "_image_cas_init_error", None)
+
+    openpi_service._init_image_cas()
+
+    assert openpi_service.image_cas is None
+    assert openpi_service.request_image_resolver is None
+    assert openpi_service.v1_infer_handler is None
+    assert openpi_service._image_cas_init_error
+
+
+def test_health_real_mode_without_image_cas_is_degraded(
+    test_client: TestClient,
+    mock_executor: MagicMock,
+    monkeypatch,
+):
+    """Real policy 就绪但 CAS resolver 缺失时，health 不得返回 ready。"""
+    real_sha = "sha256:" + "1" * 64
+    mock_executor.health_check.return_value.update(
+        {"mode": "real", "policy_type": "local"}
+    )
+    monkeypatch.setattr(openpi_service, "SERVICE_MODE", "real")
+    monkeypatch.setattr(openpi_service, "image_cas", None)
+    monkeypatch.setattr(
+        openpi_service,
+        "_image_cas_init_error",
+        "CAS resolver unavailable",
+    )
+    monkeypatch.setattr(openpi_service, "_resolve_checkpoint_sha", lambda: real_sha)
+    monkeypatch.setattr(openpi_service, "_resolve_norm_stats_sha", lambda: real_sha)
+
+    response = test_client.get("/health")
+
+    assert response.status_code == 503
+    assert response.json()["status"] == "degraded"
+
+
+def test_health_real_mode_with_ready_image_cas_is_ready(
+    test_client: TestClient,
+    mock_executor: MagicMock,
+    monkeypatch,
+):
+    """Real policy、制品 SHA 与只读 CAS 均就绪时，health 才能返回 ready。"""
+    real_sha = "sha256:" + "2" * 64
+    ready_image_cas = MagicMock(spec=["assert_ready"])
+    mock_executor.health_check.return_value.update(
+        {"mode": "real", "policy_type": "local"}
+    )
+    monkeypatch.setattr(openpi_service, "SERVICE_MODE", "real")
+    monkeypatch.setattr(openpi_service, "image_cas", ready_image_cas)
+    monkeypatch.setattr(openpi_service, "v1_infer_handler", object())
+    monkeypatch.setattr(openpi_service, "_image_cas_init_error", None)
+    monkeypatch.setattr(openpi_service, "_resolve_checkpoint_sha", lambda: real_sha)
+    monkeypatch.setattr(openpi_service, "_resolve_norm_stats_sha", lambda: real_sha)
+
+    response = test_client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ready"
+    ready_image_cas.assert_ready.assert_called_once_with(writable=False)
+
+
+def test_health_real_mode_rechecks_image_cas_readiness(
+    test_client: TestClient,
+    mock_executor: MagicMock,
+    monkeypatch,
+):
+    """CAS 挂载在启动后失效时，下一次 health 必须降级。"""
+    real_sha = "sha256:" + "3" * 64
+    unavailable_image_cas = MagicMock(spec=["assert_ready"])
+    unavailable_image_cas.assert_ready.side_effect = OSError("CAS mount unavailable")
+    mock_executor.health_check.return_value.update(
+        {"mode": "real", "policy_type": "local"}
+    )
+    monkeypatch.setattr(openpi_service, "SERVICE_MODE", "real")
+    monkeypatch.setattr(openpi_service, "image_cas", unavailable_image_cas)
+    monkeypatch.setattr(openpi_service, "_image_cas_init_error", None)
+    monkeypatch.setattr(openpi_service, "_resolve_checkpoint_sha", lambda: real_sha)
+    monkeypatch.setattr(openpi_service, "_resolve_norm_stats_sha", lambda: real_sha)
+
+    response = test_client.get("/health")
+
+    assert response.status_code == 503
+    assert response.json()["status"] == "degraded"
 
 
 # ---------------------------------------------------------------------------
@@ -691,6 +953,47 @@ def test_is_image_reference_rejects_missing_field():
         assert is_image_reference(partial) is False, f"{field}='' 应判为 False"
 
 
+def test_validate_image_reference_accepts_frozen_contract():
+    """严格校验器接受 URI、摘要、相机与尺寸完全一致的引用。"""
+    ref = {
+        "uri": "cas://sha256/" + "a" * 64,
+        "image_sha256": "sha256:" + "a" * 64,
+        "camera_id": "CAM_A_TOP",
+        "width": 640,
+        "height": 480,
+    }
+
+    assert validate_image_reference(ref, expected_camera_id="CAM_A_TOP") is ref
+
+
+def test_validate_image_reference_rejects_digest_mismatch():
+    """URI digest 与 image_sha256 不完全一致时必须在 π0.5 侧拒绝。"""
+    ref = {
+        "uri": "cas://sha256/" + "a" * 64,
+        "image_sha256": "sha256:" + "b" * 64,
+        "camera_id": "CAM_A_TOP",
+        "width": 640,
+        "height": 480,
+    }
+
+    with pytest.raises(ValueError, match="摘要与 image_sha256 不一致"):
+        validate_image_reference(ref, expected_camera_id="CAM_A_TOP")
+
+
+def test_validate_image_reference_requires_exact_digest_text():
+    """冻结契约要求 URI 与声明摘要文本完全一致，不做大小写归一化。"""
+    ref = {
+        "uri": "cas://sha256/" + "A" * 64,
+        "image_sha256": "sha256:" + "a" * 64,
+        "camera_id": "CAM_A_TOP",
+        "width": 640,
+        "height": 480,
+    }
+
+    with pytest.raises(ValueError, match="摘要与 image_sha256 不一致"):
+        validate_image_reference(ref, expected_camera_id="CAM_A_TOP")
+
+
 def test_zero_placeholder_uses_image_ref_dimensions():
     """image_reference_to_placeholder 按 ImageReference 尺寸创建零图。"""
     ref = {
@@ -746,7 +1049,11 @@ TEST_NORM_SHA_HTTP = (
 
 def _make_http_infer_body(
     task_id: str = "job-1:S01_ARM_A_PACK_HANDOFF",
-    prompt: str = "将工作区中的四个红色零件依次装入料箱",
+    prompt: str = (
+        "将工作区中的四个红色零件依次装入料箱；倒放零件先调整为正向。"
+        "装箱完成后，将料箱放到中央交接位并返回 HOME_A。"
+        "失败时重新观察后继续。"
+    ),
     full_image: dict | None = None,
     wrist_image: dict | None = None,
     robot_state: list | None = None,
@@ -758,13 +1065,9 @@ def _make_http_infer_body(
     robot{state,tcp_pose_m_rad}}。
     """
     if full_image is None:
-        full_image = {
-            "uri": "cas://sha256/" + "a" * 64,
-            "image_sha256": "sha256:" + "a" * 64,
-            "camera_id": "CAM_A_TOP",
-            "width": 640,
-            "height": 480,
-        }
+        if TEST_FULL_IMAGE_REFERENCE is None:
+            raise RuntimeError("test_client fixture 未初始化真实 CAS 图像")
+        full_image = dict(TEST_FULL_IMAGE_REFERENCE)
     if robot_state is None:
         robot_state = [0.51, -0.03, 0.42, 0.01, 0.02, -0.01, 0.0]
     # tcp_pose_m_rad 至少 6 维（schemas/executor-infer.schema.json minItems=6）
@@ -803,7 +1106,7 @@ def _make_http_infer_body(
 def test_http_infer_with_image_reference(test_client, mock_executor):
     """HTTP /v1/infer 接收 ImageReference 格式 model_input 并返回合规 action_chunk。
 
-    Pi05Adapter 新契约发送 ImageReference 而非原始像素；服务端按尺寸创建零图占位。
+    Pi05Adapter 新契约发送 ImageReference；服务端通过公共 resolver 解析真实图像。
     """
     body = _make_http_infer_body()
 
@@ -851,6 +1154,246 @@ def test_http_infer_with_wrist_image_null(test_client, mock_executor):
     resp = test_client.post("/v1/infer", json=body)
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
+
+
+def test_http_infer_rejects_non_s01_without_calling_executor(
+    test_client,
+    mock_executor,
+):
+    """π0.5 HTTP 边界只接收 S01，其他 subtask 返回 TASK_1001_INVALID。"""
+    body = _make_http_infer_body()
+    body["subtask_id"] = "S02_ARM_B_MOVE_FINISHED"
+
+    response = test_client.post("/v1/infer", json=body)
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "TASK_1001_INVALID"
+    mock_executor.infer.assert_not_called()
+
+
+def test_http_infer_rejects_non_frozen_arm_a_prompt(
+    test_client,
+    mock_executor,
+):
+    """π0.5 只接收框架机读配置冻结的 Arm_A 指令。"""
+    body = _make_http_infer_body(prompt="把零件随便放进箱子")
+
+    response = test_client.post("/v1/infer", json=body)
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "TASK_1001_INVALID"
+    mock_executor.infer.assert_not_called()
+
+
+def test_dummy_placeholder_sha_is_consistent_across_health_and_infer(
+    test_client,
+    mock_executor,
+    monkeypatch,
+):
+    """Dummy 未注入制品 SHA 时，health 与 infer 使用同一合法占位值。"""
+    monkeypatch.delenv("PI05_CHECKPOINT_SHA", raising=False)
+    monkeypatch.delenv("PI05_NORM_STATS_SHA", raising=False)
+    mock_executor.checkpoint_sha = ""
+    mock_executor.norm_stats_sha = ""
+
+    health_body = test_client.get("/health").json()
+    infer_response = test_client.post("/v1/infer", json=_make_http_infer_body())
+
+    assert health_body["checkpoint_sha"] == TEST_CKPT_SHA_HTTP
+    assert health_body["norm_stats_sha"] == TEST_NORM_SHA_HTTP
+    assert infer_response.status_code == 200
+    assert infer_response.json()["status"] == "ok"
+
+
+def test_http_infer_rejects_image_reference_digest_mismatch(
+    test_client,
+    mock_executor,
+):
+    """HTTP 生产路径在进入解码或推理前拒绝不一致的 CAS 摘要。"""
+    body = _make_http_infer_body()
+    body["model_input"]["observation"]["camera"]["full_image"]["image_sha256"] = (
+        "sha256:" + "b" * 64
+    )
+
+    resp = test_client.post("/v1/infer", json=body)
+
+    assert resp.status_code == 422
+    assert resp.json()["status"] == "error"
+    assert resp.json()["error"]["code"] == "CAS_1304_METADATA_MISMATCH"
+    assert resp.json()["error"]["retryable"] is False
+    mock_executor.infer.assert_not_called()
+
+
+def test_http_real_mode_rejects_declared_image_size_mismatch(
+    test_client,
+    mock_executor,
+    monkeypatch,
+    tmp_path,
+):
+    """公共 resolver 拒绝与 PNG 实际尺寸不一致的 ImageReference。"""
+    shared_image_cas = ImageCas(ImageCasConfig(root=tmp_path, cache_max_bytes=0))
+    expected_rgb = np.zeros((720, 1280, 3), dtype=np.uint8)
+    full_image = shared_image_cas.write_rgb(
+        expected_rgb,
+        camera_id="CAM_A_TOP",
+    ).to_dict()
+    full_image["width"] = 1279
+    monkeypatch.setattr(openpi_service, "SERVICE_MODE", "real")
+    monkeypatch.setattr(openpi_service, "image_cas", shared_image_cas)
+    monkeypatch.setattr(openpi_service, "_image_cas_init_error", None)
+
+    response = test_client.post(
+        "/v1/infer",
+        json=_make_http_infer_body(full_image=full_image),
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "TASK_1001_INVALID"
+    assert response.json()["error"]["retryable"] is False
+    mock_executor.infer.assert_not_called()
+
+
+def test_http_real_mode_without_cas_resolver_fails_closed(
+    test_client,
+    mock_executor,
+    monkeypatch,
+):
+    """Real 模式 resolver 未初始化时返回稳定 CAS 错误，禁止零图推理。"""
+    monkeypatch.setattr(openpi_service, "SERVICE_MODE", "real")
+    monkeypatch.setattr(openpi_service, "image_cas", None)
+    monkeypatch.setattr(openpi_service, "request_image_resolver", None)
+    monkeypatch.setattr(openpi_service, "v1_infer_handler", None)
+    monkeypatch.setattr(
+        openpi_service,
+        "_image_cas_init_error",
+        "CAS root unavailable",
+    )
+    body = _make_http_infer_body()
+
+    resp = test_client.post("/v1/infer", json=body)
+
+    assert resp.status_code == 503
+    assert resp.json()["error"]["code"] == "CAS_1306_UNAVAILABLE"
+    assert resp.json()["error"]["retryable"] is True
+    mock_executor.infer.assert_not_called()
+
+
+def test_http_real_mode_resolves_verified_full_image(
+    test_client,
+    mock_executor,
+    monkeypatch,
+    tmp_path,
+):
+    """Real HTTP 路径把公共 CAS 验证后的真实 RGB 传给执行器。"""
+    shared_image_cas = ImageCas(ImageCasConfig(root=tmp_path, cache_max_bytes=0))
+    expected_rgb = np.zeros((720, 1280, 3), dtype=np.uint8)
+    expected_rgb[10, 20] = [17, 34, 51]
+    full_image = shared_image_cas.write_rgb(
+        expected_rgb,
+        camera_id="CAM_A_TOP",
+    )
+    monkeypatch.setattr(openpi_service, "SERVICE_MODE", "real")
+    monkeypatch.setattr(openpi_service, "image_cas", shared_image_cas)
+    resolver = CasRequestImageResolver(shared_image_cas)
+    monkeypatch.setattr(openpi_service, "request_image_resolver", resolver)
+    monkeypatch.setattr(
+        openpi_service,
+        "v1_infer_handler",
+        openpi_service.build_v1_infer_handler(
+            resolver=resolver,
+            backend=openpi_service._infer_backend,
+        ),
+    )
+    monkeypatch.setattr(openpi_service, "_image_cas_init_error", None)
+
+    response = test_client.post(
+        "/v1/infer",
+        json=_make_http_infer_body(full_image=full_image.to_dict()),
+    )
+
+    assert response.status_code == 200, response.json()
+    mock_executor.infer.assert_called_once()
+    obs = mock_executor.infer.call_args.args[0]
+    assert np.array_equal(obs.rgb_front, expected_rgb)
+    assert obs.rgb_front.dtype == np.uint8
+    assert obs.rgb_front.flags.writeable is False
+
+
+def test_http_rejects_non_null_wrist_image(
+    test_client,
+    mock_executor,
+    monkeypatch,
+    tmp_path,
+):
+    """冻结三相机配置要求 wrist_image=null，非空引用在 Schema 层拒绝。"""
+    shared_image_cas = ImageCas(ImageCasConfig(root=tmp_path, cache_max_bytes=0))
+    full_rgb = np.zeros((720, 1280, 3), dtype=np.uint8)
+    wrist_rgb = np.full((8, 12, 3), 73, dtype=np.uint8)
+    full_image = shared_image_cas.write_rgb(full_rgb, camera_id="CAM_A_TOP")
+    wrist_image = shared_image_cas.write_rgb(
+        wrist_rgb,
+        camera_id="CAM_A_WRIST",
+    )
+    response = test_client.post(
+        "/v1/infer",
+        json=_make_http_infer_body(
+            full_image=full_image.to_dict(),
+            wrist_image=wrist_image.to_dict(),
+        ),
+    )
+
+    assert response.status_code == 400, response.json()
+    assert response.json()["error"]["code"] == "TASK_1001_INVALID"
+    mock_executor.infer.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("failure_code", "retryable", "expected_status"),
+    [
+        (FailureCode.CAS_NOT_FOUND, True, 503),
+        (FailureCode.CAS_DIGEST_MISMATCH, False, 422),
+        (FailureCode.CAS_DECODE_FAILED, False, 422),
+        (FailureCode.CAS_METADATA_MISMATCH, False, 422),
+        (FailureCode.CAS_LIMIT_EXCEEDED, False, 422),
+        (FailureCode.CAS_UNAVAILABLE, True, 503),
+    ],
+)
+def test_http_real_mode_preserves_cas_error_semantics(
+    test_client,
+    mock_executor,
+    monkeypatch,
+    failure_code,
+    retryable,
+    expected_status,
+):
+    """公共 resolver 的 CAS 错误码和 retryable 必须原样进入 ErrorPacket。"""
+    failing_image_cas = MagicMock(spec=["resolve_rgb"])
+    failing_image_cas.resolve_rgb.side_effect = ImageCasError(
+        failure_code,
+        "injected CAS failure",
+        retryable=retryable,
+    )
+    monkeypatch.setattr(openpi_service, "SERVICE_MODE", "real")
+    monkeypatch.setattr(openpi_service, "image_cas", failing_image_cas)
+    resolver = CasRequestImageResolver(failing_image_cas)
+    monkeypatch.setattr(openpi_service, "request_image_resolver", resolver)
+    monkeypatch.setattr(
+        openpi_service,
+        "v1_infer_handler",
+        openpi_service.build_v1_infer_handler(
+            resolver=resolver,
+            backend=openpi_service._infer_backend,
+        ),
+    )
+    monkeypatch.setattr(openpi_service, "_image_cas_init_error", None)
+
+    response = test_client.post("/v1/infer", json=_make_http_infer_body())
+
+    assert response.status_code == expected_status
+    error = response.json()["error"]
+    assert error["code"] == failure_code.value
+    assert error["retryable"] is retryable
+    mock_executor.infer.assert_not_called()
 
 
 def test_http_infer_sha_mismatch_rejected(test_client, mock_executor):

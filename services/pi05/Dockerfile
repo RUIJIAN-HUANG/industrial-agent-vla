@@ -80,12 +80,19 @@ RUN uv pip install --upgrade "jax[cuda12]"
 # -----------------------------------------------------------------------------
 # 7. 复制本项目代码（角色 E 交付物）
 #    - services/pi05/src/: 含 pi05.py、openpi_service.py 等核心代码
+#    - schemas/: HTTP 冻结契约，服务启动时编译请求校验器
+#    - src/industrial_agent/: 只读共享契约依赖（不在镜像内修改）
 #    - scripts/: pi05 工具脚本（如 convert_openpi.py）
 #    - configs/: 服务配置
 #    注意：data/ 不 COPY，数据通过 volume 挂载到 /workspace/project/data
 #          权重不 COPY，通过 volume 挂载到 /workspace/openpi/checkpoints
 # -----------------------------------------------------------------------------
 COPY services/pi05/src/ /workspace/project/services/pi05/src/
+COPY services/__init__.py /workspace/project/services/__init__.py
+COPY services/pi05/__init__.py /workspace/project/services/pi05/__init__.py
+COPY services/pi05/handler.py /workspace/project/services/pi05/handler.py
+COPY schemas/ /workspace/project/schemas/
+COPY src/industrial_agent/ /workspace/project/src/industrial_agent/
 COPY scripts/ /workspace/project/scripts/
 COPY configs/ /workspace/project/configs/
 
@@ -93,24 +100,27 @@ COPY configs/ /workspace/project/configs/
 WORKDIR /workspace/project
 
 # 让 Python 能找到项目根下的包
-ENV PYTHONPATH=/workspace/project:${PYTHONPATH}
+ENV PYTHONPATH=/workspace/project:/workspace/project/src:${PYTHONPATH}
 
 # -----------------------------------------------------------------------------
 # 7.5 安装本项目服务依赖（openpi venv 不含 FastAPI/uvicorn/msgpack）
 #    方案书 §7.1：openpi_service 需要 FastAPI + uvicorn 提供 WebSocket 与 HTTP 端点；
+#    jsonschema 用于执行 schemas/executor-*.schema.json 冻结契约；
+#    Pillow 用于公共 ImageCas 对 RGB PNG 做安全解码与校验；
 #    msgpack 用于高性能序列化（与 openpi 官方兼容，fallback JSON）。
 #    numpy 已由 openpi 依赖树安装，此处不重复安装以避免版本冲突。
 # -----------------------------------------------------------------------------
 RUN /workspace/openpi/.venv/bin/pip install --no-cache-dir \
     fastapi \
     "uvicorn[standard]" \
+    jsonschema \
+    "Pillow>=10,<13" \
     msgpack
 
 # -----------------------------------------------------------------------------
 # 8. 运行时环境变量
-#    PI05_SERVICE_MODE=dummy:
-#        默认 dummy 模式，不 import openpi，便于联调与健康检查
-#        生产推理通过 `docker run -e PI05_SERVICE_MODE=real` 切换
+#    PI05_SERVICE_MODE:
+#        必须在运行时显式设置为 dummy 或 real；镜像不提供隐式 Dummy 默认值
 #    PI05_SERVICE_HOST=0.0.0.0:
 #        容器内必须监听 0.0.0.0，否则宿主无法访问映射端口
 #    PI05_SERVICE_PORT=8101:
@@ -124,12 +134,14 @@ RUN /workspace/openpi/.venv/bin/pip install --no-cache-dir \
 #        JAX 启动时预占 90% 显存，避免碎片化与多次分配开销
 #    OPENPI_DATA_HOME=/workspace/openpi_data:
 #        openpi 数据/缓存主目录，指向 volume，避免写入镜像层
+#    INDUSTRIAL_AGENT_CAS_ROOT=/var/lib/industrial-agent/cas:
+#        A 冻结的共享图像 CAS 根目录；最终部署由角色 A 以只读卷挂载。
 # -----------------------------------------------------------------------------
-ENV PI05_SERVICE_MODE=dummy \
-    PI05_SERVICE_HOST=0.0.0.0 \
+ENV PI05_SERVICE_HOST=0.0.0.0 \
     PI05_SERVICE_PORT=8101 \
     PI05_CHECKPOINT_SHA=sha256:0000000000000000000000000000000000000000000000000000000000000000 \
     PI05_NORM_STATS_SHA=sha256:0000000000000000000000000000000000000000000000000000000000000000 \
+    INDUSTRIAL_AGENT_CAS_ROOT=/var/lib/industrial-agent/cas \
     XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 \
     OPENPI_DATA_HOME=/workspace/openpi_data
 
@@ -161,6 +173,6 @@ VOLUME ["/workspace/openpi_data", "/workspace/project/data", "/workspace/openpi/
 #     契约 §2 / §6 / §7 / §8：HTTP 主路径 POST /v1/infer、GET /health、POST /v1/cancel
 #     通过 uvicorn CLI 显式指定 --port 8101，覆盖源码默认端口；
 #     使用 openpi venv 的 python -m uvicorn，确保使用已安装 uvicorn 的解释器。
-#     默认 dummy 模式启动；真实推理时 `docker run -e PI05_SERVICE_MODE=real`
+#     启动时必须通过部署环境显式提供 PI05_SERVICE_MODE=dummy|real
 # -----------------------------------------------------------------------------
 CMD ["/workspace/openpi/.venv/bin/python", "-m", "uvicorn", "services.pi05.src.openpi_service:app", "--host", "0.0.0.0", "--port", "8101"]
