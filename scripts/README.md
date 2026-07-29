@@ -7,6 +7,7 @@
 | `run_mock_demo.py` | 运行正常闭环、Arm_A 恢复、Arm_B 恢复三个固定双 VLA 串行 Mock |
 | `evaluate_detection_map.py` | 离线计算 YOLO bbox AP50/AP75/mAP50:95、P/R 与 P50/P95 时延，并保留原始预测 |
 | `check_repository_hygiene.py` | 拒绝误提交的权重、数据录包、视频、密钥、缓存和超大文件 |
+| `run_g0_linux.sh` | 在 Isaac Sim 5.1 Linux 主机采集成员 B 的平台盘点、1000 步、20 Reset、三相机和三次冷启动证据 |
 
 ```powershell
 python scripts/check_repository_hygiene.py

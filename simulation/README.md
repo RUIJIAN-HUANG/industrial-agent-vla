@@ -54,6 +54,22 @@ Reset 后的物理稳定步数也不属于静态 USD 场景合同；应由 G0 �
 显式参数执行并记录。在该运行入口落地前，不得用场景 JSON 中未消费的
 `reset_settle_steps` 宣称已经完成自动稳定。
 
+成员 B 补做 D00-D03 时，使用
+[`run_g0_acceptance.py`](run_g0_acceptance.py) 完成 1000 步、20 次 Reset、
+双臂状态和三相机样本的 G0 验收。Linux 一键入口与逐步说明分别是：
+
+```bash
+EXPECTED_GIT_SHA="$(git rev-parse HEAD)" \
+  ISAAC_SIM_ROOT=/absolute/path/to/isaacsim \
+  bash scripts/run_g0_linux.sh
+```
+
+- [`../scripts/run_g0_linux.sh`](../scripts/run_g0_linux.sh)
+- [`../docs/simulation/member-b-catch-up-guide.md`](../docs/simulation/member-b-catch-up-guide.md)
+
+原始结果写入被 Git 忽略的 `artifacts/g0/`；只提交填写后的 Markdown、代码和
+小型证据索引，不能把失败结果手工改成通过。
+
 主开发与最终 Docker 建议冻结 **Isaac Sim 5.1.x**。代码兼容 4.5，并为 4.2
 保留最低限度的导入回退；不要把多个 Isaac Sim 版本混入同一个正式镜像。
 
