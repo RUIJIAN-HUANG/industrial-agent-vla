@@ -21,6 +21,7 @@ from .image_cas import (
     ImageCasConfig,
     ResolvedRgbFrame,
 )
+from .isaac_environment import IsaacExecutionEnvironment, IsaacFrankaController
 from .lifecycle import (
     ControlToken,
     FixedDualVLAPlanner,
@@ -70,6 +71,8 @@ __all__ = [
     "ImageCas",
     "ImageCasConfig",
     "IndustrialAgent",
+    "IsaacExecutionEnvironment",
+    "IsaacFrankaController",
     "FixedDualVLAPlanner",
     "FixedLifecycle",
     "FixedTaskProfile",
