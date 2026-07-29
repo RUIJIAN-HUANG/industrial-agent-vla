@@ -1,34 +1,173 @@
-# OpenVLA-OFT Service
+# OpenVLA-OFT Standalone Service
 
-负责人：D。当前状态：接口占位，真实模型尚未集成。
+This directory contains the frozen Arm_B executor for OpenVLA-OFT.
 
-冻结定位：OpenVLA-OFT 是 Arm_B 的唯一 VLA。它保持等待，直到 Supervisor
-完成三帧交接核验、持久化 `handoff.ready` 并授予 `B_ONLY` 令牌；随后接收预设的
-下游协作指令、`CAM_B_TOP` 完整图像和 Arm_B 状态，把
-`HANDOFF_CENTER` 的满箱搬到 `FINISHED_01`，再退回 `HOME_B`。
-YOLO DetectionPacket 不是推理前置条件。OpenVLA-OFT 必须针对这一固定角色完成
-工业场景微调并提供 base/tuned 同协议对照，不能仅交付未微调 checkpoint。
+Frozen role:
 
-本目录只放 OpenVLA-OFT 独立服务的生产代码、依赖、示例配置和测试。实现前必须
-固定并记录：
+- only execute `Arm_B`
+- only handle `S02_ARM_B_TRANSPORT`
+- only run after Supervisor has completed the three-frame handoff check and granted `B_ONLY`
+- accept the frozen downstream instruction, `CAM_B_TOP`, `wrist_image=null`, and Arm_B state
+- emit canonical `N x 7` action chunks for `HANDOFF_CENTER -> FINISHED_01 -> HOME_B`
+- never require YOLO detection packets as a prerequisite
+- never consume GT, target coordinates, trajectory points, or hidden pose labels
 
-- 上游仓库 Commit、checkpoint SHA-256、norm stats SHA-256；
-- 相机顺序、图像尺寸、语言字段和任务 ID；
-- 统一 `N×7` 动作到模型原生动作的转换；
-- `/health`、`/v1/infer`、`/v1/cancel` 的超时、错误码和幂等语义；
-- 与 `schemas/executor-*.schema.json`、`action-chunk.schema.json` 的契约测试。
-- 工业微调的数据/配置/checkpoint SHA、base/tuned 成功率与失败分布。
-- 服务只能输出 `arm_id=Arm_B` 的动作；未持有 `B_ONLY` 时不得执行。
-- 恢复时必须使用 Arm_B 的新鲜观测重新推理，禁止接管 Arm_A 的装箱阶段。
-- 服务入口必须调用
-  `industrial_agent.service_images.CasRequestImageResolver.resolve_vla_request()`
-  将 `CAM_B_TOP` 引用解析为真实 RGB；冻结场景的 `wrist_image` 必须为 `null`。
-  Real 模式缺图、坏 SHA 或解码失败时必须 fail-closed，禁止黑图占位或自行拼接
-  另一套路径。
+What is implemented here:
 
-仓库已提供 [`handler.py`](handler.py) 的 `build_v1_infer_handler()` 作为
-`POST /v1/infer` 强制入口核心：它先解析并校验 CAS，再把只读 RGB 数组替换进
-`model_input` 后调用注入的 OpenVLA-OFT backend。HTTP 外壳不得绕过该 handler。
+- stdlib HTTP entrypoint and service boundary
+- request/response contract validation
+- repository-wide shared-CAS resolution through
+  `industrial_agent.service_images.CasRequestImageResolver`
+- real adapter around the official OpenVLA-OFT `get_vla`, `get_processor`,
+  `get_action_head`, `get_proprio_projector`, and `get_vla_action` APIs
+- official upstream pinned to commit
+  `e4287e94541f459edc4feabc4e181f537cd569a8`
+- fail-closed checkpoint manifest, per-file SHA256, and norm-stats verification
+- fail-closed `action_contract.json` verification for frame, units, action
+  order, proprio order, and gripper convention
+- one-image/no-wrist, seven-dimensional proprio and continuous L1 action-head mapping
+- mock policy for smoke tests
+- cancel/timeout handling with cooperative request cancellation
+- GPU Docker/Compose deployment, real inference smoke script, public config and tests
 
-不要在此目录提交 checkpoint、训练数据、缓存或个人机器路径。完整接口见
-[`../../docs/architecture/interface-contracts.md`](../../docs/architecture/interface-contracts.md)。
+Evidence that must come from the team-specific trained artifact:
+
+- industrial fine-tuning evidence
+- base/tuned comparison results
+- end-to-end Isaac Sim control
+
+## Contract
+
+`GET /health`
+
+- returns `schema_version`, `service`, `status`, `checkpoint_sha`, `norm_stats_sha`,
+  `supported_task_types`, and `supported_action_contracts`
+- mock mode reports `ready`
+- real mode starts only after the pinned checkout, manifest, all checkpoint files,
+  norm stats, and `unnorm_key` pass validation; a running instance reports `ready`
+
+`POST /v1/infer`
+
+- requires the frozen executor envelope
+- requires `executor=openvla_oft`
+- requires `subtask_id=S02_ARM_B_TRANSPORT`
+- requires `model_input.task_description` to match the frozen instruction
+- requires `model_input.full_image.camera_id=CAM_B_TOP`
+- requires `model_input.full_image` to be `1280x720`
+- requires `model_input.wrist_image=null`; the frozen scene has no wrist camera
+- resolves all provided image references from CAS before policy execution
+
+`POST /v1/cancel`
+
+- active request -> `cancelled`
+- already completed -> `already_completed`
+- unknown task -> `not_found`
+
+## Config
+
+Public config lives in:
+
+- `configs/agent.default.json`
+- `configs/openvla.default.json`
+
+Frozen values recorded there include:
+
+- camera order
+- image size
+- language field
+- task id field
+- canonical action order
+- pinned official upstream commit
+- checkpoint manifest name and norm-stats file name
+- CAS root layout
+
+The CAS root is configurable through `INDUSTRIAL_AGENT_CAS_ROOT`. The service
+uses the same `industrial_agent.image_cas.ImageCas` implementation and error
+taxonomy as π0.5 and YOLO; it does not maintain a private resolver.
+
+## Run
+
+Install the repository package first because it owns the shared contracts and
+CAS resolver:
+
+```powershell
+python -m pip install -e ".[test]"
+python -m pip install -e "services/openvla_oft[test]"
+```
+
+Real mode is the fail-closed default. Before starting it, generate a manifest
+for the team checkpoint. The checkpoint must first contain an
+`action_contract.json` identical to
+`configs/action_contract.template.json`; this asserts that fine-tuning emitted
+the frozen Arm_B semantics rather than a LIBERO/ALOHA-specific convention.
+
+```powershell
+Copy-Item services/openvla_oft/configs/action_contract.template.json `
+  D:\models\openvla-oft\action_contract.json
+python services/openvla_oft/scripts/build_checkpoint_manifest.py `
+  D:\models\openvla-oft
+```
+
+The script prints the two immutable values that must be exported together with
+the checkpoint location and the dataset-specific unnormalization key:
+
+```powershell
+$env:OPENVLA_OFT_CHECKPOINT_DIR = "D:\models\openvla-oft"
+$env:OPENVLA_OFT_UPSTREAM_DIR = "D:\src\openvla-oft"
+$env:OPENVLA_OFT_CHECKPOINT_SHA = "sha256:<manifest-sha256>"
+$env:OPENVLA_OFT_NORM_STATS_SHA = "sha256:<dataset_statistics.json-sha256>"
+$env:OPENVLA_OFT_UNNORM_KEY = "industrial_arm_b"
+$env:INDUSTRIAL_AGENT_CAS_ROOT = "D:\industrial-cas"
+python services/openvla_oft/scripts/run_service.py --host 127.0.0.1 --port 8102
+```
+
+The checkout at `OPENVLA_OFT_UPSTREAM_DIR` must be exactly
+`e4287e94541f459edc4feabc4e181f537cd569a8`. The service verifies it using
+`git rev-parse HEAD` and refuses to start on any other revision.
+
+Mock mode is test-only and must be enabled explicitly:
+
+```powershell
+$env:OPENVLA_OFT_USE_MOCK = "1"
+python services/openvla_oft/scripts/run_service.py --host 127.0.0.1 --port 8102
+```
+
+For a multi-container deployment, bind `--host 0.0.0.0`; the final Compose file
+must mount the shared CAS volume read-only into this service.
+
+## Docker
+
+Build and start the real service from the repository root:
+
+```bash
+export OPENVLA_OFT_MODEL_DIR=/absolute/path/to/checkpoint
+export INDUSTRIAL_AGENT_CAS_DIR=/absolute/path/to/cas
+export OPENVLA_OFT_CHECKPOINT_SHA=sha256:<manifest-sha256>
+export OPENVLA_OFT_NORM_STATS_SHA=sha256:<norm-stats-sha256>
+export OPENVLA_OFT_UNNORM_KEY=industrial_arm_b
+docker compose -f services/openvla_oft/compose.yaml up --build
+```
+
+The model and CAS mounts are read-only. The image contains the exact official
+upstream commit and listens on frozen port `8102`.
+
+## Real inference smoke
+
+After the environment variables above are set, run one complete
+CAS -> service -> official OpenVLA-OFT -> canonical action-chunk inference:
+
+```powershell
+python services/openvla_oft/scripts/smoke_real.py `
+  --image artifacts\smoke\CAM_B_TOP.png `
+  --state "[0,0,0,0,0,0,0]"
+```
+
+A zero exit code and a response with `status=ok` are required evidence. Unit
+tests use a fake official binding and therefore do not replace this GPU smoke
+or the Isaac Sim closed-loop acceptance run.
+
+## Test
+
+```powershell
+python -m pytest services/openvla_oft/tests -q
+```

@@ -1,0 +1,66 @@
+{
+  "schema_version": "1.0",
+  "service_version": "0.1.0",
+  "service": "openvla_oft",
+  "arm_id": "Arm_B",
+  "required_subtask_id": "S02_ARM_B_TRANSPORT",
+  "instruction": "收到 handoff_ready 后，观察中央交接位，抓稳 Bin_01 并保持水平，将其搬到 FINISHED_01，松开夹爪并返回 HOME_B。",
+  "supported_task_types": [
+    "object_localization",
+    "pick_place",
+    "visual_manipulation"
+  ],
+  "action_contract_version": "1.0",
+  "camera_order": [
+    "CAM_B_TOP"
+  ],
+  "image_size": [
+    1280,
+    720
+  ],
+  "language_field": "model_input.task_description",
+  "task_id_field": "task_id",
+  "action_conversion": {
+    "canonical_shape": "N x 7",
+    "canonical_order": [
+      "dx_m",
+      "dy_m",
+      "dz_m",
+      "droll_rad",
+      "dpitch_rad",
+      "dyaw_rad",
+      "gripper_norm"
+    ],
+    "native_shape": "N x 7",
+    "native_order": [
+      "dx_m",
+      "dy_m",
+      "dz_m",
+      "droll_rad",
+      "dpitch_rad",
+      "dyaw_rad",
+      "gripper_norm"
+    ],
+    "duration_ms_per_step": 100
+  },
+  "api": {
+    "default_deadline_ms": 5000,
+    "max_deadline_ms": 15000,
+    "max_concurrent_requests": 1,
+    "completed_cache_max_entries": 1024,
+    "max_chunk_steps": 32,
+    "health_timeout_ms": 1000,
+    "cancel_timeout_ms": 1000,
+    "idempotency": {
+      "infer": "same request_id returns the cached terminal response",
+      "cancel": "repeated cancel returns not_found or already_completed after context is cleared"
+    },
+    "error_codes": {
+      "bad_contract": "EXEC_2103_BAD_RESPONSE",
+      "revision_mismatch": "EXEC_2105_MODEL_REVISION_MISMATCH",
+      "busy": "EXEC_2106_BACKPRESSURE",
+      "stale_observation": "OBS_1101_INVALID",
+      "wrong_phase": "SAFE_9004_ACTION_REJECTED"
+    }
+  }
+}

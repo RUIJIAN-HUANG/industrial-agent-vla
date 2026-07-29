@@ -1,0 +1,25 @@
+{
+  "schema_version": "1.0",
+  "frame": "robot_base",
+  "translation_unit": "m",
+  "rotation_unit": "rad",
+  "gripper_unit": "normalized",
+  "action_order": [
+    "dx_m",
+    "dy_m",
+    "dz_m",
+    "droll_rad",
+    "dpitch_rad",
+    "dyaw_rad",
+    "gripper_norm"
+  ],
+  "proprio_order": [
+    "x_m",
+    "y_m",
+    "z_m",
+    "roll_rad",
+    "pitch_rad",
+    "yaw_rad",
+    "gripper_norm"
+  ]
+}

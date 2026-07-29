@@ -1,0 +1,30 @@
+services:
+  openvla_oft:
+    build:
+      context: ../..
+      dockerfile: services/openvla_oft/Dockerfile
+      args:
+        OPENVLA_OFT_COMMIT: e4287e94541f459edc4feabc4e181f537cd569a8
+    ports:
+      - "8102:8102"
+    environment:
+      OPENVLA_OFT_USE_MOCK: "0"
+      OPENVLA_OFT_CHECKPOINT_DIR: /models/openvla-oft
+      OPENVLA_OFT_UPSTREAM_DIR: /opt/openvla-oft
+      OPENVLA_OFT_CHECKPOINT_SHA: ${OPENVLA_OFT_CHECKPOINT_SHA:?required}
+      OPENVLA_OFT_NORM_STATS_SHA: ${OPENVLA_OFT_NORM_STATS_SHA:?required}
+      OPENVLA_OFT_UNNORM_KEY: ${OPENVLA_OFT_UNNORM_KEY:?required}
+      INDUSTRIAL_AGENT_CAS_ROOT: /var/lib/industrial-agent/cas
+      HF_HOME: /models/huggingface-cache
+    volumes:
+      - ${OPENVLA_OFT_MODEL_DIR:?required}:/models/openvla-oft:ro
+      - ${INDUSTRIAL_AGENT_CAS_DIR:?required}:/var/lib/industrial-agent/cas:ro
+      - ${HF_CACHE_DIR:-./.hf-cache}:/models/huggingface-cache
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
