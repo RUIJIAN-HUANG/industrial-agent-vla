@@ -1,15 +1,20 @@
 {
   "schema_version": "1.0",
   "mock_mode": false,
+  "upstream_dir": "/opt/openvla-oft",
+  "checkpoint_dir": "/models/openvla-oft",
   "upstream": {
     "repo": "https://github.com/moojink/openvla-oft",
-    "commit_sha": "UNPINNED_REPLACE_BEFORE_REAL_INFERENCE",
-    "status": "pending real OpenVLA-OFT integration"
+    "commit_sha": "e4287e94541f459edc4feabc4e181f537cd569a8",
+    "status": "pinned official inference adapter"
   },
   "artifacts": {
     "checkpoint_sha": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
     "norm_stats_sha": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-    "checkpoint_kind": "mock-placeholder"
+    "checkpoint_kind": "openvla-oft-local-manifest-v1",
+    "checkpoint_manifest": "checkpoint.manifest.json",
+    "norm_stats_file": "dataset_statistics.json",
+    "action_contract_file": "action_contract.json"
   },
   "image_cas": {
     "root": "artifacts/cas/openvla_oft",
@@ -29,7 +34,31 @@
     "input_image_size": [1280, 720],
     "uses_wrist_camera": false,
     "proprio_dim": 7,
+    "proprio_order": [
+      "x_m",
+      "y_m",
+      "z_m",
+      "roll_rad",
+      "pitch_rad",
+      "yaw_rad",
+      "gripper_norm"
+    ],
     "action_dim": 7
+  },
+  "runtime": {
+    "use_l1_regression": true,
+    "use_diffusion": false,
+    "use_film": false,
+    "num_images_in_input": 1,
+    "use_proprio": true,
+    "center_crop": true,
+    "num_open_loop_steps": 8,
+    "lora_rank": 32,
+    "unnorm_key": "",
+    "load_in_8bit": false,
+    "load_in_4bit": false,
+    "num_diffusion_steps_train": 50,
+    "num_diffusion_steps_inference": 50
   },
   "fine_tuning": {
     "status": "not_started",

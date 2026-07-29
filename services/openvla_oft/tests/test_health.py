@@ -40,18 +40,15 @@ def test_health_is_accepted_by_supervisor_adapter(service, config):
     assert adapter.health() is True
 
 
-def test_health_reports_degraded_in_real_mode(config):
-    from openvla_oft.routes import OpenVLAOFTService
+def test_real_mode_fails_closed_when_checkpoint_is_missing(config):
+    from openvla_oft.model import OpenVLAOFTModel
 
     real_config = deepcopy(config)
     real_config["mock_mode"] = False
-    service = OpenVLAOFTService(real_config)
+    real_config["runtime"]["unnorm_key"] = "industrial_arm_b"
 
-    status, response = service.health()
-
-    assert status == 200
-    assert response["status"] == "degraded"
-    assert response["device"]["mode"] == "real"
+    with pytest.raises(RuntimeError, match="checkpoint_dir does not exist"):
+        OpenVLAOFTModel(real_config)
 
 
 def test_default_real_mode_rejects_all_zero_artifact_digests(monkeypatch):
@@ -67,7 +64,9 @@ def test_real_mode_accepts_explicit_nonzero_artifact_digests(monkeypatch):
     monkeypatch.setenv("OPENVLA_OFT_USE_MOCK", "0")
     monkeypatch.setenv("OPENVLA_OFT_CHECKPOINT_SHA", f"sha256:{'a' * 64}")
     monkeypatch.setenv("OPENVLA_OFT_NORM_STATS_SHA", f"sha256:{'b' * 64}")
+    monkeypatch.setenv("OPENVLA_OFT_UNNORM_KEY", "industrial_arm_b")
 
     config = load_config(SERVICE_ROOT / "configs")
 
     assert config["mock_mode"] is False
+    assert config["runtime"]["unnorm_key"] == "industrial_arm_b"

@@ -13,6 +13,7 @@ from industrial_agent.executor import OPENVLA_OFT_TASK_TYPES
 SHA256_PREFIX = "sha256:"
 ZERO_SHA256 = f"{SHA256_PREFIX}{'0' * 64}"
 IMAGE_CAS_DEFAULT_ROOT = "artifacts/cas"
+PINNED_UPSTREAM_COMMIT = "e4287e94541f459edc4feabc4e181f537cd569a8"
 
 
 def service_root() -> Path:
@@ -91,7 +92,31 @@ def load_config(config_dir: str | Path | None = None) -> dict[str, Any]:
         "OPENVLA_OFT_USE_MOCK",
         bool(config.get("mock_mode", True)),
     )
-    config["checkpoint_dir"] = os.getenv("OPENVLA_OFT_CHECKPOINT_DIR", "")
+    config["checkpoint_dir"] = os.getenv(
+        "OPENVLA_OFT_CHECKPOINT_DIR",
+        str(config.get("checkpoint_dir", "")),
+    )
+    config["upstream_dir"] = os.getenv(
+        "OPENVLA_OFT_UPSTREAM_DIR",
+        str(config.get("upstream_dir", "")),
+    )
+    artifacts["checkpoint_manifest"] = os.getenv(
+        "OPENVLA_OFT_CHECKPOINT_MANIFEST",
+        str(artifacts.get("checkpoint_manifest", "checkpoint.manifest.json")),
+    )
+    artifacts["norm_stats_file"] = os.getenv(
+        "OPENVLA_OFT_NORM_STATS_FILE",
+        str(artifacts.get("norm_stats_file", "dataset_statistics.json")),
+    )
+    artifacts["action_contract_file"] = os.getenv(
+        "OPENVLA_OFT_ACTION_CONTRACT_FILE",
+        str(artifacts.get("action_contract_file", "action_contract.json")),
+    )
+    runtime = config.setdefault("runtime", {})
+    runtime["unnorm_key"] = os.getenv(
+        "OPENVLA_OFT_UNNORM_KEY",
+        str(runtime.get("unnorm_key", "")),
+    )
     validate_config(config)
     return config
 
@@ -110,6 +135,8 @@ def validate_config(config: Mapping[str, Any]) -> None:
         "artifacts",
         "image_cas",
         "model",
+        "runtime",
+        "upstream",
         "language_field",
         "task_id_field",
         "action_conversion",
@@ -179,8 +206,57 @@ def validate_config(config: Mapping[str, Any]) -> None:
         raise ValueError("model.uses_wrist_camera must be false")
     if model.get("proprio_dim") != 7:
         raise ValueError("model.proprio_dim must be 7")
+    frozen_proprio_order = [
+        "x_m",
+        "y_m",
+        "z_m",
+        "roll_rad",
+        "pitch_rad",
+        "yaw_rad",
+        "gripper_norm",
+    ]
+    if model.get("proprio_order") != frozen_proprio_order:
+        raise ValueError("model.proprio_order must match the frozen Arm_B state order")
     if model.get("action_dim") != 7:
         raise ValueError("model.action_dim must be 7")
+    upstream = config["upstream"]
+    if not isinstance(upstream, Mapping):
+        raise ValueError("upstream must be an object")
+    if upstream.get("repo") != "https://github.com/moojink/openvla-oft":
+        raise ValueError("upstream.repo must use the official OpenVLA-OFT repository")
+    if upstream.get("commit_sha") != PINNED_UPSTREAM_COMMIT:
+        raise ValueError(
+            f"upstream.commit_sha must be pinned to {PINNED_UPSTREAM_COMMIT}"
+        )
+    runtime = config["runtime"]
+    if not isinstance(runtime, Mapping):
+        raise ValueError("runtime must be an object")
+    expected_runtime = {
+        "use_l1_regression": True,
+        "use_diffusion": False,
+        "use_film": False,
+        "num_images_in_input": 1,
+        "use_proprio": True,
+    }
+    for field, expected in expected_runtime.items():
+        if runtime.get(field) != expected:
+            raise ValueError(f"runtime.{field} must be {expected!r}")
+    for field in (
+        "center_crop",
+        "load_in_8bit",
+        "load_in_4bit",
+    ):
+        if not isinstance(runtime.get(field), bool):
+            raise ValueError(f"runtime.{field} must be a boolean")
+    for field in (
+        "num_open_loop_steps",
+        "lora_rank",
+        "num_diffusion_steps_train",
+        "num_diffusion_steps_inference",
+    ):
+        value = runtime.get(field)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ValueError(f"runtime.{field} must be a positive integer")
     artifacts = config["artifacts"]
     if not isinstance(artifacts, Mapping):
         raise ValueError("artifacts must be an object")
@@ -194,6 +270,23 @@ def validate_config(config: Mapping[str, Any]) -> None:
             raise ValueError(
                 f"artifacts.{field} cannot use the all-zero mock digest in real mode"
             )
+    for field in (
+        "checkpoint_manifest",
+        "norm_stats_file",
+        "action_contract_file",
+    ):
+        if not isinstance(artifacts.get(field), str) or not artifacts[field].strip():
+            raise ValueError(f"artifacts.{field} must be a non-empty relative path")
+        if Path(artifacts[field]).is_absolute() or ".." in Path(artifacts[field]).parts:
+            raise ValueError(f"artifacts.{field} must stay inside checkpoint_dir")
+    if not bool(config.get("mock_mode")):
+        for field in ("checkpoint_dir", "upstream_dir"):
+            if not isinstance(config.get(field), str) or not config[field].strip():
+                raise ValueError(f"{field} is required in real mode")
+        if not isinstance(runtime.get("unnorm_key"), str) or not runtime[
+            "unnorm_key"
+        ].strip():
+            raise ValueError("runtime.unnorm_key is required in real mode")
     image_cas = config["image_cas"]
     if not isinstance(image_cas, Mapping):
         raise ValueError("image_cas must be an object")

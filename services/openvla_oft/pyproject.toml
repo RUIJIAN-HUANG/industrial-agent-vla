@@ -20,8 +20,11 @@ test = [
     "ruff>=0.6,<1"
 ]
 model = [
-    "torch>=2",
-    "transformers>=4"
+    "torch==2.2.0",
+    "torchvision==0.17.0",
+    "transformers==4.40.1",
+    "tokenizers==0.19.1",
+    "timm==0.9.10"
 ]
 
 [project.scripts]

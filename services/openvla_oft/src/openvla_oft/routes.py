@@ -81,7 +81,7 @@ class OpenVLAOFTService:
             if not self.model.ready:
                 raise ServiceError(
                     "EXEC_2101_UNAVAILABLE",
-                    "real OpenVLA-OFT inference is not integrated",
+                    "OpenVLA-OFT model is not ready",
                     retryable=False,
                 )
             request = dict(self._infer_handler.handle(request))
