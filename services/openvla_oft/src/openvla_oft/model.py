@@ -224,9 +224,7 @@ class OfficialBindings:
             load_in_8bit=bool(runtime["load_in_8bit"]),
             load_in_4bit=bool(runtime["load_in_4bit"]),
             num_diffusion_steps_train=int(runtime["num_diffusion_steps_train"]),
-            num_diffusion_steps_inference=int(
-                runtime["num_diffusion_steps_inference"]
-            ),
+            num_diffusion_steps_inference=int(runtime["num_diffusion_steps_inference"]),
         )
         vla = utilities.get_vla(cfg)
         processor = utilities.get_processor(cfg)

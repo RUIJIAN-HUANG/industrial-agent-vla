@@ -39,8 +39,7 @@ def main() -> int:
     expected_width, expected_height = config["image_size"]
     if image.shape != (expected_height, expected_width, 3):
         parser.error(
-            f"--image must be {expected_width}x{expected_height} RGB; "
-            f"got {image.shape}"
+            f"--image must be {expected_width}x{expected_height} RGB; got {image.shape}"
         )
 
     cas = ImageCas.from_agent_config(config)

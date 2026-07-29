@@ -283,9 +283,10 @@ def validate_config(config: Mapping[str, Any]) -> None:
         for field in ("checkpoint_dir", "upstream_dir"):
             if not isinstance(config.get(field), str) or not config[field].strip():
                 raise ValueError(f"{field} is required in real mode")
-        if not isinstance(runtime.get("unnorm_key"), str) or not runtime[
-            "unnorm_key"
-        ].strip():
+        if (
+            not isinstance(runtime.get("unnorm_key"), str)
+            or not runtime["unnorm_key"].strip()
+        ):
             raise ValueError("runtime.unnorm_key is required in real mode")
     image_cas = config["image_cas"]
     if not isinstance(image_cas, Mapping):
