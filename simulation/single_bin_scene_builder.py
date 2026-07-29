@@ -10,6 +10,11 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from pxr import Gf, PhysxSchema, Sdf, Usd, UsdGeom, UsdLux, UsdPhysics, Vt
 
+try:
+    from simulation import isaac_compat
+except ImportError:
+    import isaac_compat
+
 
 JsonObject = dict[str, Any]
 Color = tuple[float, float, float]
@@ -624,8 +629,7 @@ def build_scene(
             "include_robots=True requires a previously resolved Franka USD asset."
         )
 
-    UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
-    UsdGeom.SetStageMetersPerUnit(stage, 1.0)
+    isaac_compat.configure_and_validate_stage_contract(stage)
     world = stage.DefinePrim("/World", "Xform")
     stage.SetDefaultPrim(world)
     world.SetCustomDataByKey("scene:id", str(config.get("scene_id", "unknown")))

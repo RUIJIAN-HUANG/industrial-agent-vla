@@ -18,6 +18,56 @@ FRANKA_ASSET_CANDIDATES = (
 )
 
 
+def require_isaac_sim_51() -> dict[str, str]:
+    """Return build metadata and fail closed unless Isaac Sim is 5.1.x."""
+
+    try:
+        import omni.kit.app
+
+        extension_manager = omni.kit.app.get_app().get_extension_manager()
+        extension_id = "isaacsim.core.version"
+        if not extension_manager.is_extension_enabled(extension_id):
+            enable_result = extension_manager.set_extension_enabled_immediate(
+                extension_id,
+                True,
+            )
+            if enable_result is False or not extension_manager.is_extension_enabled(
+                extension_id
+            ):
+                raise RuntimeError(
+                    "Isaac Sim rejected enabling 'isaacsim.core.version'."
+                )
+        from isaacsim.core.version import get_version
+    except (ImportError, RuntimeError) as exc:
+        raise RuntimeError(
+            "Isaac Sim version metadata is unavailable. Enable the "
+            "'isaacsim.core.version' extension in the 5.1 runtime."
+        ) from exc
+
+    raw_version = tuple(str(item) for item in get_version())
+    if len(raw_version) < 8:
+        raise RuntimeError(
+            f"Isaac Sim returned an incomplete version tuple: {raw_version!r}"
+        )
+    info = {
+        "core_version": raw_version[0],
+        "prerelease_and_build": raw_version[1],
+        "major": raw_version[2],
+        "minor": raw_version[3],
+        "patch": raw_version[4],
+        "prerelease": raw_version[5],
+        "build_number": raw_version[6],
+        "build_tag": raw_version[7],
+    }
+    if (info["major"], info["minor"]) != ("5", "1"):
+        raise RuntimeError(
+            "G0 requires Isaac Sim 5.1.x, but the active runtime reports "
+            f"{info['major']}.{info['minor']}.{info['patch']} "
+            f"(core={info['core_version']!r})."
+        )
+    return info
+
+
 def launch_simulation_app(*, headless: bool) -> Any:
     """Launch Isaac Sim, preferring the 5.x namespace."""
 
@@ -57,24 +107,104 @@ def _stage_function(name: str) -> Callable[..., Any]:
 def create_new_stage() -> Any:
     """Create and return a new in-memory USD stage."""
 
-    stage = _stage_function("create_new_stage")()
+    result = _stage_function("create_new_stage")()
     # Isaac Sim 5.1 returns a boolean success flag from create_new_stage(),
-    # while some older variants return the stage object itself. Never pass the
-    # 5.1 boolean into USD APIs as though it were a Usd.Stage.
-    if stage is None or isinstance(stage, bool):
-        stage = get_current_stage()
-    if stage is None:
-        raise RuntimeError("Isaac Sim did not return a current USD stage.")
-    return stage
+    # while older variants return the stage object itself. A False result must
+    # fail closed: falling back to get_current_stage() could silently reuse a
+    # stale stage left over from a previous run.
+    if isinstance(result, bool):
+        if not result:
+            raise RuntimeError("Isaac Sim failed to create a new USD stage.")
+        return get_current_stage()
+    return require_usd_stage(result, context="create_new_stage")
 
 
 def get_current_stage() -> Any:
     """Return a fresh, non-boolean handle to the currently active USD stage."""
 
     stage = _stage_function("get_current_stage")()
+    return require_usd_stage(stage, context="get_current_stage")
+
+
+def _usd_stage_type() -> type[Any]:
+    """Import and return ``pxr.Usd.Stage`` after SimulationApp startup."""
+
+    try:
+        from pxr import Usd
+    except ImportError as exc:
+        raise RuntimeError(
+            "pxr.Usd is unavailable after SimulationApp startup."
+        ) from exc
+    return Usd.Stage
+
+
+def require_usd_stage(stage: Any, *, context: str) -> Any:
+    """Require an actual ``pxr.Usd.Stage`` rather than a status sentinel."""
+
     if stage is None or isinstance(stage, bool):
-        raise RuntimeError("Isaac Sim did not return a valid current USD stage.")
+        raise RuntimeError(f"{context} did not return a valid USD Stage.")
+    if not isinstance(stage, _usd_stage_type()):
+        raise TypeError(
+            f"{context} returned {type(stage).__name__}, expected pxr.Usd.Stage."
+        )
     return stage
+
+
+def validate_stage_contract(
+    stage: Any,
+    *,
+    expected_up_axis: str = "Z",
+    expected_meters_per_unit: float = 1.0,
+    expected_kilograms_per_unit: float = 1.0,
+) -> None:
+    """Read back and validate the frozen USD stage type, axis, and units."""
+
+    require_usd_stage(stage, context="stage contract validation")
+    try:
+        from pxr import UsdGeom, UsdPhysics
+    except ImportError as exc:
+        raise RuntimeError(
+            "pxr.UsdGeom/UsdPhysics are unavailable after SimulationApp startup."
+        ) from exc
+
+    actual_up_axis = str(UsdGeom.GetStageUpAxis(stage)).upper()
+    actual_meters_per_unit = float(UsdGeom.GetStageMetersPerUnit(stage))
+    actual_kilograms_per_unit = float(UsdPhysics.GetStageKilogramsPerUnit(stage))
+    errors: list[str] = []
+    if actual_up_axis != expected_up_axis.upper():
+        errors.append(
+            f"up axis is {actual_up_axis!r}, expected {expected_up_axis.upper()!r}"
+        )
+    if abs(actual_meters_per_unit - expected_meters_per_unit) > 1e-12:
+        errors.append(
+            "metersPerUnit is "
+            f"{actual_meters_per_unit}, expected {expected_meters_per_unit}"
+        )
+    if abs(actual_kilograms_per_unit - expected_kilograms_per_unit) > 1e-12:
+        errors.append(
+            "kilogramsPerUnit is "
+            f"{actual_kilograms_per_unit}, "
+            f"expected {expected_kilograms_per_unit}"
+        )
+    if errors:
+        raise RuntimeError("Invalid frozen USD stage contract: " + "; ".join(errors))
+
+
+def configure_and_validate_stage_contract(stage: Any) -> None:
+    """Write the frozen Z-up/SI metadata and require an exact readback."""
+
+    require_usd_stage(stage, context="stage contract configuration")
+    try:
+        from pxr import UsdGeom, UsdPhysics
+    except ImportError as exc:
+        raise RuntimeError(
+            "pxr.UsdGeom/UsdPhysics are unavailable after SimulationApp startup."
+        ) from exc
+
+    UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
+    UsdGeom.SetStageMetersPerUnit(stage, 1.0)
+    UsdPhysics.SetStageKilogramsPerUnit(stage, 1.0)
+    validate_stage_contract(stage)
 
 
 def wait_for_stage_loading(
