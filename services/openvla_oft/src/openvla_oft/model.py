@@ -22,9 +22,9 @@ FROZEN_ACTION_ORDER = [
     "dx_m",
     "dy_m",
     "dz_m",
-    "droll_rad",
-    "dpitch_rad",
-    "dyaw_rad",
+    "dax_rad",
+    "day_rad",
+    "daz_rad",
     "gripper_norm",
 ]
 FROZEN_PROPRIO_ORDER = [
@@ -147,7 +147,9 @@ def verify_checkpoint_artifacts(config: Mapping[str, Any]) -> None:
         "frame": "robot_base",
         "translation_unit": "m",
         "rotation_unit": "rad",
+        "rotation_representation": "rotation_vector_axis_angle",
         "gripper_unit": "normalized",
+        "gripper_open_threshold": 0.5,
         "action_order": FROZEN_ACTION_ORDER,
         "proprio_order": FROZEN_PROPRIO_ORDER,
     }
@@ -287,7 +289,7 @@ class ActionConverter:
     """Convert between the canonical ``N x 7`` contract and model-native actions.
 
     The frozen service role uses the same dimensional order on both sides:
-    ``dx_m, dy_m, dz_m, droll_rad, dpitch_rad, dyaw_rad, gripper_norm``.
+    ``dx_m, dy_m, dz_m, dax_rad, day_rad, daz_rad, gripper_norm``.
     Keeping the conversion explicit prevents future model integrations from
     silently changing units or axis order.
     """

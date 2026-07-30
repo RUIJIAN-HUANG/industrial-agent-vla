@@ -446,9 +446,10 @@ class Observation:
 class ActionStep:
     """One 7-D physical command.
 
-    Values are `[dx_m, dy_m, dz_m, droll_rad, dpitch_rad, dyaw_rad,
-    gripper_norm]`. `duration_ms` is transport timing metadata, not an eighth
-    model output dimension.
+    Values are `[dx_m, dy_m, dz_m, dax_rad, day_rad, daz_rad,
+    gripper_norm]`.  The three angular values form one robot-base
+    rotation-vector (axis-angle) delta. `duration_ms` is transport timing
+    metadata, not an eighth model output dimension.
     """
 
     values: tuple[float, float, float, float, float, float, float]

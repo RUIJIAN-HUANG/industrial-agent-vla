@@ -6,7 +6,9 @@
 1. 将两个 VLA 的 `checkpoint_sha`、`norm_stats_sha`，以及 YOLO 的
    `checkpoint_sha`、`class_map_sha`、`config_sha` 占位符替换为
    `sha256:<64 位十六进制>` 的完整固定摘要；
-2. 由 B/D/E 共同冻结坐标系、单位、轴限幅和夹爪正负语义；
+2. B/D/E 已统一 canonical 语义：`robot_base` 平移 + rotation-vector 轴角，
+   夹爪在 Franka 边界以 `>=0.5` 张开、`<0.5` 闭合；任何修改必须同时更新
+   Schema、双 VLA normalizer、Controller 与契约测试；
 3. 由 A/B/F 冻结令牌顺序、交接票数和
    `robot.arm_a.retreated`、`robot.arm_b.retreated` 的布尔语义；
 4. 为每次正式实验保存不可变配置副本并记录 Git commit；

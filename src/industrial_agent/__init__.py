@@ -13,6 +13,7 @@ from .contracts import (
     TaskPlan,
     TaskSchema,
 )
+from .environment import PreWriteStateStaleError
 from .executor import build_executors_from_config
 from .fsm import AgentState
 from .image_cas import (
@@ -20,6 +21,18 @@ from .image_cas import (
     ImageCas,
     ImageCasConfig,
     ResolvedRgbFrame,
+)
+from .isaac_environment import (
+    DurableCommandIdLedger,
+    IsaacExecutionEnvironment,
+    IsaacFrankaController,
+)
+from .isaac_runtime import (
+    IsaacGateBusyError,
+    IsaacGateClosedError,
+    IsaacGateError,
+    IsaacGateTimeoutError,
+    IsaacMainThreadGate,
 )
 from .lifecycle import (
     ControlToken,
@@ -66,10 +79,18 @@ __all__ = [
     "Detection",
     "DetectionEvidenceSink",
     "DetectionPacket",
+    "DurableCommandIdLedger",
     "ImageReference",
     "ImageCas",
     "ImageCasConfig",
     "IndustrialAgent",
+    "IsaacExecutionEnvironment",
+    "IsaacFrankaController",
+    "IsaacGateBusyError",
+    "IsaacGateClosedError",
+    "IsaacGateError",
+    "IsaacGateTimeoutError",
+    "IsaacMainThreadGate",
     "FixedDualVLAPlanner",
     "FixedLifecycle",
     "FixedTaskProfile",
@@ -78,6 +99,7 @@ __all__ = [
     "PerceptionContext",
     "PerceptionMode",
     "Postcondition",
+    "PreWriteStateStaleError",
     "RunResult",
     "ResolvedRgbFrame",
     "Subtask",

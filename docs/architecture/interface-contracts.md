@@ -399,14 +399,21 @@ VLA 不接收另一机械臂的控制目标、YOLO DetectionPacket 或 GT。
   "gripper_unit": "normalized",
   "steps": [
     {
-      "values": [0.008, -0.002, 0.004, 0.01, 0.0, -0.01, 0.4],
+      "values": [0.008, -0.002, 0.004, 0.01, 0.0, -0.01, 1.0],
       "duration_ms": 100
     }
   ]
 }
 ```
 
-动作必须为 7 维有限数。Supervisor 使用滚动时域策略：
+动作必须为 7 维有限数，固定语义为
+`[dx, dy, dz, dax, day, daz, gripper]`。平移和轴角旋转向量均位于当前机械臂
+`robot_base` 坐标系；`[dax, day, daz]` 是一个 rotation-vector，不是三次相互
+独立的 world-frame 欧拉角旋转。夹爪 canonical 值允许 `[-1, 1]`，但 Franka
+硬件边界统一量化为：`gripper >= 0.5` 表示张开，`gripper < 0.5` 表示闭合。
+π0.5 的 `0/1` 与 OpenVLA-OFT 的 `-1/+1` 端点因此具有相同物理含义。
+
+Supervisor 使用滚动时域策略：
 
 1. VLA 可以返回多步；
 2. Supervisor 每次只执行第 1 步；
@@ -484,17 +491,29 @@ def step(
 ) -> Mapping[str, Any]: ...
 ```
 
-真实控制器必须在写入动作前原子校验：
+真实控制器必须在同一个 Isaac owner-thread Gate 请求中、写入动作前原子校验：
 
 1. `arm_id` 与 `control_token` 匹配；
 2. `command_id` 未执行过；
 3. `expected_observation_id` 仍是最新观测；
 4. `expected_state_digest` 与 robot/safety/task/objects/quality 当前摘要一致；
 5. 对侧机械臂满足退避互锁；
-6. 当前 control lease/stop epoch 仍有效。
+6. Adapter 从 Supervisor 的 authoritative lease source 读取到的当前
+   control token 与请求一致；
+7. 当前 control lease/stop epoch 仍有效。
 
-校验和写命令必须是一次原子 compare-and-execute。成功后持久化 `command_id`，
-保证 exactly-once acknowledgement。
+校验和写命令必须是一次原子 compare-and-execute。命令采用 fsync 的状态日志：
+
+```text
+CLAIMED -> ABORTED                   # 尚未尝试硬件写入
+CLAIMED -> APPLIED -> ACKED(result)  # 已写入并保存原始 ACK
+```
+
+写控制器前先 durable `CLAIMED`；fsync 可能耗时，因此 claim 后必须再次读取
+最新 observation generation、live guard、authoritative lease、stop epoch 和
+controller ready，再紧接着写入。`ACKED` 重试只有在请求摘要完全相同时才返回原始
+结果，不再次移动机械臂。进程启动发现未决 `CLAIMED/APPLIED` 时，必须立即撤销
+lease、safe-stop 并保持 quarantine，禁止猜测动作是否执行。
 
 Supervisor 对 `step` 设置 deadline。超时意味着“动作结果未知”，必须走独立急停通道，
 不得假定动作未执行。迟到的旧命令必须因 control lease 已撤销而无法在停机后落地。
@@ -530,8 +549,16 @@ Omniverse/Isaac stage 和 physics API 可能要求从受控仿真线程调用。
 
 - Supervisor Adapter 把 observe/step 请求投递到仿真循环；
 - 仿真循环回传有界 ACK；
-- watchdog 和 safe-stop 使用独立控制通道；
+- watchdog 和 safe-stop 先通过不触碰 Isaac API 的 thread-safe stop Event
+  立即撤销 lease，再把 hold/pause/readback 放入独立 urgent 队列；
+- urgent ACK 超时后不得取消已经排队的物理 stop；若 owner loop 恢复，仍须执行；
+- post-stop observe 仍允许通过 Gate，但任何新 step 必须被 Adapter quarantine；
 - 不默认从任意 Python worker thread 直接调用 Isaac API。
+
+生产 standalone 主循环必须持续调用 `gate.pump(max_normal=1)`；Supervisor 运行在
+worker 中。若单次 Isaac/PhysX API 本身永久不返回，Python Gate 无法强杀该调用，
+此时 receipt 必须保持 unconfirmed、状态进入 `SAFE_STOP_FAILED`，由容器外 watchdog
+终止并重启 Adapter，禁止声称物理停机成功。
 
 ## 9. 推理后再确认与 TOCTOU
 
@@ -541,8 +568,25 @@ VLA 推理完成后，Supervisor 必须重新采集观测：
   立即 safe-stop；
 - 物体区域或离散任务事实变化：丢弃旧 chunk，用新观测对同一 VLA 有界重规划；
 - `quality.confidence` 等小幅连续噪声不直接触发 safe-stop；
-- TCP 位姿和机器人状态使用小容差比较；
+- 默认 `quality/object confidence` 容差为 `0.02`，`bin_speed_m_s` 容差为
+  `0.005 m/s`；
+- TCP 位姿和机器人状态使用小容差比较；Adapter 默认逐元素容差均为 `1e-3`
+  （平移米、旋转弧度、归一化/关节状态各按本字段单位）；
 - 最终仍由控制器使用 observation ID 和 state digest 做原子再校验。
+
+`expected_state_digest` 用于证明请求确实基于 Adapter 缓存的原始规划帧；最终
+owner-thread 再校验不能对新 telemetry 做字节级 SHA 相等比较，而应按上述离散严格、
+连续容差策略比较。超出容差的 robot/safety/active-arm/lease 变化立即 safe-stop；
+task/object 离散事实变化则 durable abort 当前未写命令并要求同一 VLA 使用新帧重规划。
+跨层只允许通过 `PreWriteStateStaleError` 表达这条可重规划路径；该异常必须同时满足
+“尚未尝试硬件写入”与“若已 claim 则 journal 已 durable `ABORTED`”。Supervisor
+收到后丢弃 chunk、重新 observe，并消耗同角色一次恢复预算。任何普通异常、超时、
+`CLAIMED/APPLIED` 未决状态或写后失败都不得伪装成该异常，必须按执行结果未知
+进入独立 safe-stop。
+
+若可重规划错误耗尽预算但整个 run 尚未发生物理写入，Supervisor 可以不调用机械
+safe-stop，但必须先把生命周期令牌持久地撤销为 `NONE` 再进入 `FAILED`；任何终态
+都不得遗留 `A_ONLY`、`HANDOFF_VERIFY` 或 `B_ONLY` 控制权。
 
 ## 10. 交接核验
 

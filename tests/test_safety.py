@@ -56,7 +56,7 @@ class SafetyTests(unittest.TestCase):
         self.assertEqual(decision.chunk.steps[0].values[0], 0.05)
         self.assertEqual(decision.chunk.steps[0].values[3], 0.25)
         self.assertEqual(decision.chunk.steps[0].values[6], 1.0)
-        self.assertEqual(set(decision.limited_axes), {"dx", "droll", "gripper"})
+        self.assertEqual(set(decision.limited_axes), {"dx", "dax", "gripper"})
 
     def test_nan_is_rejected_not_limited(self) -> None:
         decision = self.validator.validate_and_limit(

@@ -81,21 +81,21 @@
               },
               {
                 "type": "number",
-                "description": "delta roll, radians"
+                "description": "robot_base rotation-vector X component, radians"
               },
               {
                 "type": "number",
-                "description": "delta pitch, radians"
+                "description": "robot_base rotation-vector Y component, radians"
               },
               {
                 "type": "number",
-                "description": "delta yaw, radians"
+                "description": "robot_base rotation-vector Z component, radians"
               },
               {
                 "type": "number",
                 "minimum": -1,
                 "maximum": 1,
-                "description": "gripper command normalized to [-1, 1]"
+                "description": "normalized gripper command; hardware boundary maps values >= 0.5 to open and values < 0.5 to closed"
               }
             ],
             "items": false
