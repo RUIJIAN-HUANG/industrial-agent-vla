@@ -64,7 +64,7 @@ class SafetyDecision:
     limited_axes: tuple[str, ...] = ()
 
 
-AXIS_NAMES = ("dx", "dy", "dz", "droll", "dpitch", "dyaw", "gripper")
+AXIS_NAMES = ("dx", "dy", "dz", "dax", "day", "daz", "gripper")
 
 
 def safety_state_failure(observation: Observation) -> tuple[FailureCode, str] | None:

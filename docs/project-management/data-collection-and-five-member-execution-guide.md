@@ -306,7 +306,7 @@ Schema 保留 `wrist_image` 键，但本版本每一步都写 JSON `null`。
 | `tcp_pose` | float[7] | `[x,y,z,qx,qy,qz,qw]`，robot base frame |
 | `gripper_state` | float | 归一化状态及实际宽度至少保留一种 |
 | `robot` | object | 必含布尔字段 `robot.arm_a.retreated` 与 `robot.arm_b.retreated` |
-| `action_7d` | float[7] | `[dx,dy,dz,droll,dpitch,dyaw,gripper]` |
+| `action_7d` | float[7] | `[dx,dy,dz,dax,day,daz,gripper]`；后三维为 robot_base 轴角旋转向量 |
 | `action_duration_s` | float | 动作块时间 |
 | `agent_state` | string | 必须是代码 `AgentState`：如 `OBSERVING`、`EXECUTING`、`VERIFYING` |
 | `operation_phase` | string | 业务标注：如 `ARM_A_PACKING`、`ARM_B_TRANSPORT`；不是 FSM 枚举 |

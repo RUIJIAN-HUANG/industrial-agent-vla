@@ -8,6 +8,23 @@ import json
 from typing import Any, Mapping, Protocol, runtime_checkable
 
 from .contracts import ActionStep
+from .errors import AgentError, FailureCode
+
+
+class PreWriteStateStaleError(AgentError):
+    """A controller command was durably rejected before any hardware write.
+
+    This is the only execution-boundary failure that authorizes the Supervisor
+    to discard the old chunk and ask the same VLA for one bounded replan. Any
+    timeout, write attempt, unknown journal state, robot/safety change, or
+    generic adapter exception remains outcome-unknown and must fail closed.
+    """
+
+    retryable = True
+    hardware_write_attempted = False
+
+    def __init__(self, message: str) -> None:
+        super().__init__(FailureCode.OBSERVATION_INVALID, message)
 
 
 def execution_guard_digest(observation_data: Mapping[str, Any]) -> str:
@@ -67,9 +84,14 @@ class ExecutionEnvironment(Protocol):
 
         The real dual-arm adapter must reject a mismatched arm/token, a stale
         observation id/state digest, a duplicate command id, or a violated
-        opposite-arm retreat interlock at the controller boundary before
-        writing any command. The controller must persist command ids for
-        exactly-once acknowledgement within a run.
+        authoritative current control lease, opposite-arm retreat interlock,
+        or stop epoch at the controller boundary before writing any command.
+        The adapter must durably journal command states and preserve
+        exactly-once acknowledgement across process restarts.
+
+        Raise :class:`PreWriteStateStaleError` only when task/object/quality
+        facts changed and the adapter has durably established that no hardware
+        write was attempted. All other failures are outcome-unknown.
         """
 
     def safe_stop(self, reason: str) -> SafeStopReceipt:

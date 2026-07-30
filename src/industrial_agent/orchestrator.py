@@ -21,6 +21,7 @@ from .contracts import (
 )
 from .environment import (
     ExecutionEnvironment,
+    PreWriteStateStaleError,
     SafeStopReceipt,
     execution_guard_digest,
 )
@@ -243,6 +244,15 @@ class IndustrialAgent:
         self._perception_quarantined = False
         self._quarantined_executors: set[str] = set()
         self._run_lock = Lock()
+
+    @property
+    def current_control_token(self) -> str:
+        """Expose the authoritative lease to the controller boundary."""
+
+        lifecycle = self._lifecycle
+        return (
+            lifecycle.token.value if lifecycle is not None else ControlToken.NONE.value
+        )
 
     @classmethod
     def from_config(
@@ -765,6 +775,28 @@ class IndustrialAgent:
     ) -> RunResult:
         assert self._memory is not None
         self._memory.last_failure_code = code.value
+        # A terminal run must never leave the controller lease at A_ONLY,
+        # HANDOFF_VERIFY or B_ONLY, even when no physical action occurred and
+        # therefore no hardware safe-stop is necessary.
+        if (
+            self._lifecycle is not None
+            and self._lifecycle.token is not ControlToken.NONE
+        ):
+            previous, current = self._lifecycle.safe_stop()
+            self._memory.control_token = current.value
+            if (
+                not self._memory.control_token_history
+                or self._memory.control_token_history[-1] != current.value
+            ):
+                self._memory.control_token_history.append(current.value)
+            self._emit(
+                "control_token.changed",
+                {
+                    "previous_token": previous.value,
+                    "next_token": current.value,
+                    "reason": f"terminal failure without motion: {message}",
+                },
+            )
         self._clear_queue("terminal_failure")
         if self._fsm.state is not AgentState.FAILED:
             self._transition(AgentState.FAILED, message)
@@ -1782,6 +1814,8 @@ class IndustrialAgent:
             self.executor_timeout_ms,
         )
         if not completed:
+            if isinstance(error, PreWriteStateStaleError):
+                raise error
             raise AgentError(
                 FailureCode.SYSTEM_FAULT,
                 "controller command acknowledgement deadline exceeded or failed: "
@@ -2037,14 +2071,11 @@ class IndustrialAgent:
             exc: AgentError,
             phase: str,
         ) -> RunResult:
-            if action_has_executed and exc.code in {
-                FailureCode.OBSERVATION_INVALID,
-                FailureCode.OBSERVATION_GT_FORBIDDEN,
-            }:
+            if action_has_executed:
                 return self._safe_stop(
                     environment,
                     exc.code,
-                    f"unsafe online observation {phase} after action: {exc}",
+                    f"online observation {phase} failed after physical action: {exc}",
                     verification,
                     event_start,
                 )
@@ -2680,6 +2711,39 @@ class IndustrialAgent:
                     if stopped is not None:
                         subtask.status = SubtaskStatus.FAILED
                         return stopped
+            except PreWriteStateStaleError as exc:
+                # The adapter's typed contract proves that the command was
+                # durably aborted before any controller write. Do not claim an
+                # execution or stop the cell; discard the chunk and ask the
+                # lifecycle-owned VLA for one bounded replan.
+                subtask_iterations = max(0, subtask_iterations - 1)
+                self._emit(
+                    "execution.prewrite_state_stale",
+                    {
+                        "executor": name,
+                        "subtask_id": subtask.subtask_id,
+                        "chunk_id": decision.chunk.chunk_id,
+                        "failure_code": exc.code.value,
+                        "hardware_write_attempted": exc.hardware_write_attempted,
+                    },
+                )
+                current, should_continue = self._recover(
+                    task=active_task,
+                    current=current,
+                    code=exc.code,
+                    reason=str(exc),
+                    local_replans=local_replans,
+                )
+                if should_continue:
+                    decisions_in_strategy_attempt = 0
+                    continue
+                subtask.status = SubtaskStatus.FAILED
+                return terminal_failure(
+                    FailureCode.RECOVERY_EXHAUSTED,
+                    "pre-write scene state changed repeatedly; recovery exhausted: "
+                    f"{exc}",
+                    verification,
+                )
             except AgentError as exc:
                 subtask.status = SubtaskStatus.FAILED
                 return self._safe_stop(

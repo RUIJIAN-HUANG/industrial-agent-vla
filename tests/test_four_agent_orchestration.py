@@ -17,6 +17,7 @@ from industrial_agent.contracts import (
     TaskSchema,
 )
 from industrial_agent.errors import AgentError, ExecutorError, FailureCode
+from industrial_agent.environment import PreWriteStateStaleError
 from industrial_agent.executor import (
     ExecutionContext,
     OpenVLAOFTAdapter,
@@ -208,6 +209,8 @@ class FourAgentOrchestrationTests(unittest.TestCase):
         self.assertEqual(simulator.arm_b_steps, 0)
         self.assertEqual(pi05.plan_calls, 0)
         self.assertEqual(openvla.plan_calls, 0)
+        self.assertEqual(result.control_token_history[-1], "NONE")
+        self.assertEqual(agent.current_control_token, "NONE")
 
     def test_complete_run_calls_both_vlas_in_fixed_order(self) -> None:
         perception = make_perception()
@@ -504,6 +507,79 @@ class FourAgentOrchestrationTests(unittest.TestCase):
             if event.event_type in FROZEN_HANDOFF_EVENT_SEQUENCE
         ]
         self.assertEqual(tuple(milestone_events), FROZEN_HANDOFF_EVENT_SEQUENCE)
+
+    def test_prewrite_stale_replans_same_vla_without_safe_stop(self) -> None:
+        class PreWriteStaleOnceEnvironment(FixedDualArmMockSimulator):
+            stale_rejections = 0
+
+            def step(self, action: ActionStep, **kwargs) -> dict[str, object]:
+                if self.stale_rejections == 0:
+                    self.stale_rejections += 1
+                    raise PreWriteStateStaleError(
+                        "object region changed before controller write"
+                    )
+                return super().step(action, **kwargs)
+
+        agent, openvla, pi05 = self.make_agent(make_perception())
+        simulator = PreWriteStaleOnceEnvironment()
+
+        result = agent.run(four_agent_task("prewrite-stale-replan"), simulator)
+
+        self.assertTrue(result.success)
+        self.assertEqual(pi05.plan_calls, 2)
+        self.assertEqual(openvla.plan_calls, 1)
+        self.assertEqual(result.replan_counts["pi05"], 1)
+        self.assertEqual(simulator.arm_a_steps, 1)
+        self.assertFalse(simulator.safe_stop_called)
+        stale_event = next(
+            event
+            for event in result.events
+            if event.event_type == "execution.prewrite_state_stale"
+        )
+        self.assertFalse(stale_event.payload["hardware_write_attempted"])
+
+    def test_observation_failure_after_motion_always_safe_stops(self) -> None:
+        class ObserveFailsAfterMotion(FixedDualArmMockSimulator):
+            def observe(self) -> dict[str, object]:
+                if self.arm_a_steps:
+                    raise OSError("camera pipeline unavailable")
+                return super().observe()
+
+        agent, openvla, pi05 = self.make_agent(make_perception())
+        simulator = ObserveFailsAfterMotion()
+
+        result = agent.run(four_agent_task("post-motion-observe-failure"), simulator)
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.state, AgentState.SAFE_STOP_FAILED)
+        self.assertEqual(result.failure_code, FailureCode.SYSTEM_FAULT)
+        self.assertEqual(simulator.arm_a_steps, 1)
+        self.assertTrue(simulator.safe_stop_called)
+        self.assertEqual(pi05.plan_calls, 1)
+        self.assertEqual(openvla.plan_calls, 0)
+
+    def test_repeated_prewrite_stale_exhausts_replan_and_revokes_lease(self) -> None:
+        class AlwaysPreWriteStaleEnvironment(FixedDualArmMockSimulator):
+            def step(self, action: ActionStep, **kwargs) -> dict[str, object]:
+                del action, kwargs
+                raise PreWriteStateStaleError(
+                    "object region changed before every controller write"
+                )
+
+        agent, openvla, pi05 = self.make_agent(make_perception())
+        simulator = AlwaysPreWriteStaleEnvironment()
+
+        result = agent.run(four_agent_task("prewrite-stale-exhausted"), simulator)
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.state, AgentState.FAILED)
+        self.assertEqual(result.failure_code, FailureCode.RECOVERY_EXHAUSTED)
+        self.assertEqual(pi05.plan_calls, 2)
+        self.assertEqual(openvla.plan_calls, 0)
+        self.assertEqual(simulator.arm_a_steps, 0)
+        self.assertFalse(simulator.safe_stop_called)
+        self.assertEqual(result.control_token_history, ("A_ONLY", "NONE"))
+        self.assertEqual(agent.current_control_token, "NONE")
 
     def test_retry_exhaustion_never_substitutes_openvla_for_pi05(self) -> None:
         agent, openvla, pi05 = self.make_agent(

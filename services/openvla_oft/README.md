@@ -56,6 +56,8 @@ Evidence that must come from the team-specific trained artifact:
 - requires `model_input.full_image` to be `1280x720`
 - requires `model_input.wrist_image=null`; the frozen scene has no wrist camera
 - resolves all provided image references from CAS before policy execution
+- emits robot-base rotation-vector deltas; at the Franka boundary,
+  `gripper_norm >= 0.5` means open and lower values mean closed
 
 `POST /v1/cancel`
 

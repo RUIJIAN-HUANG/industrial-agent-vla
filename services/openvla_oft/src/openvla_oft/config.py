@@ -182,9 +182,9 @@ def validate_config(config: Mapping[str, Any]) -> None:
         "dx_m",
         "dy_m",
         "dz_m",
-        "droll_rad",
-        "dpitch_rad",
-        "dyaw_rad",
+        "dax_rad",
+        "day_rad",
+        "daz_rad",
         "gripper_norm",
     ]
     if action_conversion.get("canonical_order") != frozen_order:
@@ -195,6 +195,13 @@ def validate_config(config: Mapping[str, Any]) -> None:
         raise ValueError(
             "action_conversion.native_order must match the frozen N x 7 order"
         )
+    if action_conversion.get("rotation_representation") != "rotation_vector_axis_angle":
+        raise ValueError(
+            "action_conversion.rotation_representation must be "
+            "'rotation_vector_axis_angle'"
+        )
+    if action_conversion.get("gripper_open_threshold") != 0.5:
+        raise ValueError("action_conversion.gripper_open_threshold must be 0.5")
     model = config["model"]
     if not isinstance(model, Mapping):
         raise ValueError("model must be an object")

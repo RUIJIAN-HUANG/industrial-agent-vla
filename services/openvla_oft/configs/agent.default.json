@@ -26,9 +26,9 @@
       "dx_m",
       "dy_m",
       "dz_m",
-      "droll_rad",
-      "dpitch_rad",
-      "dyaw_rad",
+      "dax_rad",
+      "day_rad",
+      "daz_rad",
       "gripper_norm"
     ],
     "native_shape": "N x 7",
@@ -36,11 +36,13 @@
       "dx_m",
       "dy_m",
       "dz_m",
-      "droll_rad",
-      "dpitch_rad",
-      "dyaw_rad",
+      "dax_rad",
+      "day_rad",
+      "daz_rad",
       "gripper_norm"
     ],
+    "rotation_representation": "rotation_vector_axis_angle",
+    "gripper_open_threshold": 0.5,
     "duration_ms_per_step": 100
   },
   "api": {

@@ -37,8 +37,13 @@ simulation/
 ├── isaac_compat.py                   # Isaac Sim 4.2/4.5/5.1 薄兼容层
 ├── single_bin_scene_builder.py       # USD 几何、物理、相机与机器人构建
 ├── rgb_cas_bridge.py                 # RGB/RGBA Annotator → 共享图像 CAS
+├── isaac_franka_controller.py        # Isaac 5.1 Lula/Franka owner-thread 后端
+├── run_isaac_adapter_smoke.py        # 双臂分别执行的 Gate/微动作/急停 smoke
 └── build_single_bin_scene.py         # Standalone Python 入口
 ```
+
+执行 Adapter 的线程 Gate、durable command journal、Linux 双臂 smoke 和明确未覆盖
+范围见 [`../docs/simulation/isaac-execution-adapter.md`](../docs/simulation/isaac-execution-adapter.md)。
 
 场景构建入口负责“可导入的场景 USD + Camera Prim”，尚不自动创建运行期
 RenderProduct。创建 RGB Annotator 后，必须把其 `uint8 H×W×3/4` 输出传给
