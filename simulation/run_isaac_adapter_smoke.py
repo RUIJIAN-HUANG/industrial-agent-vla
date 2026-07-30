@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 import sys
 import time
+import traceback
 from typing import Any
 
 import numpy as np
@@ -65,6 +66,17 @@ def _joint_state(arm: Any) -> dict[str, Any]:
     }
 
 
+def _write_result(path: Path | None, result: dict[str, Any]) -> None:
+    if path is None:
+        return
+    result_path = path.expanduser().resolve()
+    result_path.parent.mkdir(parents=True, exist_ok=True)
+    result_path.write_text(
+        json.dumps(result, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+
 def main() -> int:
     args = _parse_args()
     for path in (SOURCE_DIR, SCRIPT_DIR):
@@ -79,8 +91,10 @@ def main() -> int:
     if errors:
         raise ValueError("Frozen scene contract failed: " + "; ".join(errors))
 
+    phase = "launch_simulation_app"
     simulation_app = isaac_compat.launch_simulation_app(headless=args.headless)
     try:
+        phase = "verify_isaac_version"
         isaac_version = isaac_compat.require_isaac_sim_51()
         import single_bin_scene_builder
         from isaac_franka_controller import IsaacSimFrankaController
@@ -91,6 +105,7 @@ def main() -> int:
         from industrial_agent.environment import execution_guard_digest
         from industrial_agent.isaac_environment import IsaacExecutionEnvironment
 
+        phase = "build_scene"
         stage = isaac_compat.create_new_stage()
         franka_asset = isaac_compat.resolve_franka_asset(args.franka_usd)
         single_bin_scene_builder.build_scene(
@@ -105,6 +120,7 @@ def main() -> int:
         physics = config["physics"]
         if World.instance():
             World.instance().clear_instance()
+        phase = "initialize_world"
         world = World(
             physics_dt=float(physics["physics_dt_s"]),
             rendering_dt=float(physics["rendering_dt_s"]),
@@ -148,6 +164,7 @@ def main() -> int:
                 "smoke_observation_sequence": observation_counter,
             }
 
+        phase = "initialize_controller"
         controller = IsaacSimFrankaController(
             world=world,
             arms=arms,
@@ -158,6 +175,7 @@ def main() -> int:
             controller=controller,
         )
 
+        phase = "capture_pre_action_state"
         before_positions = np.asarray(
             arms[args.arm_id].get_joint_positions(), dtype=float
         )
@@ -166,6 +184,7 @@ def main() -> int:
             [0.0, 0.0, args.delta_z_m, 0.0, 0.0, 0.0, 1.0],
             duration_ms=args.duration_ms,
         )
+        phase = "execute_action"
         after_observation = environment.step(
             action,
             arm_id=args.arm_id,
@@ -178,6 +197,7 @@ def main() -> int:
             arms[args.arm_id].get_joint_positions(), dtype=float
         )
         joint_delta_norm = float(np.linalg.norm(after_positions - before_positions))
+        phase = "safe_stop"
         receipt = environment.safe_stop("Isaac adapter smoke completed")
         if joint_delta_norm <= 1e-7:
             raise RuntimeError(
@@ -197,15 +217,20 @@ def main() -> int:
             "after_observation_id": after_observation["observation_id"],
             "safe_stop_confirmed": receipt.confirmed,
         }
-        if args.result_file is not None:
-            result_path = args.result_file.expanduser().resolve()
-            result_path.parent.mkdir(parents=True, exist_ok=True)
-            result_path.write_text(
-                json.dumps(result, indent=2, ensure_ascii=False) + "\n",
-                encoding="utf-8",
-            )
+        _write_result(args.result_file, result)
         print(json.dumps(result, indent=2, ensure_ascii=False))
         return 0
+    except Exception as exc:
+        result = {
+            "status": "FAIL",
+            "phase": phase,
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+            "traceback": traceback.format_exc(),
+        }
+        _write_result(args.result_file, result)
+        print(json.dumps(result, indent=2, ensure_ascii=False), file=sys.stderr)
+        return 1
     finally:
         simulation_app.close()
 
