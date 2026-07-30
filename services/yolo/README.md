@@ -88,3 +88,29 @@ transport，使 HTTP 依赖留在 Supervisor 核心之外。
 同帧关联和故障注入测试。
 
 不要向本目录提交模型权重、数据集、缓存、凭据或本机绝对路径。
+
+## 本地运行
+
+从仓库根目录创建隔离环境并安装服务：
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[test]" -e services/yolo
+$env:YOLO_USE_MOCK = "1"
+.\.venv\Scripts\yolo-service.exe
+```
+
+默认监听 `127.0.0.1:8103`。开发阶段的 mock 模式会返回合法的空检测包，
+用于验证 `/health`、`/v1/detect`、`/v1/cancel`、CAS 和合同关联。
+
+生产模式需要额外安装模型依赖并提供固定的模型身份：
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e "services/yolo[model]"
+$env:YOLO_USE_MOCK = "0"
+$env:YOLO_CHECKPOINT_PATH = "D:\models\yolo\model.pt"
+$env:YOLO_CHECKPOINT_SHA = "sha256:<64位十六进制摘要>"
+$env:YOLO_CLASS_MAP_SHA = "sha256:<64位十六进制摘要>"
+```
+
+模型权重只保存在外部模型目录或挂载卷中，不提交到 Git。
