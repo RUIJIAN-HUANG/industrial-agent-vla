@@ -119,6 +119,29 @@ def _rotation_matrix_to_quaternion(matrix: np.ndarray) -> np.ndarray:
     return quaternion / norm
 
 
+def _position_targets_match(controller: Any, expected_positions: np.ndarray) -> bool:
+    """Confirm that the controller accepted a full-articulation hold target."""
+
+    get_applied_action = getattr(controller, "get_applied_action", None)
+    if not callable(get_applied_action):
+        return False
+    try:
+        applied_action = get_applied_action()
+        applied_positions = np.asarray(
+            applied_action.joint_positions,
+            dtype=float,
+        )
+    except (AttributeError, TypeError, ValueError):
+        return False
+    expected_positions = np.asarray(expected_positions, dtype=float)
+    return bool(
+        applied_positions.shape == expected_positions.shape
+        and applied_positions.size
+        and np.all(np.isfinite(applied_positions))
+        and np.allclose(applied_positions, expected_positions, atol=1e-9, rtol=0.0)
+    )
+
+
 class IsaacSimFrankaController:
     """Live dual-Franka controller using Isaac Sim 5.1 Lula IK."""
 
@@ -263,17 +286,36 @@ class IsaacSimFrankaController:
 
     def safe_stop(self, reason: str) -> SafeStopReceipt:
         del reason
+        try:
+            from isaacsim.core.utils.types import ArticulationAction
+        except ImportError:
+            ArticulationAction = None
+
         buffers_cleared = True
         for arm in self._arms.values():
             positions = np.asarray(arm.get_joint_positions(), dtype=float)
-            arm.set_joint_positions(positions)
+            if (
+                ArticulationAction is None
+                or not positions.size
+                or not np.all(np.isfinite(positions))
+            ):
+                buffers_cleared = False
+                continue
+
+            # Isaac Sim 5.1's ArticulationController has no public reset()
+            # method.  Replace any pending IK or gripper command with a
+            # full-articulation hold target, then read it back from the
+            # controller.  This keeps the receipt fail-closed without relying
+            # on a private or version-specific queue API.
             arm.set_joint_velocities(np.zeros_like(positions))
             controller = arm.get_articulation_controller()
-            reset = getattr(controller, "reset", None)
-            if callable(reset):
-                reset()
-            else:
-                buffers_cleared = False
+            controller.apply_action(
+                ArticulationAction(joint_positions=positions.copy())
+            )
+            buffers_cleared = buffers_cleared and _position_targets_match(
+                controller,
+                positions,
+            )
 
         pause = getattr(self._world, "pause", None)
         if callable(pause):

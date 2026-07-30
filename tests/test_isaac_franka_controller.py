@@ -6,6 +6,7 @@ import unittest
 import numpy as np
 
 from simulation.isaac_franka_controller import (
+    _position_targets_match,
     _rotate_vector,
     _rotation_matrix_to_quaternion,
 )
@@ -36,6 +37,48 @@ class IsaacFrankaControllerMathTests(unittest.TestCase):
     def test_invalid_rotation_matrix_fails_closed(self):
         with self.assertRaisesRegex(RuntimeError, "invalid"):
             _rotation_matrix_to_quaternion(np.zeros((2, 2)))
+
+
+class AppliedHoldTargetTests(unittest.TestCase):
+    def test_matching_full_position_target_is_confirmed(self):
+        class Controller:
+            @staticmethod
+            def get_applied_action():
+                class Action:
+                    joint_positions = np.asarray([0.1, -0.2, 0.3])
+
+                return Action()
+
+        self.assertTrue(
+            _position_targets_match(
+                Controller(),
+                np.asarray([0.1, -0.2, 0.3]),
+            )
+        )
+
+    def test_missing_readback_fails_closed(self):
+        self.assertFalse(
+            _position_targets_match(
+                object(),
+                np.asarray([0.1, -0.2, 0.3]),
+            )
+        )
+
+    def test_partial_or_different_target_fails_closed(self):
+        class Controller:
+            @staticmethod
+            def get_applied_action():
+                class Action:
+                    joint_positions = np.asarray([0.1, -0.2])
+
+                return Action()
+
+        self.assertFalse(
+            _position_targets_match(
+                Controller(),
+                np.asarray([0.1, -0.2, 0.3]),
+            )
+        )
 
 
 if __name__ == "__main__":
