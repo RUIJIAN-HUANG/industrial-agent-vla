@@ -66,9 +66,7 @@ class IsaacExecutionEnvironmentTests(unittest.TestCase):
             observation_source=self.source,
             controller=self.controller,
         )
-        self.action = ActionStep.from_sequence(
-            [0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5]
-        )
+        self.action = ActionStep.from_sequence([0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5])
 
     def _execute(self, observation, **overrides):
         arguments = {
@@ -142,4 +140,3 @@ class IsaacExecutionEnvironmentTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

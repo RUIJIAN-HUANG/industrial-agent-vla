@@ -80,9 +80,7 @@ class IsaacExecutionEnvironment:
             )
 
     @staticmethod
-    def _require_retreat_interlock(
-        observation: Mapping[str, Any], arm_id: str
-    ) -> None:
+    def _require_retreat_interlock(observation: Mapping[str, Any], arm_id: str) -> None:
         robot = observation.get("robot")
         if not isinstance(robot, Mapping):
             raise RuntimeError("Isaac observation contains no robot state")
@@ -112,13 +110,11 @@ class IsaacExecutionEnvironment:
                 )
             if control_token != required_token:
                 raise RuntimeError(
-                    f"{arm_id} requires token {required_token}, "
-                    f"got {control_token!r}"
+                    f"{arm_id} requires token {required_token}, got {control_token!r}"
                 )
             if not command_id or command_id in self._executed_command_ids:
                 raise RuntimeError(
-                    "duplicate or empty controller command_id rejected: "
-                    f"{command_id!r}"
+                    f"duplicate or empty controller command_id rejected: {command_id!r}"
                 )
             if self._last_observation is None:
                 raise RuntimeError("observe() is required before Isaac execution")
@@ -172,4 +168,3 @@ class IsaacExecutionEnvironment:
                     "Isaac controller returned an invalid safe-stop receipt"
                 )
             return receipt
-

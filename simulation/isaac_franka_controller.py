@@ -51,16 +51,14 @@ def _rotvec_quaternion(rotvec: np.ndarray) -> np.ndarray:
     if angle < 1e-12:
         return np.asarray([1.0, 0.0, 0.0, 0.0], dtype=float)
     axis = rotvec / angle
-    return np.concatenate(
-        (np.asarray([cos(angle / 2.0)]), axis * sin(angle / 2.0))
-    )
+    return np.concatenate((np.asarray([cos(angle / 2.0)]), axis * sin(angle / 2.0)))
 
 
 def _rotate_vector(quaternion: np.ndarray, vector: np.ndarray) -> np.ndarray:
     pure = np.concatenate((np.asarray([0.0]), vector))
-    return _quat_multiply(
-        _quat_multiply(quaternion, pure), _quat_inverse(quaternion)
-    )[1:]
+    return _quat_multiply(_quat_multiply(quaternion, pure), _quat_inverse(quaternion))[
+        1:
+    ]
 
 
 def _rotation_matrix_to_quaternion(matrix: np.ndarray) -> np.ndarray:
@@ -196,9 +194,7 @@ class IsaacSimFrankaController:
         return [str(name) for name in names]
 
     def _is_stationary(self, arm_id: str) -> bool:
-        velocities = np.asarray(
-            self._arms[arm_id].get_joint_velocities(), dtype=float
-        )
+        velocities = np.asarray(self._arms[arm_id].get_joint_velocities(), dtype=float)
         return bool(
             velocities.size
             and np.all(np.isfinite(velocities))
