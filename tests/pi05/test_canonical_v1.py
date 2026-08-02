@@ -483,9 +483,7 @@ def test_checksum_mismatch_is_rejected(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("mode", ["missing", "empty", "malformed"])
-def test_checksum_sidecar_is_required_and_strict(
-    tmp_path: Path, mode: str
-) -> None:
+def test_checksum_sidecar_is_required_and_strict(tmp_path: Path, mode: str) -> None:
     episode_dir = build_episode(tmp_path)
     sidecar = episode_dir / "checksums.sha256"
     if mode == "missing":

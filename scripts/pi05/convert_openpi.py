@@ -289,7 +289,9 @@ def convert_canonical_to_lerobot(
         or not isinstance(timestamp_tolerance_ns, int)
         or timestamp_tolerance_ns < 0
     ):
-        raise ValueError("timestamp_tolerance_ns must be an explicit non-negative integer")
+        raise ValueError(
+            "timestamp_tolerance_ns must be an explicit non-negative integer"
+        )
     mapper = require_state_mapper(state_mapper, production=production)
     episodes = read_canonical_dataset(data_dir)
     prepared = _prepare_episodes(episodes, mapper)

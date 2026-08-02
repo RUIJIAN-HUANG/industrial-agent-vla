@@ -91,14 +91,20 @@ def validate_dataset_instance(
                 raise ValueError(
                     f"LeRobot frame {index} HWC image must be uint8, got {image.dtype}"
                 )
-        elif image.dtype != np.float32 or not np.all(np.isfinite(image)) or (
-            image.size and (float(image.min()) < 0.0 or float(image.max()) > 1.0)
+        elif (
+            image.dtype != np.float32
+            or not np.all(np.isfinite(image))
+            or (image.size and (float(image.min()) < 0.0 or float(image.max()) > 1.0))
         ):
             raise ValueError(
                 f"LeRobot frame {index} pinned CHW image must be finite float32 "
                 f"in [0,1], got dtype={image.dtype}"
             )
-        if state.dtype != np.float32 or state.ndim != 1 or not np.all(np.isfinite(state)):
+        if (
+            state.dtype != np.float32
+            or state.ndim != 1
+            or not np.all(np.isfinite(state))
+        ):
             raise ValueError(
                 f"LeRobot frame {index} state must be finite float32[D], "
                 f"got dtype={state.dtype} shape={state.shape}"
@@ -108,7 +114,11 @@ def validate_dataset_instance(
                 f"LeRobot frame {index} state shape mismatch: "
                 f"expected=({expected_state_dim},) actual={state.shape}"
             )
-        if action.dtype != np.float32 or action.shape != (7,) or not np.all(np.isfinite(action)):
+        if (
+            action.dtype != np.float32
+            or action.shape != (7,)
+            or not np.all(np.isfinite(action))
+        ):
             raise ValueError(
                 f"LeRobot frame {index} action must be finite float32[7], "
                 f"got dtype={action.dtype} shape={action.shape}"
@@ -118,7 +128,9 @@ def validate_dataset_instance(
         observed_actions.append(action)
         if expected_tasks is not None:
             if len(expected_tasks) != actual_frames:
-                raise ValueError("expected task count does not match dataset frame count")
+                raise ValueError(
+                    "expected task count does not match dataset frame count"
+                )
             if task != expected_tasks[index]:
                 raise ValueError(
                     f"LeRobot frame {index} task mismatch: "
@@ -141,7 +153,9 @@ def validate_dataset_instance(
         for index in indices:
             expected = np.asarray(expected_actions[int(index)], dtype=np.float32)
             error = float(
-                np.max(np.abs(observed_actions[int(index)].astype(np.float64) - expected))
+                np.max(
+                    np.abs(observed_actions[int(index)].astype(np.float64) - expected)
+                )
             )
             max_error = max(max_error, error)
         if max_error >= 1e-6:
@@ -228,7 +242,9 @@ def validate_provenance_manifest(
     if not isinstance(repo_id, str) or not repo_id.strip():
         raise ValueError("LeRobot provenance repo_id must be a non-empty string")
     if expected_repo_id is not None and provenance.get("repo_id") != expected_repo_id:
-        raise ValueError("LeRobot provenance repo_id does not match the requested dataset")
+        raise ValueError(
+            "LeRobot provenance repo_id does not match the requested dataset"
+        )
     if provenance.get("schema_version") != "1.0":
         raise ValueError("LeRobot provenance schema_version is invalid")
     for key in ("fps", "timestamp_tolerance_ns"):
@@ -236,9 +252,7 @@ def validate_provenance_manifest(
         minimum = 1 if key == "fps" else 0
         if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
             qualifier = "positive" if minimum == 1 else "non-negative"
-            raise ValueError(
-                f"LeRobot provenance {key} must be a {qualifier} integer"
-            )
+            raise ValueError(f"LeRobot provenance {key} must be a {qualifier} integer")
     image = provenance.get("image")
     if not isinstance(image, dict) or image != {
         "camera_id": "CAM_A_TOP",
@@ -334,12 +348,16 @@ def validate_provenance_manifest(
             raise ValueError("LeRobot provenance instruction is invalid")
         if isinstance(count, bool) or not isinstance(count, int) or count < 1:
             raise ValueError("LeRobot provenance step_count must be a positive integer")
-        if item.get("instruction_sha256") != hashlib.sha256(
-            instruction.encode("utf-8")
-        ).hexdigest():
+        if (
+            item.get("instruction_sha256")
+            != hashlib.sha256(instruction.encode("utf-8")).hexdigest()
+        ):
             raise ValueError("LeRobot provenance instruction SHA-256 is invalid")
         for key in ("source_meta_sha256", "source_steps_sha256"):
-            if not isinstance(item.get(key), str) or _SHA256_HEX.fullmatch(item[key]) is None:
+            if (
+                not isinstance(item.get(key), str)
+                or _SHA256_HEX.fullmatch(item[key]) is None
+            ):
                 raise ValueError(f"LeRobot provenance {key} is invalid")
         vectors = (
             ("source_step_indices", int),
@@ -367,15 +385,16 @@ def validate_provenance_manifest(
             raise ValueError("LeRobot provenance source_image_sha256 is invalid")
         indices = item["source_step_indices"]
         if indices != list(range(count)):
-            raise ValueError("LeRobot provenance source_step_indices must be contiguous from 0")
+            raise ValueError(
+                "LeRobot provenance source_step_indices must be contiguous from 0"
+            )
         if any(not value for value in item["source_observation_ids"]):
             raise ValueError("LeRobot provenance source_observation_ids is invalid")
         if len(set(item["source_observation_ids"])) != count:
             raise ValueError("LeRobot provenance source_observation_ids must be unique")
         timestamps = item["source_timestamp_ns"]
         if any(value < 0 for value in timestamps) or any(
-            current <= previous
-            for previous, current in zip(timestamps, timestamps[1:])
+            current <= previous for previous, current in zip(timestamps, timestamps[1:])
         ):
             raise ValueError("LeRobot provenance source_timestamp_ns must increase")
         if any(
@@ -406,12 +425,16 @@ def open_offline_dataset(dataset_root: Path, repo_id: str) -> Any:
     try:
         from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
     except Exception as exc:
-        raise RuntimeError(f"LeRobot is required for offline loader smoke: {exc}") from exc
+        raise RuntimeError(
+            f"LeRobot is required for offline loader smoke: {exc}"
+        ) from exc
     return LeRobotDataset(repo_id=repo_id, root=dataset_root)
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Traverse a PI05 LeRobot dataset offline")
+    parser = argparse.ArgumentParser(
+        description="Traverse a PI05 LeRobot dataset offline"
+    )
     parser.add_argument("--dataset-root", required=True)
     parser.add_argument("--repo-id", required=True)
     parser.add_argument(
@@ -432,9 +455,7 @@ def main() -> int:
     )
     try:
         manifest = load_provenance(manifest_path)
-        episodes = validate_provenance_manifest(
-            manifest, expected_repo_id=args.repo_id
-        )
+        episodes = validate_provenance_manifest(manifest, expected_repo_id=args.repo_id)
         counts = manifest.get("counts")
         if not isinstance(counts, dict):
             raise ValueError("provenance manifest is missing counts")

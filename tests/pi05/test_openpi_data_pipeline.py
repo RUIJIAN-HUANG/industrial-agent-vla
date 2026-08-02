@@ -40,9 +40,7 @@ class TestOnlyJointStateMapper:
     state_dim = 2
     approved_for_production = False
 
-    def map_state(
-        self, episode: CanonicalEpisode, step: CanonicalStep
-    ) -> np.ndarray:
+    def map_state(self, episode: CanonicalEpisode, step: CanonicalStep) -> np.ndarray:
         del episode
         return np.asarray(step.joint_position, dtype=np.float32)
 
@@ -599,9 +597,7 @@ def test_norm_stats_use_only_train_eligible_valid_steps(tmp_path: Path) -> None:
         "invalid_steps": 1,
     }
 
-    norm_stats, stats_by_key = calculate_norm_stats(
-        loaded, state_dim=mapper.state_dim
-    )
+    norm_stats, stats_by_key = calculate_norm_stats(loaded, state_dim=mapper.state_dim)
     assert np.max(norm_stats["state"].mean) < 100.0
     output = tmp_path / "norm_stats.json"
     stats_sha, manifest_path, manifest_sha = write_norm_stats_bundle(
