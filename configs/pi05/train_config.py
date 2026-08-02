@@ -89,6 +89,24 @@ STATE_DIM: int = int(os.environ.get("PI05_STATE_DIM", "7"))
 OPENPI_COMMIT: str = "15a9616a00943ada6c20a0f158e3adb39df2ccac"
 MODEL_ACTION_DIM: int = 32
 CANONICAL_ACTION_DIM: int = 7
+UNFROZEN_ACTION_HORIZON: int = 10
+
+
+def require_frozen_action_horizon(
+    action_horizon: int, *, production: bool
+) -> int:
+    """Reject the unfrozen LIBERO placeholder before production config use."""
+
+    if isinstance(action_horizon, bool) or not isinstance(action_horizon, int):
+        raise TypeError("action_horizon must be an integer")
+    if action_horizon < 1:
+        raise ValueError("action_horizon must be positive")
+    if production and action_horizon == UNFROZEN_ACTION_HORIZON:
+        raise RuntimeError(
+            "ARCH-2026-001 item 4: action_horizon=10 is an unfrozen LIBERO "
+            "placeholder and cannot enter production training"
+        )
+    return action_horizon
 
 
 def project_policy_actions(actions: Any) -> np.ndarray:
@@ -212,7 +230,7 @@ except Exception as _e:  # pragma: no cover
 
         pi05: bool = True
         action_dim: int = MODEL_ACTION_DIM
-        action_horizon: int = 10
+        action_horizon: int = UNFROZEN_ACTION_HORIZON
         max_token_len: int = 200
         paligemma_variant: str = ""  # LoRA 变体名（gemma_2b_lora）
         action_expert_variant: str = ""
@@ -366,16 +384,20 @@ def _build_pi05_industrial_config() -> TrainConfig:
 
     openpi 可用时用官方类；不可用时用本文件降级 dataclass 占位（仅用于文档/检查）。
     """
+    action_horizon = require_frozen_action_horizon(
+        UNFROZEN_ACTION_HORIZON,
+        production=OPENPI_AVAILABLE,
+    )
     cfg = TrainConfig(
         name="pi05_industrial",
         # ---- 模型配置 ----
         # 方案书 §3.4：动作 7 维 [dx,dy,dz,dax,day,daz,gripper]。
-        # 方案书 §3.3：LIBERO 配置动作块常为 10；以本项目 checkpoint 配置为准，
-        #   action_horizon=10 为初始候选，D21 首轮微调后按闭环表现调整。
+        # ARCH-2026-001 item 4：10 仅为未冻结 LIBERO 哨兵；真实 OpenPI
+        # 生产配置会在上方 require_frozen_action_horizon 中直接拒绝。
         model=Pi0Config(
             pi05=True,
             action_dim=MODEL_ACTION_DIM,
-            action_horizon=10,
+            action_horizon=action_horizon,
             max_token_len=200,
             # π0.5 的本体状态必须按官方语义作为离散语言 token 输入。
             discrete_state_input=True,
@@ -420,7 +442,7 @@ def _build_pi05_industrial_config() -> TrainConfig:
         freeze_filter=Pi0Config(
             pi05=True,
             action_dim=MODEL_ACTION_DIM,
-            action_horizon=10,
+            action_horizon=action_horizon,
             max_token_len=200,
             discrete_state_input=True,
             paligemma_variant="gemma_2b_lora",
@@ -540,7 +562,7 @@ def _print_summary() -> None:
     print(f"model_type:         {model_type}")
     print("model action_dim:   32  (兼容 pi05_base 投影层；输入由 OpenPI pad 到 32)")
     print("service action_dim: 7   (输出显式投影为 [dx,dy,dz,dax,day,daz,gripper])")
-    print("action_horizon:     10  (初始候选，D21 后按闭环表现调整)")
+    print("action_horizon:     10  (BLOCKED: ARCH-2026-001 item 4 未冻结哨兵)")
     print(
         f"batch_size:         {BATCH_SIZE}  (默认安全值 16；方案书 §3.3：22.5GB 卡建议 ≤16)"
     )
