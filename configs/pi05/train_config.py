@@ -92,9 +92,7 @@ CANONICAL_ACTION_DIM: int = 7
 UNFROZEN_ACTION_HORIZON: int = 10
 
 
-def require_frozen_action_horizon(
-    action_horizon: int, *, production: bool
-) -> int:
+def require_frozen_action_horizon(action_horizon: int, *, production: bool) -> int:
     """Reject the unfrozen LIBERO placeholder before production config use."""
 
     if isinstance(action_horizon, bool) or not isinstance(action_horizon, int):

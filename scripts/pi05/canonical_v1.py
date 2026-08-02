@@ -148,9 +148,7 @@ class StateMapper(Protocol):
     state_dim: int
     approved_for_production: bool
 
-    def map_state(
-        self, episode: CanonicalEpisode, step: CanonicalStep
-    ) -> np.ndarray:
+    def map_state(self, episode: CanonicalEpisode, step: CanonicalStep) -> np.ndarray:
         """Return finite float32[state_dim] for one step."""
 
 
@@ -204,9 +202,7 @@ class CanonicalPi05StateMapper:
     state_dim = 7
     approved_for_production = True
 
-    def map_state(
-        self, episode: CanonicalEpisode, step: CanonicalStep
-    ) -> np.ndarray:
+    def map_state(self, episode: CanonicalEpisode, step: CanonicalStep) -> np.ndarray:
         """Return float32[7] in robot_base, metres/radians/normalized bool."""
 
         rotation_vector = quaternion_xyzw_to_rotation_vector(
@@ -368,9 +364,7 @@ def _required_integer(
     if isinstance(item, bool) or not isinstance(item, int):
         raise _error("must be an integer", episode_id=episode_id, field=field)
     if minimum is not None and item < minimum:
-        raise _error(
-            f"must be >= {minimum}", episode_id=episode_id, field=field
-        )
+        raise _error(f"must be >= {minimum}", episode_id=episode_id, field=field)
     return item
 
 
@@ -458,9 +452,7 @@ def _validate_meta(meta: Mapping[str, Any], *, episode_id: str) -> None:
             episode_id=episode_id,
             field="camera_ids",
         )
-    control_hz = _required_integer(
-        meta, "control_hz", episode_id=episode_id, minimum=1
-    )
+    control_hz = _required_integer(meta, "control_hz", episode_id=episode_id, minimum=1)
     render_hz = _required_integer(meta, "render_hz", episode_id=episode_id, minimum=1)
     if control_hz != EXPECTED_CONTROL_HZ:
         raise _error(
@@ -583,7 +575,9 @@ def _finite_number(
     return result
 
 
-def _contains_forbidden_key(value: Any, *, allow_robot_retreat: bool = False) -> str | None:
+def _contains_forbidden_key(
+    value: Any, *, allow_robot_retreat: bool = False
+) -> str | None:
     if isinstance(value, Mapping):
         for key, nested in value.items():
             lowered = str(key).lower()
@@ -1104,9 +1098,8 @@ def read_canonical_episode(episode_dir: str | Path) -> CanonicalEpisode:
             )
         for arm in ("arm_a", "arm_b"):
             arm_value = robot.get(arm)
-            if (
-                not isinstance(arm_value, dict)
-                or not isinstance(arm_value.get("retreated"), bool)
+            if not isinstance(arm_value, dict) or not isinstance(
+                arm_value.get("retreated"), bool
             ):
                 raise _error(
                     f"robot.{arm}.retreated must be boolean",
@@ -1162,7 +1155,11 @@ def find_episode_dirs(data_dir: str | Path) -> list[Path]:
     if not root.is_dir():
         raise FileNotFoundError(f"Canonical dataset directory does not exist: {root}")
     candidates = sorted(path for path in root.iterdir() if path.is_dir())
-    legacy_roots = [path for path in candidates if any((path / item).exists() for item in LEGACY_MARKERS)]
+    legacy_roots = [
+        path
+        for path in candidates
+        if any((path / item).exists() for item in LEGACY_MARKERS)
+    ]
     if legacy_roots:
         names = [path.name for path in legacy_roots]
         raise CanonicalV1Error(

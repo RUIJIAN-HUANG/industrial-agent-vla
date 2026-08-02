@@ -217,9 +217,7 @@ def save_norm_stats(output_path: Path, norm_stats: Mapping[str, NormStats]) -> N
     serialized = serialize_norm_stats(norm_stats)
     state_dim = len(norm_stats["state"].mean)
     action_dim = len(norm_stats["actions"].mean)
-    _validate_serialized_stats(
-        serialized, state_dim=state_dim, action_dim=action_dim
-    )
+    _validate_serialized_stats(serialized, state_dim=state_dim, action_dim=action_dim)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temporary = output_path.with_name(output_path.name + ".tmp")
     temporary.write_text(serialized + "\n", encoding="utf-8")
@@ -343,7 +341,9 @@ def _validate_conversion_provenance(
         is not mapper.approved_for_production
         or mapper_info.get("version") != str(getattr(mapper, "version", "unspecified"))
     ):
-        raise ValueError("LeRobot provenance StateMapper does not match the injected mapper")
+        raise ValueError(
+            "LeRobot provenance StateMapper does not match the injected mapper"
+        )
     return episodes
 
 
@@ -433,7 +433,9 @@ def _load_lerobot(
                 f"got {action.shape}"
             )
         if not np.all(np.isfinite(state)) or not np.all(np.isfinite(action)):
-            raise ValueError(f"LeRobot frame {index} state/actions contain NaN or Infinity")
+            raise ValueError(
+                f"LeRobot frame {index} state/actions contain NaN or Infinity"
+            )
         states.append(state)
         actions.append(action)
         has_mask = "mask" in frame
@@ -511,9 +513,7 @@ def calculate_norm_stats(
     }
     norm_stats = build_norm_stats(stats_by_key)
     serialized = serialize_norm_stats(norm_stats)
-    _validate_serialized_stats(
-        serialized, state_dim=state_dim, action_dim=ACTION_DIM
-    )
+    _validate_serialized_stats(serialized, state_dim=state_dim, action_dim=ACTION_DIM)
     return norm_stats, stats_by_key
 
 
@@ -551,15 +551,17 @@ def write_norm_stats_bundle(
     output_path = output_path.resolve()
     manifest_path = output_path.with_name(NORM_STATS_SOURCE_MANIFEST_FILENAME)
     if output_path == manifest_path:
-        raise ValueError("norm stats output path collides with the source manifest path")
+        raise ValueError(
+            "norm stats output path collides with the source manifest path"
+        )
     if output_path.exists() or manifest_path.exists():
         raise FileExistsError(
             "refusing to overwrite an existing norm stats artifact: "
             f"output={output_path} manifest={manifest_path}"
         )
-    manifest_text = json.dumps(
-        source_manifest, ensure_ascii=False, indent=2, sort_keys=True
-    ) + "\n"
+    manifest_text = (
+        json.dumps(source_manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    )
     manifest_sha = hashlib.sha256(manifest_text.encode("utf-8")).hexdigest()
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
