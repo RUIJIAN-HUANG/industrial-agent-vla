@@ -186,7 +186,8 @@ Arm_A 交接条件：
 - Arm_A 夹爪已打开且已退避；
 - Arm_B 已退避；
 - 两臂静止；
-- 无急停、保护停和系统故障。
+- 无急停、保护停和系统故障；
+- 质量字段有效。
 
 通过后先 fsync 持久化 `handoff.verified`，再 fsync 持久化
 `handoff.ready`；只有后者收到 durable ACK 后才授予 `B_ONLY`。

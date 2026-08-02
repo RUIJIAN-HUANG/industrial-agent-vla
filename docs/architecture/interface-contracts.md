@@ -644,6 +644,7 @@ Arm_A 交接帧必须同时满足：
 - Arm_A 夹爪已释放、已退避；
 - Arm_B 已退避；
 - 两臂均静止；
+- 无急停、保护停和系统故障；
 - 质量字段有效。
 
 通过后先将 `handoff.verified` 事件 fsync 到 durable JSONL，再发布并 fsync
