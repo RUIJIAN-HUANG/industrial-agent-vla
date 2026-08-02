@@ -83,6 +83,7 @@ from industrial_agent.executor import (  # type: ignore
     ExecutorDescriptor,
     is_pinned_artifact_digest,
 )
+from industrial_agent.sync_contract import MODEL_INFERENCE_HZ
 
 # ---------------------------------------------------------------------------
 # 安全限幅常量（方案书 Table 69 Row7 / 附录B；D5 实测前用候选值）
@@ -102,7 +103,8 @@ class InferenceError(ValueError):
 
 DIM_NAMES = ["dx", "dy", "dz", "dax", "day", "daz", "gripper"]
 MOCK_CHUNK_LEN = 10  # Mock 动作块长度（LIBERO 配置常用 10，方案书 §3.3）
-CONTROL_HZ = 10  # 方案书 §3.4 control_hz
+# 兼容旧 wire 字段名；它表示模型动作采样频率，Isaac 控制频率固定为 60Hz。
+CONTROL_HZ = MODEL_INFERENCE_HZ
 SOURCE_POLICY = "pi05"
 SPACE_ID = "eef_delta_xyz_axisangle_gripper_v1"
 FRAME_ID = "robot_base"
@@ -343,9 +345,18 @@ class Pi05Executor(BaseExecutor):
         # ``IndustrialLeRobotDataConfig`` uses this exact inference key.  The
         # corresponding training converter emits dataset key ``image`` and the
         # repack transform maps it to ``observation/image``.
+        if obs.rgb_wrist is not None:
+            raise ValueError("frozen three-camera profile requires rgb_wrist=None")
+        state_7d = np.asarray(obs.robot_state, dtype=np.float32)
+        if state_7d.ndim != 1 or state_7d.shape != (7,):
+            raise ValueError(
+                "observation/state must be canonical state_7d with shape [7]"
+            )
+        if not np.all(np.isfinite(state_7d)):
+            raise ValueError("observation/state contains NaN or Infinity")
         return {
             "observation/image": _prep_image(obs.rgb_front),
-            "observation/state": np.asarray(obs.robot_state, dtype=np.float32),
+            "observation/state": state_7d,
             "prompt": obs.instruction,
             # Legacy WebSocket transport metadata.  The frozen production path
             # is HTTP + CAS; these fields are ignored by local OpenPI transforms.
@@ -750,8 +761,8 @@ if __name__ == "__main__":
         step_id=3,
         timestamp_ns=int(time.time() * 1e9),
         rgb_front=front,
-        rgb_wrist=wrist,
-        robot_state=np.zeros(8, dtype=np.float32),
+        rgb_wrist=None,
+        robot_state=np.zeros(7, dtype=np.float32),
         instruction="pick up the red cylinder and place it into cell row 2 col 3",
         runtime_flags={"terminated": False, "truncated": False, "camera_ok": True},
     )
@@ -808,7 +819,7 @@ if __name__ == "__main__":
         timestamp_ns=0,
         rgb_front=FIXED_TEST_IMAGE.copy(),
         rgb_wrist=None,
-        robot_state=np.zeros(8, dtype=np.float32),
+        robot_state=np.zeros(7, dtype=np.float32),
         instruction="audit",
         runtime_flags={},
     )

@@ -62,6 +62,8 @@ except Exception:  # 退化为 asyncio 线程池
 
 import numpy as np
 
+from industrial_agent.sync_contract import MODEL_INFERENCE_HZ
+
 # ---------------------------------------------------------------------------
 # 环境变量配置
 # ---------------------------------------------------------------------------
@@ -92,7 +94,7 @@ SCHEMA_VERSION = "v1"
 CONTRACT_SCHEMA_VERSION = "1.0"
 POLICY_ID = "pi05"
 EXPECTED_SUBTASK_ID = "S01_ARM_A_PACK_HANDOFF"
-DEFAULT_CONTROL_HZ = 10
+DEFAULT_CONTROL_HZ = MODEL_INFERENCE_HZ
 DEFAULT_EXPIRES_AFTER_MS = 1000
 EXPECTED_FULL_IMAGE_SIZE = (1280, 720)
 
@@ -588,8 +590,8 @@ def _build_obs_from_model_input(
       - HTTP 边界的 full_image 是 CAM_A_TOP/1280x720 ImageReference
       - 本函数收到的 full_image 已被公共 handler 替换为只读 RGB ndarray
       - wrist_image: null
-      - robot.state: non-empty float array（isfinite 必检，E-03）
-      - robot.tcp_pose_m_rad: non-empty float array (minItems=6, isfinite 必检，E-03)
+      - robot.state: canonical state_7d，恰好 7 个有限数值
+      - robot.tcp_pose_m_rad: 恰好 6 个有限数值，末三项为 robot_base rotation-vector
       - prompt: non-empty string (minLength=1)
 
     CAS URI、声明摘要、文件摘要、解码、相机与尺寸校验全部由
@@ -659,6 +661,10 @@ def _build_obs_from_model_input(
     if state_src is None:
         raise ValueError("observation.robot.state 是必填字段")
     robot_state = np.array(state_src, dtype=np.float32)
+    if robot_state.ndim != 1 or robot_state.shape != (7,):
+        raise ValueError(
+            "observation.robot.state must be canonical state_7d with shape [7]"
+        )
     if not np.all(np.isfinite(robot_state)):
         raise ValueError("observation.robot.state 包含 NaN 或 Infinity（E-03 拒绝）")
 
@@ -667,6 +673,11 @@ def _build_obs_from_model_input(
     if tcp_src is None:
         raise ValueError("observation.robot.tcp_pose_m_rad 是必填字段")
     tcp_pose = np.array(tcp_src, dtype=np.float32)
+    if tcp_pose.ndim != 1 or tcp_pose.shape != (6,):
+        raise ValueError(
+            "observation.robot.tcp_pose_m_rad must have shape [6] and use a "
+            "robot_base rotation vector"
+        )
     if not np.all(np.isfinite(tcp_pose)):
         raise ValueError(
             "observation.robot.tcp_pose_m_rad 包含 NaN 或 Infinity（E-03 拒绝）"

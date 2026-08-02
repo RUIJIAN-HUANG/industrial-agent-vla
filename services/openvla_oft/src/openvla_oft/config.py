@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from industrial_agent.executor import OPENVLA_OFT_TASK_TYPES
+from industrial_agent.sync_contract import FROZEN_MULTI_RATE
 
 SHA256_PREFIX = "sha256:"
 ZERO_SHA256 = f"{SHA256_PREFIX}{'0' * 64}"
@@ -202,6 +203,14 @@ def validate_config(config: Mapping[str, Any]) -> None:
         )
     if action_conversion.get("gripper_open_threshold") != 0.5:
         raise ValueError("action_conversion.gripper_open_threshold must be 0.5")
+    if (
+        action_conversion.get("duration_ms_per_step")
+        != FROZEN_MULTI_RATE.model_step_duration_ms
+    ):
+        raise ValueError(
+            "action_conversion.duration_ms_per_step must match the frozen "
+            "10Hz model period"
+        )
     model = config["model"]
     if not isinstance(model, Mapping):
         raise ValueError("model must be an object")
@@ -217,9 +226,9 @@ def validate_config(config: Mapping[str, Any]) -> None:
         "x_m",
         "y_m",
         "z_m",
-        "roll_rad",
-        "pitch_rad",
-        "yaw_rad",
+        "ax_rad",
+        "ay_rad",
+        "az_rad",
         "gripper_norm",
     ]
     if model.get("proprio_order") != frozen_proprio_order:

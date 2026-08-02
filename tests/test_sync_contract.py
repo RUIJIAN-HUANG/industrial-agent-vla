@@ -1,0 +1,53 @@
+from __future__ import annotations
+
+import unittest
+
+from industrial_agent.sync_contract import (
+    FROZEN_MULTI_RATE,
+    STATE_7D_ORDER,
+    canonical_state_7d,
+)
+
+
+class FrozenStateContractTests(unittest.TestCase):
+    def test_state_7d_uses_robot_base_rotation_vector(self) -> None:
+        self.assertEqual(
+            STATE_7D_ORDER,
+            (
+                "x_m",
+                "y_m",
+                "z_m",
+                "ax_rad",
+                "ay_rad",
+                "az_rad",
+                "gripper_norm",
+            ),
+        )
+        self.assertEqual(
+            canonical_state_7d([0.4, 0.1, 0.5, 0.01, -0.02, 0.03], True),
+            [0.4, 0.1, 0.5, 0.01, -0.02, 0.03, 1.0],
+        )
+
+    def test_state_7d_rejects_wrong_pose_length_or_unknown_gripper(self) -> None:
+        with self.assertRaisesRegex(ValueError, "exactly 6"):
+            canonical_state_7d([0.0] * 7, True)
+        with self.assertRaisesRegex(TypeError, "controller-confirmed boolean"):
+            canonical_state_7d([0.0] * 6, None)
+
+
+class FrozenMultiRateContractTests(unittest.TestCase):
+    def test_one_model_step_maps_to_all_integer_rate_domains(self) -> None:
+        self.assertEqual(FROZEN_MULTI_RATE.model_step_duration_ms, 100)
+        self.assertEqual(FROZEN_MULTI_RATE.control_ticks_per_model_step, 6)
+        self.assertEqual(FROZEN_MULTI_RATE.physics_ticks_per_model_step, 12)
+        self.assertEqual(FROZEN_MULTI_RATE.render_frames_per_model_step, 3)
+        self.assertEqual(FROZEN_MULTI_RATE.control_ticks_for_duration_ms(100), 6)
+        self.assertEqual(FROZEN_MULTI_RATE.physics_ticks_for_duration_ms(100), 12)
+
+    def test_non_aligned_duration_fails_closed(self) -> None:
+        with self.assertRaisesRegex(ValueError, "physics grid"):
+            FROZEN_MULTI_RATE.control_ticks_for_duration_ms(137)
+
+
+if __name__ == "__main__":
+    unittest.main()

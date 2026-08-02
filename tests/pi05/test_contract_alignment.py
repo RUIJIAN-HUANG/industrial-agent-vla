@@ -107,14 +107,14 @@ def _make_observation(
         "active_arm": "Arm_A",
         "arm_a": {
             "tcp_pose_m_rad": [0.5, 0.0, 0.5, 0.0, 0.0, 0.0],
-            "state": [0.5, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5],
+            "state": [0.5, 0.0, 0.5, 0.0, 0.0, 0.0, 0.0],
             "retreated": False,
             "gripper_open": False,
             "stationary": True,
         },
         "arm_b": {
             "tcp_pose_m_rad": [0.4, 0.0, 0.5, 0.0, 0.0, 0.0],
-            "state": [0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5],
+            "state": [0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 1.0],
             "retreated": True,
             "gripper_open": True,
             "stationary": True,
@@ -307,7 +307,7 @@ def test_arm_a_missing_fails_closed(resolved_camera):
             adapter.plan(_make_task(), observation, _make_context())
 
     assert exc_info.value.code == FailureCode.EXECUTOR_BAD_RESPONSE
-    assert "state is required" in str(exc_info.value)
+    assert "cannot produce canonical state_7d" in str(exc_info.value)
     infer.assert_not_called()
 
 

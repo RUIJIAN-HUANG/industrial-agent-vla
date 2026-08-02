@@ -31,9 +31,9 @@ FROZEN_PROPRIO_ORDER = [
     "x_m",
     "y_m",
     "z_m",
-    "roll_rad",
-    "pitch_rad",
-    "yaw_rad",
+    "ax_rad",
+    "ay_rad",
+    "az_rad",
     "gripper_norm",
 ]
 
@@ -363,6 +363,12 @@ class RealOpenVLAPolicy:
                 retryable=False,
             )
         model_input = request["model_input"]
+        if model_input.get("wrist_image") is not None:
+            raise ServiceError(
+                "EXEC_2103_BAD_RESPONSE",
+                "frozen three-camera profile requires wrist_image=null",
+                retryable=False,
+            )
         image = np.asarray(model_input["full_image"])
         if image.dtype != np.uint8 or image.ndim != 3 or image.shape[2] != 3:
             raise ServiceError(
@@ -372,6 +378,12 @@ class RealOpenVLAPolicy:
                 retryable=False,
             )
         state = np.asarray(model_input["state"], dtype=np.float32)
+        if state.ndim != 1 or state.shape != (7,) or not np.all(np.isfinite(state)):
+            raise ServiceError(
+                "EXEC_2103_BAD_RESPONSE",
+                "state must be finite canonical state_7d with shape [7]",
+                retryable=False,
+            )
         try:
             actions = self.bindings.predict(
                 image=image,

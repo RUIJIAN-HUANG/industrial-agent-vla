@@ -11,6 +11,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from industrial_agent.sync_contract import MODEL_INFERENCE_HZ
+
 
 @dataclass
 class CanonicalActionChunk:
@@ -19,13 +21,15 @@ class CanonicalActionChunk:
     actions: float32[N,7] [dx,dy,dz,dax,day,daz,gripper]
     space_id: action space 语义标识
     frame: 坐标系
-    control_hz: 控制频率
+    control_hz: 模型动作采样频率（兼容旧 wire 字段名；非 Isaac 控制频率）
     """
 
     actions: np.ndarray  # float32[N,7] [dx,dy,dz,dax,day,daz,gripper]
     space_id: str = "eef_delta_xyz_axisangle_gripper_v1"
     frame: str = "robot_base"
-    control_hz: int = 10
+    # Legacy wire name: this is the model/action-sample rate, not the 60Hz
+    # Isaac controller loop.
+    control_hz: int = MODEL_INFERENCE_HZ
     generated_step: int = 0
     source_policy: str = "pi05"
     checkpoint_sha: str = ""

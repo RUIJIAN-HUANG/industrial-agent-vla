@@ -101,9 +101,21 @@ class ObsPacket:
     step_id: int
     timestamp_ns: int
     rgb_front: np.ndarray  # uint8[H,W,3] 原始 RGB，不做预处理
-    rgb_wrist: np.ndarray | None  # uint8[H,W,3]，可选腕部相机
-    robot_state: np.ndarray  # float32[d] 本体状态
+    rgb_wrist: np.ndarray | None  # 冻结三相机场景中必须为 None
+    robot_state: np.ndarray  # float32[7] robot_base state_7d（rotation-vector）
     instruction: str  # 完整自然语言，不拆槽位
     runtime_flags: dict = field(
         default_factory=dict
     )  # {terminated, truncated, camera_ok}
+
+    def __post_init__(self) -> None:
+        """Fail closed on state or camera semantics before DataLoader use."""
+
+        if self.rgb_wrist is not None:
+            raise ValueError("frozen three-camera profile requires rgb_wrist=None")
+        state = np.asarray(self.robot_state, dtype=np.float32)
+        if state.ndim != 1 or state.shape != (7,):
+            raise ValueError("robot_state must be canonical state_7d with shape [7]")
+        if not np.all(np.isfinite(state)):
+            raise ValueError("robot_state must contain only finite values")
+        self.robot_state = state

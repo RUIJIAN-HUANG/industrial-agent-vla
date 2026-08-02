@@ -7,7 +7,7 @@ writes them to the selected ``SingleArticulation``.
 
 from __future__ import annotations
 
-from math import ceil, cos, sin, sqrt
+from math import cos, isclose, sin, sqrt
 from threading import Event, Lock, get_ident
 from typing import Any, Mapping
 
@@ -15,6 +15,7 @@ import numpy as np
 
 from industrial_agent.contracts import ActionStep
 from industrial_agent.environment import SafeStopReceipt
+from industrial_agent.sync_contract import FROZEN_MULTI_RATE
 
 
 _ARMS = ("Arm_A", "Arm_B")
@@ -163,6 +164,15 @@ class IsaacSimFrankaController:
             raise ValueError("arms must contain exactly Arm_A and Arm_B")
         if physics_dt_s <= 0.0:
             raise ValueError("physics_dt_s must be positive")
+        if not isclose(
+            physics_dt_s,
+            1.0 / FROZEN_MULTI_RATE.physics_hz,
+            rel_tol=0.0,
+            abs_tol=1e-12,
+        ):
+            raise ValueError(
+                f"physics_dt_s must be exactly 1/{FROZEN_MULTI_RATE.physics_hz}"
+            )
         if safe_stop_action_grace_s < 0.0:
             raise ValueError("safe_stop_action_grace_s cannot be negative")
 
@@ -180,6 +190,8 @@ class IsaacSimFrankaController:
         self._world = world
         self._arms = dict(arms)
         self._physics_dt_s = float(physics_dt_s)
+        self._multi_rate = FROZEN_MULTI_RATE
+        self._physics_tick_index = 0
         self._stationary_velocity_rad_s = float(stationary_velocity_rad_s)
         self._safe_stop_action_grace_s = float(safe_stop_action_grace_s)
         self._owner_thread_id = get_ident()
@@ -309,6 +321,9 @@ class IsaacSimFrankaController:
             lula_solver = self._lula_solvers[arm_id]
             translation = np.asarray(action.values[:3], dtype=float)
             rotation = np.asarray(action.values[3:6], dtype=float)
+            control_ticks = self._multi_rate.control_ticks_for_duration_ms(
+                action.duration_ms
+            )
             # The frozen canonical command is binary at the hardware boundary:
             # values >= 0.5 mean open, and values < 0.5 mean closed. This maps
             # pi0.5's 0/1 and OpenVLA-OFT's -1/+1 endpoints identically.
@@ -323,31 +338,6 @@ class IsaacSimFrankaController:
             lula_solver.set_robot_base_pose(base_position, base_orientation)
             current_position, current_rotation = solver.compute_end_effector_pose()
             current_orientation = _rotation_matrix_to_quaternion(current_rotation)
-            target_position = np.asarray(
-                current_position, dtype=float
-            ) + _rotate_vector(base_orientation, translation)
-            delta_base = _rotvec_quaternion(rotation)
-            delta_world = _quat_multiply(
-                _quat_multiply(base_orientation, delta_base),
-                _quat_inverse(base_orientation),
-            )
-            target_orientation = _quat_multiply(
-                delta_world, np.asarray(current_orientation, dtype=float)
-            )
-            target_orientation /= sqrt(
-                float(np.dot(target_orientation, target_orientation))
-            )
-
-            ik_action, success = solver.compute_inverse_kinematics(
-                target_position,
-                target_orientation,
-            )
-            if not success:
-                raise RuntimeError(f"Lula IK did not converge for {arm_id}")
-            if self._stop_requested.is_set():
-                raise RuntimeError("control lease was revoked before IK write")
-            arm.apply_action(ik_action)
-
             try:
                 from isaacsim.core.utils.types import ArticulationAction
             except ImportError as exc:
@@ -362,32 +352,79 @@ class IsaacSimFrankaController:
                     f"{arm_id} Franka finger joints are missing from {names!r}"
                 ) from exc
             if self._stop_requested.is_set():
-                raise RuntimeError("control lease was revoked before gripper write")
-            arm.apply_action(
-                ArticulationAction(
-                    joint_positions=np.asarray(
-                        [finger_position_m, finger_position_m], dtype=float
-                    ),
-                    joint_indices=np.asarray(finger_indices, dtype=np.int64),
-                )
-            )
-
-            if self._stop_requested.is_set():
                 raise RuntimeError("control lease was revoked before simulation play")
             play = getattr(self._world, "play", None)
             if callable(play):
                 play()
-            step_count = max(1, ceil(action.duration_ms / 1000.0 / self._physics_dt_s))
-            for _ in range(step_count):
+
+            # One 10Hz model delta spans exactly six 60Hz controller updates.
+            # Each controller update advances two 120Hz physics ticks, while
+            # every fourth global physics tick renders one 30Hz camera frame.
+            # Cartesian interpolation prevents applying the full delta six
+            # times and keeps ActionChunk boundaries phase aligned.
+            world_translation = _rotate_vector(base_orientation, translation)
+            inverse_base_orientation = _quat_inverse(base_orientation)
+            for control_index in range(1, control_ticks + 1):
                 if self._stop_requested.is_set():
                     raise RuntimeError(
                         "control lease was revoked during action execution"
                     )
-                self._world.step(render=False)
-                if self._stop_requested.is_set():
+                fraction = control_index / control_ticks
+                target_position = (
+                    np.asarray(current_position, dtype=float)
+                    + world_translation * fraction
+                )
+                delta_base = _rotvec_quaternion(rotation * fraction)
+                delta_world = _quat_multiply(
+                    _quat_multiply(base_orientation, delta_base),
+                    inverse_base_orientation,
+                )
+                target_orientation = _quat_multiply(
+                    delta_world,
+                    np.asarray(current_orientation, dtype=float),
+                )
+                target_orientation /= sqrt(
+                    float(np.dot(target_orientation, target_orientation))
+                )
+                ik_action, success = solver.compute_inverse_kinematics(
+                    target_position,
+                    target_orientation,
+                )
+                if not success:
                     raise RuntimeError(
-                        "control lease was revoked during action execution"
+                        f"Lula IK did not converge for {arm_id} at control tick "
+                        f"{control_index}/{control_ticks}"
                     )
+                if self._stop_requested.is_set():
+                    raise RuntimeError("control lease was revoked before IK write")
+                arm.apply_action(ik_action)
+                if self._stop_requested.is_set():
+                    raise RuntimeError("control lease was revoked before gripper write")
+                arm.apply_action(
+                    ArticulationAction(
+                        joint_positions=np.asarray(
+                            [finger_position_m, finger_position_m], dtype=float
+                        ),
+                        joint_indices=np.asarray(finger_indices, dtype=np.int64),
+                    )
+                )
+
+                for _ in range(self._multi_rate.physics_ticks_per_control):
+                    if self._stop_requested.is_set():
+                        raise RuntimeError(
+                            "control lease was revoked during action execution"
+                        )
+                    self._physics_tick_index += 1
+                    render_due = (
+                        self._physics_tick_index
+                        % self._multi_rate.physics_ticks_per_render
+                        == 0
+                    )
+                    self._world.step(render=render_due)
+                    if self._stop_requested.is_set():
+                        raise RuntimeError(
+                            "control lease was revoked during action execution"
+                        )
         finally:
             self._action_idle.set()
             self._action_lock.release()

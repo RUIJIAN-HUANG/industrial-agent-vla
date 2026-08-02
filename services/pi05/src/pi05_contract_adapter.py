@@ -17,6 +17,7 @@ from industrial_agent.contracts import ActionChunk, Observation, TaskSchema
 from industrial_agent.errors import ExecutorError, FailureCode, ImageCasError
 from industrial_agent.executor import ExecutionContext, ExecutorDescriptor
 from industrial_agent.service_images import CasRequestImageResolver
+from industrial_agent.sync_contract import canonical_state_7d
 from services.pi05.src.observation import ObsPacket, is_image_reference
 from services.pi05.src.pi05 import Pi05Executor
 
@@ -104,23 +105,17 @@ class Pi05ContractAdapter:
         arm_a = robot.get("arm_a", {})
         if not isinstance(arm_a, Mapping):
             arm_a = {}
-        robot_raw = arm_a.get("state", arm_a.get("tcp_pose_m_rad"))
-        if robot_raw is None:
+        try:
+            state_7d = canonical_state_7d(
+                arm_a.get("tcp_pose_m_rad"),
+                arm_a.get("gripper_open"),
+            )
+        except (TypeError, ValueError) as exc:
             raise ExecutorError(
                 FailureCode.EXECUTOR_BAD_RESPONSE,
-                "robot.arm_a.state is required; zero-state fallback is forbidden",
-            )
-        robot_state = np.asarray(robot_raw, dtype=np.float32)
-        if robot_state.ndim != 1 or robot_state.size == 0:
-            raise ExecutorError(
-                FailureCode.EXECUTOR_BAD_RESPONSE,
-                "robot.arm_a.state must be a non-empty one-dimensional vector",
-            )
-        if not np.all(np.isfinite(robot_state)):
-            raise ExecutorError(
-                FailureCode.EXECUTOR_BAD_RESPONSE,
-                "robot.arm_a.state contains NaN or Infinity",
-            )
+                f"robot.arm_a cannot produce canonical state_7d: {exc}",
+            ) from exc
+        robot_state = np.asarray(state_7d, dtype=np.float32)
 
         # 优先使用 context.original_instruction（FixedDualVLAPlanner 设定的冻结指令）
         # 回退 task.instruction（方案书 executor.py Pi05Adapter.plan() L771）

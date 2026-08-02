@@ -60,7 +60,7 @@ def valid_infer_request(config: dict[str, Any]) -> dict[str, Any]:
             "task_description": config["instruction"],
             "full_image": full_ref,
             "wrist_image": None,
-            "state": [0.4, 0.0, 0.4, 0.0, 0.0, 0.0, 0.5],
+            "state": [0.4, 0.0, 0.4, 0.0, 0.0, 0.0, 0.0],
         },
     }
 

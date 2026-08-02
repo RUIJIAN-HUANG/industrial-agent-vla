@@ -53,9 +53,9 @@ def _real_config(config, tmp_path: Path) -> dict:
                     "x_m",
                     "y_m",
                     "z_m",
-                    "roll_rad",
-                    "pitch_rad",
-                    "yaw_rad",
+                    "ax_rad",
+                    "ay_rad",
+                    "az_rad",
                     "gripper_norm",
                 ],
             }
