@@ -1255,7 +1255,10 @@ class VLAAdapterInputTests(unittest.TestCase):
                     )
                     self.assertEqual(
                         model_input["state"],
-                        observation.data["robot"]["arm_b"]["state"],
+                        [
+                            *observation.data["robot"]["arm_b"]["tcp_pose_m_rad"],
+                            1.0,
+                        ],
                     )
                 else:
                     self.assertEqual(
@@ -1282,7 +1285,10 @@ class VLAAdapterInputTests(unittest.TestCase):
                     )
                     self.assertEqual(
                         pi_observation["robot"]["state"],
-                        observation.data["robot"]["arm_a"]["state"],
+                        [
+                            *observation.data["robot"]["arm_a"]["tcp_pose_m_rad"],
+                            1.0,
+                        ],
                     )
 
 

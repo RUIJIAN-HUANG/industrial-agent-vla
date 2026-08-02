@@ -9,6 +9,8 @@ import unittest
 
 import numpy as np
 
+from industrial_agent.contracts import ActionStep
+from industrial_agent.sync_contract import FROZEN_MULTI_RATE
 from simulation.isaac_franka_controller import (
     IsaacSimFrankaController,
     _gripper_opening_m,
@@ -40,6 +42,92 @@ class IsaacFrankaControllerMathTests(unittest.TestCase):
         rotation_z_90 = np.asarray([sqrt(0.5), 0.0, 0.0, sqrt(0.5)])
         vector = _rotate_vector(rotation_z_90, np.asarray([1.0, 0.0, 0.0]))
         np.testing.assert_allclose(vector, [0.0, 1.0, 0.0], atol=1e-12)
+
+
+class MultiRateExecutionTests(unittest.TestCase):
+    def test_100ms_model_delta_is_interpolated_at_60hz(self):
+        class World:
+            def __init__(self):
+                self.render_flags = []
+
+            @staticmethod
+            def play():
+                return None
+
+            def step(self, *, render):
+                self.render_flags.append(render)
+
+        class Lula:
+            @staticmethod
+            def set_robot_base_pose(position, orientation):
+                del position, orientation
+
+        class Solver:
+            def __init__(self):
+                self.positions = []
+                self.orientations = []
+
+            @staticmethod
+            def compute_end_effector_pose():
+                return np.zeros(3), np.eye(3)
+
+            def compute_inverse_kinematics(self, position, orientation):
+                self.positions.append(np.asarray(position, dtype=float))
+                self.orientations.append(np.asarray(orientation, dtype=float))
+                return object(), True
+
+        class Arm:
+            dof_names = [
+                "panda_joint1",
+                "panda_joint2",
+                "panda_finger_joint1",
+                "panda_finger_joint2",
+            ]
+
+            def __init__(self):
+                self.actions = []
+
+            @staticmethod
+            def get_world_pose():
+                return np.zeros(3), np.asarray([1.0, 0.0, 0.0, 0.0])
+
+            def apply_action(self, action):
+                self.actions.append(action)
+
+        world = World()
+        arm = Arm()
+        solver = Solver()
+        controller = object.__new__(IsaacSimFrankaController)
+        controller._world = world
+        controller._arms = {"Arm_A": arm}
+        controller._solvers = {"Arm_A": solver}
+        controller._lula_solvers = {"Arm_A": Lula()}
+        controller._owner_thread_id = __import__("threading").get_ident()
+        controller._action_lock = Lock()
+        controller._action_idle = Event()
+        controller._action_idle.set()
+        controller._stop_requested = Event()
+        controller._multi_rate = FROZEN_MULTI_RATE
+        controller._physics_tick_index = 0
+
+        action = ActionStep.from_sequence(
+            [0.06, 0.0, 0.0, 0.0, 0.0, 0.06, 1.0],
+            duration_ms=100,
+        )
+        with patch.dict(sys.modules, _isaac_type_modules()):
+            controller.execute_action(action, arm_id="Arm_A")
+
+        self.assertEqual(len(solver.positions), 6)
+        np.testing.assert_allclose(
+            [position[0] for position in solver.positions],
+            [0.01, 0.02, 0.03, 0.04, 0.05, 0.06],
+        )
+        self.assertEqual(len(world.render_flags), 12)
+        self.assertEqual(sum(world.render_flags), 3)
+        self.assertEqual(
+            [index + 1 for index, flag in enumerate(world.render_flags) if flag],
+            [4, 8, 12],
+        )
 
     def test_invalid_rotation_matrix_fails_closed(self):
         with self.assertRaisesRegex(RuntimeError, "invalid"):

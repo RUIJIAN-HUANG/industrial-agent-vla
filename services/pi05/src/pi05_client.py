@@ -192,8 +192,13 @@ class WebsocketPolicyClient:
             ) from exc
         if not isinstance(_front, np.ndarray):
             raise TypeError("observation/image must be a numpy RGB array")
-        if not isinstance(_state, np.ndarray):
-            _state = np.asarray(_state, dtype=np.float32)
+        _state = np.asarray(_state, dtype=np.float32)
+        if _state.ndim != 1 or _state.shape != (7,):
+            raise ValueError(
+                "observation/state must be canonical state_7d with shape [7]"
+            )
+        if not np.all(np.isfinite(_state)):
+            raise ValueError("observation/state contains NaN or Infinity")
         request: dict[str, Any] = {
             "schema_version": "v1",
             "episode_id": str(example.get("episode_id", "unknown")),

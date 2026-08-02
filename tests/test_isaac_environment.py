@@ -233,6 +233,21 @@ class IsaacExecutionEnvironmentTests(unittest.TestCase):
         self.assertIn('"state":"APPLIED"', journal)
         self.assertIn('"state":"ACKED"', journal)
 
+    def test_unaligned_duration_is_rejected_before_claim_or_controller_write(self):
+        observation = self.environment.observe()
+        unaligned = ActionStep.from_sequence(
+            [0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5],
+            duration_ms=137,
+        )
+        with self.assertRaisesRegex(RuntimeError, "unaligned action timing"):
+            self.environment.step(unaligned, **self._arguments(observation))
+        self.assertEqual(self.controller.actions, [])
+        if self.ledger_path.exists():
+            self.assertNotIn(
+                '"state":"CLAIMED"',
+                self.ledger_path.read_text(encoding="utf-8"),
+            )
+
     def test_wrong_or_stale_token_is_rejected_before_controller_write(self):
         observation = self.environment.observe()
         with self.assertRaisesRegex(RuntimeError, "requires token A_ONLY"):

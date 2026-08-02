@@ -249,6 +249,37 @@ status
 同一帧不得同时声明 `bin_at_handoff=true` 和 `bin_at_finished=true`。
 `quality.confidence` 必须存在且为 `[0,1]` 内有限数。
 
+### 4.4 冻结的 `state_7d` 与相机空值
+
+双 VLA 接收的本体状态必须逐项为：
+
+```text
+[x_m, y_m, z_m, ax_rad, ay_rad, az_rad, gripper_norm]
+```
+
+- 坐标系固定为 `robot_base`；
+- `[ax_rad, ay_rad, az_rad]` 是一个 rotation-vector（旋转轴乘旋转角），
+  绝对不是 roll/pitch/yaw 欧拉角；
+- `tcp_pose_m_rad` 恰好为前 6 项，`state_7d` 的第 7 项只能由控制器确认的
+  `gripper_open` 生成；
+- 冻结场景只有 `CAM_A_TOP`、`CAM_HANDOFF`、`CAM_B_TOP` 三台相机。
+  所有 VLA 请求都显式携带 `wrist_image=null`；在线观测缺少该可选键时，
+  适配器必须规范化为 `null`，不得创建全黑占位图。
+
+### 4.5 冻结的多频合同
+
+| 层级 | 频率 | 对齐规则 |
+|---|---:|---|
+| Isaac PhysX | 120Hz | 基础时间栅格 |
+| Franka Controller | 60Hz | 每 2 个物理步更新一次控制目标 |
+| RGB Render | 30Hz | 每 4 个物理步渲染一帧 |
+| VLA Model | 10Hz | 每步 100ms；展开为 6 个控制更新、12 个物理步、3 帧渲染 |
+
+动作块中的每个 7D 增量表示整个 100ms 模型周期的总增量。Isaac 适配器按
+60Hz 对平移和 rotation-vector 做分数插值；禁止把完整增量重复执行 6 次。
+任何无法同时落在 120Hz 和 60Hz 栅格上的 `duration_ms` 必须在物理写入前拒绝，
+不得四舍五入造成跨动作块的相位漂移。
+
 ## 5. YOLO Agent
 
 权威 Schema：

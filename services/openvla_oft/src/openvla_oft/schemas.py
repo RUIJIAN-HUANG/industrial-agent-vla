@@ -5,6 +5,8 @@ from __future__ import annotations
 from time import time
 from typing import Any, Mapping
 
+from industrial_agent.sync_contract import FROZEN_MULTI_RATE
+
 from .config import looks_like_sha256
 from .exceptions import ServiceError
 from .utils import finite_vector
@@ -160,6 +162,12 @@ def validate_infer_request(payload: Any, config: Mapping[str, Any]) -> dict[str,
             retryable=False,
         )
     state = finite_vector(model_input["state"], "model_input.state", min_length=7)
+    if len(state) != 7:
+        raise ServiceError(
+            "OBS_1101_INVALID",
+            "model_input.state must contain exactly 7 canonical values",
+            retryable=False,
+        )
     return {
         **dict(payload),
         "model_input": {
@@ -225,7 +233,13 @@ def build_success_response(
             "translation_unit": TRANSLATION_UNIT,
             "rotation_unit": ROTATION_UNIT,
             "gripper_unit": GRIPPER_UNIT,
-            "steps": [{"values": row, "duration_ms": 100} for row in actions],
+            "steps": [
+                {
+                    "values": row,
+                    "duration_ms": FROZEN_MULTI_RATE.model_step_duration_ms,
+                }
+                for row in actions
+            ],
         },
         "timing": {
             "queue_ms": 0.0,

@@ -171,16 +171,18 @@ class ExecutorAdapterTests(unittest.TestCase):
         robot = raw["robot"]
         assert isinstance(robot, dict)
         base_pose = list(robot["tcp_pose_m_rad"])
-        base_state = [*base_pose, 0.5]
+        base_state = [*base_pose, 1.0]
         robot["arm_a"] = {
             "tcp_pose_m_rad": base_pose,
             "state": base_state,
             "retreated": False,
+            "gripper_open": True,
         }
         robot["arm_b"] = {
             "tcp_pose_m_rad": [0.4, *base_pose[1:]],
-            "state": [0.4, *base_state[1:]],
+            "state": [0.4, *base_pose[1:], 0.0],
             "retreated": True,
+            "gripper_open": False,
         }
         self.observation = ObservationGateway().ingest_online(raw)
         self.context = ExecutionContext(
@@ -208,6 +210,10 @@ class ExecutorAdapterTests(unittest.TestCase):
             self.observation.data["camera"]["arm_b_rgb"],
         )
         self.assertIsNone(model_input["wrist_image"])
+        self.assertEqual(
+            model_input["state"],
+            [0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.0],
+        )
         self.assertIn("task_description", model_input)
 
     def test_cancel_reuses_run_and_subtask_correlation(self) -> None:
@@ -242,6 +248,10 @@ class ExecutorAdapterTests(unittest.TestCase):
         assert isinstance(model_input, Mapping)
         self.assertEqual(model_input["prompt"], "execute semantic action")
         self.assertIsNone(model_input["observation"]["camera"]["wrist_image"])
+        self.assertEqual(
+            model_input["observation"]["robot"]["state"],
+            [0.5, 0.0, 0.5, 0.0, 0.0, 0.0, 1.0],
+        )
         self.assertIn("observation", model_input)
 
     def test_non_null_wrist_image_is_rejected_before_transport(self) -> None:
