@@ -53,11 +53,7 @@ class KeyboardTeleopMapper:
     ) -> TeleopCommand:
         values = [0.0] * 6
         if axis is not None:
-            step = (
-                self.translation_step_m
-                if axis < 3
-                else self.rotation_step_rad
-            )
+            step = self.translation_step_m if axis < 3 else self.rotation_step_rad
             values[axis] = sign * step
         values.append(1.0 if self.gripper_open else 0.0)
         return TeleopCommand(
