@@ -3,24 +3,21 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import numpy as np
 import pytest
 
 from industrial_agent.data import (
     CanonicalEpisodeReader,
-    CanonicalRecorder,
     DataLeakageError,
     DatasetSplit,
-    EpisodeMetadata,
     SplitAssignmentError,
     SplitRegistry,
     SplitRegistryIntegrityError,
 )
-from industrial_agent.image_cas import ImageCas, ImageCasConfig
 
 
-CAMERA_IDS = ("CAM_A_TOP", "CAM_HANDOFF", "CAM_B_TOP")
-ARM_IDS = ("Arm_A", "Arm_B")
+REPO_ROOT = Path(__file__).resolve().parents[1]
+GOLDEN_EPISODE = REPO_ROOT / "tests" / "fixtures" / "golden_episode_v1"
+GOLDEN_EPISODE_ID = "golden_episode_v1"
 
 
 def _assign(
@@ -42,54 +39,6 @@ def _assign(
         lighting_seed=scene_seed + 200,
         parent_episode_id=parent_episode_id,
     )
-
-
-def _record_episode(tmp_path: Path, episode_id: str) -> Path:
-    image_cas = ImageCas(ImageCasConfig(root=tmp_path / "cas"))
-    frame = np.zeros((720, 1280, 3), dtype=np.uint8)
-    references = {
-        camera_id: image_cas.write_rgb(frame, camera_id=camera_id)
-        for camera_id in CAMERA_IDS
-    }
-    recorder = CanonicalRecorder(
-        tmp_path / "episodes",
-        EpisodeMetadata(
-            episode_id=episode_id,
-            task_id="task-001",
-            instruction="将四个红色零件装箱并完成交接",
-            scene_seed=7,
-            git_sha="a" * 40,
-            scene_config_sha256=f"sha256:{'b' * 64}",
-        ),
-        image_cas=image_cas,
-    )
-    for camera_id in CAMERA_IDS:
-        recorder.add_frame(
-            camera_id=camera_id,
-            timestamp_ns=1_000_000_000,
-            physics_tick=0,
-            sequence_id=0,
-            image_reference=references[camera_id],
-        )
-    for arm_id in ARM_IDS:
-        recorder.add_state(
-            arm_id=arm_id,
-            timestamp_ns=1_000_000_000,
-            physics_tick=0,
-            sequence_id=0,
-            state_7d=[0.1, 0.2, 0.3, 0.01, -0.02, 0.03, 1.0],
-        )
-    recorder.add_action(
-        arm_id="Arm_A",
-        executor="pi05",
-        subtask_id="S01_ARM_A_PACK_HANDOFF",
-        chunk_id="chunk-001",
-        timestamp_ns=1_000_000_000,
-        physics_tick=0,
-        sequence_id=0,
-        action_7d=[0.01, 0.0, 0.0, 0.0, 0.01, 0.0, 1.0],
-    )
-    return recorder.save_episode(outcome="SUCCEEDED")
 
 
 def test_registry_round_trip_preserves_assignments_and_digest(tmp_path: Path) -> None:
@@ -184,13 +133,12 @@ def test_recovery_episode_must_share_parent_split() -> None:
         )
 
 
-def test_training_reader_allows_registered_train_episode(tmp_path: Path) -> None:
-    episode_path = _record_episode(tmp_path, "train-001")
+def test_training_reader_allows_registered_train_episode() -> None:
     registry = SplitRegistry()
-    _assign(registry, "train-001", "train", scene_seed=7)
+    _assign(registry, GOLDEN_EPISODE_ID, "train", scene_seed=20260803)
 
     with CanonicalEpisodeReader(
-        episode_path,
+        GOLDEN_EPISODE,
         split_registry=registry,
         is_training=True,
     ) as reader:
@@ -201,32 +149,27 @@ def test_training_reader_allows_registered_train_episode(tmp_path: Path) -> None
 
 @pytest.mark.parametrize("split", ["val", "test"])
 def test_training_reader_blocks_registered_val_and_test(
-    tmp_path: Path,
     split: str,
 ) -> None:
-    episode_id = f"{split}-001"
-    episode_path = _record_episode(tmp_path, episode_id)
     registry = SplitRegistry()
-    _assign(registry, episode_id, split, scene_seed=7)
+    _assign(registry, GOLDEN_EPISODE_ID, split, scene_seed=20260803)
 
     with pytest.raises(DataLeakageError, match=f"split '{split}'"):
         CanonicalEpisodeReader(
-            episode_path,
+            GOLDEN_EPISODE,
             split_registry=registry,
             is_training=True,
         )
 
 
-def test_training_reader_requires_registered_episode(tmp_path: Path) -> None:
-    episode_path = _record_episode(tmp_path, "unknown-001")
-
+def test_training_reader_requires_registered_episode() -> None:
     with pytest.raises(DataLeakageError, match="requires a verified split registry"):
-        CanonicalEpisodeReader(episode_path, is_training=True)
+        CanonicalEpisodeReader(GOLDEN_EPISODE, is_training=True)
 
     registry = SplitRegistry()
     with pytest.raises(DataLeakageError, match="unregistered episode"):
         CanonicalEpisodeReader(
-            episode_path,
+            GOLDEN_EPISODE,
             split_registry=registry,
             is_training=True,
         )

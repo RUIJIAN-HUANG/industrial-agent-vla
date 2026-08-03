@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import shutil
 
 import h5py
 from jsonschema import Draft202012Validator
@@ -13,8 +14,6 @@ from industrial_agent.data import (
     CanonicalRecorder,
     EpisodeMetadata,
     OfflineEpisodeReplay,
-    PaddingPolicy,
-    PaddingStrategy,
 )
 from industrial_agent.image_cas import ImageCas, ImageCasConfig
 
@@ -22,6 +21,7 @@ from industrial_agent.image_cas import ImageCas, ImageCasConfig
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CAMERA_IDS = ("CAM_A_TOP", "CAM_HANDOFF", "CAM_B_TOP")
 ARM_IDS = ("Arm_A", "Arm_B")
+GOLDEN_EPISODE = REPO_ROOT / "tests" / "fixtures" / "golden_episode_v1"
 
 
 def _metadata(episode_id: str = "episode-001") -> EpisodeMetadata:
@@ -47,57 +47,8 @@ def _references(image_cas: ImageCas) -> dict[str, object]:
     }
 
 
-def _record_complete_episode(
-    tmp_path: Path,
-    *,
-    episode_id: str = "episode-001",
-    padding_policy: PaddingPolicy | None = None,
-) -> Path:
-    image_cas = _cas(tmp_path)
-    references = _references(image_cas)
-    recorder = CanonicalRecorder(
-        tmp_path / "episodes",
-        _metadata(episode_id),
-        image_cas=image_cas,
-        padding_policy=padding_policy,
-    )
-    for camera_id in CAMERA_IDS:
-        recorder.add_frame(
-            camera_id=camera_id,
-            timestamp_ns=1_000_000_000,
-            physics_tick=0,
-            sequence_id=0,
-            image_reference=references[camera_id],
-        )
-    for arm_id in ARM_IDS:
-        recorder.add_state(
-            arm_id=arm_id,
-            timestamp_ns=1_000_000_000,
-            physics_tick=0,
-            sequence_id=0,
-            state_7d=[0.1, 0.2, 0.3, 0.01, -0.02, 0.03, 1.0],
-        )
-    recorder.add_action_chunk(
-        arm_id="Arm_A",
-        executor="pi05",
-        subtask_id="S01_ARM_A_PACK_HANDOFF",
-        chunk_id="chunk-001",
-        start_timestamp_ns=1_000_000_000,
-        start_physics_tick=0,
-        start_sequence_id=0,
-        actions=[[0.01, 0.0, 0.0, 0.0, 0.01, 0.0, 1.0]],
-    )
-    return recorder.save_episode(outcome="SUCCEEDED")
-
-
-def test_recorder_round_trip_and_manifest_schema(tmp_path: Path) -> None:
-    episode_path = _record_complete_episode(
-        tmp_path,
-        padding_policy=PaddingPolicy(
-            PaddingStrategy.ZERO_MASKED,
-            target_length=2,
-        ),
-    )
+def test_golden_episode_round_trip_and_manifest_schema() -> None:
+    episode_path = GOLDEN_EPISODE
     manifest = json.loads((episode_path / "structure.json").read_text(encoding="utf-8"))
     schema = json.loads(
         (REPO_ROOT / "schemas" / "canonical-episode.schema.json").read_text(
@@ -115,28 +66,36 @@ def test_recorder_round_trip_and_manifest_schema(tmp_path: Path) -> None:
         "render_hz": 30,
         "model_inference_hz": 10,
     }
-    assert manifest["streams"]["actions"]["count"] == 2
+    assert manifest["metadata"]["padding_policy"] == {
+        "strategy": "none",
+        "target_length": None,
+    }
+    assert manifest["streams"]["actions"]["count"] == 1
     assert manifest["streams"]["actions"]["valid_count"] == 1
 
     with CanonicalEpisodeReader(episode_path) as reader:
         for camera_id in CAMERA_IDS:
-            assert reader.camera_frames(camera_id).shape == (1, 720, 1280, 3)
+            frames = reader.camera_frames(camera_id)
+            assert frames.shape == (3, 720, 1280, 3)
+            assert frames.dtype == np.uint8
+            assert np.count_nonzero(frames) > 0
         for arm_id in ARM_IDS:
             state = reader.state_stream(arm_id)
-            assert state["state_7d"].shape == (1, 7)
+            assert state["state_7d"].shape == (6, 7)
+            assert set(np.unique(state["state_7d"][:, 6])).issubset({0.0, 1.0})
         actions = OfflineEpisodeReplay(reader).actions()
         assert len(actions) == 1
         assert actions[0].arm_id == "Arm_A"
         assert actions[0].executor == "pi05"
         assert actions[0].duration_ms == 100
         assert actions[0].action_7d == pytest.approx(
-            (0.01, 0.0, 0.0, 0.0, 0.01, 0.0, 1.0)
+            (0.006, -0.002, -0.004, 0.0, 0.01, -0.01, 0.0)
         )
 
     with h5py.File(episode_path / "episode.h5", "r") as h5:
         assert set(h5) == {"cameras", "robot_state", "actions"}
         assert h5.attrs["wrist_image"] == "null"
-        assert h5["actions/valid_mask"][:].tolist() == [True, False]
+        assert h5["actions/valid_mask"][:].tolist() == [True]
 
 
 def test_invalid_shapes_and_wrong_executor_fail_closed(tmp_path: Path) -> None:
@@ -234,7 +193,8 @@ def test_camera_sync_mismatch_blocks_publication(tmp_path: Path) -> None:
 
 
 def test_reader_rejects_tampered_hdf5(tmp_path: Path) -> None:
-    episode_path = _record_complete_episode(tmp_path)
+    episode_path = tmp_path / "golden_episode_v1"
+    shutil.copytree(GOLDEN_EPISODE, episode_path)
     with (episode_path / "episode.h5").open("ab") as stream:
         stream.write(b"tamper")
 
