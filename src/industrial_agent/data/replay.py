@@ -25,6 +25,7 @@ from .recorder import (
     _file_sha256,
 )
 from .padding import PaddingPolicy
+from .split_registry import DataLeakageError, SplitAssignment, SplitRegistry
 
 
 def _decoded_strings(dataset: h5py.Dataset) -> list[str]:
@@ -51,7 +52,19 @@ class OfflineReplayAction:
 class CanonicalEpisodeReader:
     """Fail-closed reader that verifies manifest, hash, and HDF5 layout."""
 
-    def __init__(self, episode_path: str | Path) -> None:
+    def __init__(
+        self,
+        episode_path: str | Path,
+        *,
+        split_registry: SplitRegistry | None = None,
+        is_training: bool = False,
+    ) -> None:
+        if not isinstance(is_training, bool):
+            raise TypeError("is_training must be a bool")
+        if split_registry is not None and not isinstance(split_registry, SplitRegistry):
+            raise TypeError("split_registry must be SplitRegistry or None")
+        if is_training and split_registry is None:
+            raise DataLeakageError("training access requires a verified split registry")
         root = Path(episode_path).expanduser()
         if root.is_symlink() or not root.is_dir():
             raise ValueError("episode_path must be a real episode directory")
@@ -67,6 +80,12 @@ class CanonicalEpisodeReader:
             raise ValueError("episode structure.json must contain an object")
         self.manifest: dict[str, Any] = raw_manifest
         self._validate_manifest_envelope()
+        self.split_assignment: SplitAssignment | None = None
+        if split_registry is not None:
+            self.split_assignment = split_registry.assert_episode_allowed(
+                self.manifest["metadata"]["episode_id"],
+                is_training=is_training,
+            )
 
         hdf5_path = self.episode_path / "episode.h5"
         if hdf5_path.is_symlink() or not hdf5_path.is_file():
