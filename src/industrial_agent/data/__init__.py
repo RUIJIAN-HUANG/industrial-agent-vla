@@ -6,8 +6,15 @@ fields to the frozen online ``ActionChunk`` schema.
 """
 
 from .padding import PaddingPolicy, PaddingResult, PaddingStrategy, pad_actions
+from .recorder import CanonicalRecorder, EpisodeMetadata
+from .replay import CanonicalEpisodeReader, OfflineEpisodeReplay, OfflineReplayAction
 
 __all__ = [
+    "CanonicalEpisodeReader",
+    "CanonicalRecorder",
+    "EpisodeMetadata",
+    "OfflineEpisodeReplay",
+    "OfflineReplayAction",
     "PaddingPolicy",
     "PaddingResult",
     "PaddingStrategy",
