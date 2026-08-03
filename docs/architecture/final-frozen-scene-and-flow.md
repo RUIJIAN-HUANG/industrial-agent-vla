@@ -115,9 +115,10 @@ VLA 接收未叠加检测框的完整 RGB 图像。YOLO 使用同一原始帧的
 | 13 | `HANDOFF_READY → OBSERVE_B` | `B_ONLY` | 相机、YOLO | 获取 B/交接区新鲜 RGB；同步调用 YOLO 保存满箱 bbox，失败只留证 | 图像与 Arm_B 状态有效 |
 | 14 | `OBSERVE_B → INFER_B` | `B_ONLY` | OpenVLA-OFT | 接收固定 B 指令、完整图像与 Arm_B 状态 | 返回 Arm_B ActionChunk |
 | 15 | `INFER_B ↔ EXECUTE_B` | `B_ONLY` | Safety、Arm_B | 单步滚动抓稳料箱、抬升、保持水平、移动到成品位 | 每步后均有新观测 |
-| 16 | `EXECUTE_B → FINISHED_VERIFY` | `B_ONLY` | Supervisor、相机 | 确认同一料箱进入 `FINISHED_01`、已释放、零件无掉落 | 后置条件通过 |
-| 17 | `FINISHED_VERIFY → TASK_SUCCEEDED` | `NONE` | Arm_B、Supervisor | Arm_B 返回 `HOME_B`，撤销 B 令牌 | 双臂安全、成品到位 |
-| 18 | `TASK_SUCCEEDED → IDLE` | `NONE` | Supervisor、离线评测 | 保存 Trace、动作、事件、三路原始预测和视频；离线计算 mAP | 结果包完整 |
+| 16 | `EXECUTE_B → ARM_B_RETREAT` | `B_ONLY` | Arm_B、Supervisor | 同一料箱已进入 `FINISHED_01` 且夹爪释放；清空旧动作后，Arm_B 返回 `HOME_B` | Arm_B 已退避，Arm_A 仍退避 |
+| 17 | `ARM_B_RETREAT → FINISHED_VERIFY` | `B_ONLY` | Supervisor、相机、Verifier | 重新采集三张不同新鲜帧，核对同一料箱、完成区、料箱速度、夹爪释放、双臂退避与静止 | 三帧中至少两帧整帧复合 PASS |
+| 18 | `FINISHED_VERIFY → TASK_SUCCEEDED` | `B_ONLY → NONE` | Supervisor | 后置条件通过后撤销 B 令牌并持久化最终结果 | `active_arm=NONE`，双臂静止，成品到位 |
+| 19 | `TASK_SUCCEEDED → IDLE` | `NONE` | Supervisor、离线评测 | 保存 Trace、动作、`agent-events.jsonl`、`yolo-evidence.jsonl`、视频；离线导出 `raw_predictions.json` 并生成 `detection_metrics.json` | 结果包完整且可复算 |
 
 ## 6. 当前阶段恢复
 
@@ -127,7 +128,11 @@ VLA 接收未叠加检测框的完整 RGB 图像。YOLO 使用同一原始帧的
 → 获取该工作区的新 Observation
 → 再次调用当前阶段的固定 VLA
 ├─ 预算内恢复：继续
-└─ 预算耗尽：SAFE_STOPPED
+└─ 预算耗尽
+   ├─ 整个 run 尚未发生物理写入：持久撤销令牌为 NONE → FAILED
+   └─ 已发生物理写入或执行结果未知：独立 safe-stop
+      ├─ 停机和停后传感确认成功：SAFE_STOPPED
+      └─ 回执或停后确认失败：SAFE_STOP_FAILED
 ```
 
 - Arm_A 阶段只调用 π0.5；
@@ -147,8 +152,9 @@ VLA 接收未叠加检测框的完整 RGB 图像。YOLO 使用同一原始帧的
 5. Arm_B 搬运的是同一 `Bin_01`，最终位于 `FINISHED_01`；
 6. Arm_B 返回 `HOME_B`，两臂从未同时进入共享区；
 7. 每个物理动作后都有新 observation 和重新推理/核验；
-8. `detections.jsonl`、`events.jsonl`、`trace.json`、视频和离线
-   `metrics.json` 均可关联且可复算。
+8. 在线 `agent-events.jsonl`、`yolo-evidence.jsonl`、`trace.json`、视频，以及离线
+   `raw_predictions.json`、`detection_metrics.json` 均可通过 `trace_id` 和图像 SHA
+   关联且可复算。
 
 交接事件类型唯一采用点号风格。候选预检事件
 `handoff.candidate_checked` 在进入交接的运行中至少出现一次，并可因重试出现

@@ -134,19 +134,17 @@ Supervisor 先用当前新鲜帧做候选预检并记录 `handoff.candidate_chec
 π0.5 主指令：
 
 ```text
-将工作区中的四个红色零件依次装入料箱；倒放零件先调整为正向。
-装箱完成后，将料箱放到中央交接位并返回 HOME_A。
-失败时重新观察后继续。
+将工作区中的四个红色零件依次装入料箱；倒放零件先调整为正向。装箱完成后，将料箱放到中央交接位并返回 HOME_A。失败时重新观察后继续。
 ```
 
 OpenVLA 固定协作指令：
 
 ```text
-收到 handoff_ready 后，观察中央交接位，抓稳 Bin_01 并保持水平，
-将其搬到 FINISHED_01，松开夹爪并返回 HOME_B。
+收到 handoff_ready 后，观察中央交接位，抓稳 Bin_01 并保持水平，将其搬到 FINISHED_01，松开夹爪并返回 HOME_B。
 ```
 
-Supervisor 不解析上述语言，只根据冻结 TaskProfile 管理生命周期。
+以上两条代码块与 `configs/agent.default.json` 中的冻结值逐字一致，代码块内不包含
+换行符。Supervisor 不解析上述语言，只根据冻结 TaskProfile 管理生命周期。
 
 ## 6. 单箱闭环
 
