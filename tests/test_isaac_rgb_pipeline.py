@@ -29,9 +29,10 @@ def test_camera_payload_contains_frozen_streams_and_no_wrist_camera() -> None:
 
 
 def test_camera_payload_selects_active_arm_and_rejects_missing_stream() -> None:
-    assert build_camera_payload(_references(), "Arm_B")["full_image"][
-        "camera_id"
-    ] == "CAM_B_TOP"
+    assert (
+        build_camera_payload(_references(), "Arm_B")["full_image"]["camera_id"]
+        == "CAM_B_TOP"
+    )
     incomplete = _references()
     incomplete.pop("CAM_HANDOFF")
     with pytest.raises(ValueError, match="CAM_HANDOFF"):
