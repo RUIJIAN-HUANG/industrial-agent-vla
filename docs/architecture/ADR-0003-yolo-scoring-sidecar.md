@@ -80,10 +80,14 @@ VLA 动作或交接令牌。
 的离线评测进程汇合：
 
 ```text
-在线 RGB → YOLO → 原始 predictions.json ─┐
-                                           ├→ 离线评测 → AP50 / AP75 / mAP50:95
-冻结数据集 → COCO GT annotations.json ───┘
+在线 RGB → YOLO → yolo-evidence.jsonl → raw_predictions.json ─┐
+                                                               ├→ 离线评测 → detection_metrics.json
+冻结数据集 → COCO GT annotations.json ─────────────────────────┘
 ```
+
+其中 `yolo-evidence.jsonl` 是在线检测包、空检测和失败记录的 durable 原始证据；
+`raw_predictions.json` 是离线评测器保存的精确预测副本；
+`detection_metrics.json` 包含 AP50、AP75、mAP50:95、Precision/Recall 和时延指标。
 
 GT、人工标注框、oracle 状态、真实目标位姿和抓取点禁止进入 Supervisor、
 YOLO、任一 VLA、在线 Verifier 或在线 Observation。
