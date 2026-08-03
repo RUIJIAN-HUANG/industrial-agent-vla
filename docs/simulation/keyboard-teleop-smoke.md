@@ -107,3 +107,23 @@ Arm_A 的 1 步和 10 步测试都通过后，新建独立 artifact 目录运行
 正确顺序是：成员 B 两臂冒烟 → C 接入 Recorder → 共同采 1 条 Canonical
 Episode → C 回放 → D/E 分别试读 → F QA → 组长批准小批试采 → 小批验收通过后
 才扩大规模。
+
+## Isaac 窗口内直接键控与录屏
+
+终端模式需要输入字母后按 Enter。录屏或实际人工示教应改用 GUI 模式：
+
+```bash
+"$ISAAC_SIM_ROOT/python.sh" simulation/run_keyboard_teleop_smoke.py \
+  --input-mode gui \
+  --arm-id Arm_A \
+  --max-actions 10 \
+  --artifact-dir artifacts/keyboard-teleop-smoke/gui-arm-a
+```
+
+出现 `Keyboard Teleop` 浮窗后，点击一次 Isaac viewport，再轻按按键，不需要
+Enter。只处理 `KEY_PRESS`，长按产生的 repeat 事件不会变成额外动作。浮窗显示
+当前机械臂、键位、动作数和执行状态。`X` 或 `Esc` 请求 safe-stop 并退出。
+
+GUI 模式沿用 W/A/S/D 等键。操作时不要按住鼠标右键，否则 Isaac viewport 的
+fly-navigation 也可能响应这些键；每次只轻按一个键，等待浮窗显示 `COMPLETE`
+后再继续。

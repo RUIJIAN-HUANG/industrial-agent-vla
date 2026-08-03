@@ -41,6 +41,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--translation-step-m", type=float, default=0.005)
     parser.add_argument("--rotation-step-deg", type=float, default=2.0)
     parser.add_argument(
+        "--input-mode",
+        choices=("terminal", "gui"),
+        default="terminal",
+        help="Read commands from terminal+Enter or directly from the Isaac window.",
+    )
+    parser.add_argument(
         "--max-actions",
         type=int,
         default=50,
@@ -111,6 +117,8 @@ def main() -> int:
     environment = None
     runtime_gate = None
     rgb_pipeline = None
+    gui_keyboard = None
+    status_window = None
     simulation_app = isaac_compat.launch_simulation_app(headless=False)
     action_count = 0
     checkpoint_count = 0
@@ -128,6 +136,7 @@ def main() -> int:
         from industrial_agent.isaac_runtime import IsaacMainThreadGate
         from industrial_agent.observation import ObservationGateway
         from simulation.isaac_rgb_pipeline import IsaacRgbObservationPipeline
+        from simulation.isaac_gui_keyboard import IsaacGuiKeyboardSource
         from simulation.keyboard_teleop import KeyboardTeleopMapper
         from simulation.rgb_cas_bridge import IsaacRgbCasPublisher
         from simulation.run_isaac_adapter_smoke import _arm_state
@@ -258,6 +267,7 @@ def main() -> int:
                 "session_id": session_id,
                 "scene_id": config["scene_id"],
                 "arm_id": args.arm_id,
+                "input_mode": args.input_mode,
                 "action_order": [
                     "dx_m",
                     "dy_m",
@@ -272,11 +282,39 @@ def main() -> int:
         )
 
         phase = "interactive_teleop"
-        print("\n键采冒烟已就绪。每次输入一个键后按 Enter。")
-        print(mapper.help_text())
-        print("先用 W/A/Q 等小步移动；确认画面正常后按 P 留检查点，按 X 退出。")
         command_queue: Queue[str] = Queue()
-        _start_terminal_reader(command_queue)
+        status_label = None
+        if args.input_mode == "gui":
+            import omni.ui as ui  # type: ignore[import-not-found]
+
+            gui_keyboard = IsaacGuiKeyboardSource.from_isaac(command_queue)
+            gui_keyboard.start()
+            status_window = ui.Window(
+                "Keyboard Teleop",
+                width=620,
+                height=180,
+            )
+            with status_window.frame:
+                with ui.VStack(spacing=5):
+                    ui.Label(
+                        f"GUI TELEOP | {args.arm_id} | click viewport, then tap keys"
+                    )
+                    ui.Label("W/S X | A/D Y | Q/E Z | I/K J/L U/O rotation")
+                    ui.Label("G gripper | P checkpoint | R reset | X or Esc safe-stop")
+                    ui.Label("Tap once; do not hold a key. Camera CAS is recording.")
+                    status_label = ui.Label("READY")
+            print("\nGUI keyboard teleop is ready. Keep focus in the Isaac viewport.")
+            print(mapper.help_text())
+        else:
+            print("\n键采冒烟已就绪。每次输入一个键后按 Enter。")
+            print(mapper.help_text())
+            print("先用 W/A/Q 等小步移动；确认画面正常后按 P 留检查点，按 X 退出。")
+            _start_terminal_reader(command_queue)
+
+        def set_status(value: str) -> None:
+            if status_label is not None:
+                status_label.text = value
+
         running = True
         while running and simulation_app.is_running():
             try:
@@ -287,12 +325,15 @@ def main() -> int:
             try:
                 command = mapper.parse(raw_key)
             except ValueError as exc:
+                set_status(f"IGNORED: {exc}")
                 print(f"无效按键：{exc}")
                 continue
             if command.kind == "help":
+                set_status("HELP: see key map above")
                 print(mapper.help_text())
                 continue
             if command.kind == "quit":
+                set_status("SAFE-STOP REQUESTED")
                 running = False
                 continue
             if command.kind == "reset":
@@ -311,6 +352,7 @@ def main() -> int:
                     },
                 )
                 print("场景已重置。")
+                set_status("RESET COMPLETE")
                 continue
             if command.kind == "checkpoint":
                 checkpoint_count += 1
@@ -333,13 +375,17 @@ def main() -> int:
                     },
                 )
                 print(f"检查点 {checkpoint_count} 已写入。")
+                set_status(f"CHECKPOINT {checkpoint_count} WRITTEN")
                 continue
             if action_count >= args.max_actions:
+                set_status("MAX ACTIONS REACHED; SAFE-STOPPING")
                 print("达到 max-actions 安全上限，正在安全退出。")
                 running = False
                 continue
             if command.action is None:
                 raise RuntimeError("action command contains no ActionStep")
+
+            set_status(f"EXECUTING {command.description} ...")
 
             def execute_one_action() -> tuple[dict[str, Any], dict[str, Any]]:
                 before = dict(environment.observe())
@@ -380,6 +426,10 @@ def main() -> int:
                 f"动作 {action_count}: {command.description}; "
                 f"after={after['observation_id']}"
             )
+            set_status(
+                f"ACTION {action_count}/{args.max_actions}: "
+                f"{command.description} COMPLETE"
+            )
 
         phase = "safe_stop"
 
@@ -400,6 +450,7 @@ def main() -> int:
             "isaac_sim_version": isaac_version,
             "scene_id": config["scene_id"],
             "arm_id": args.arm_id,
+            "input_mode": args.input_mode,
             "action_count": action_count,
             "checkpoint_count": checkpoint_count,
             "three_rgb_cas_streams": True,
@@ -440,6 +491,16 @@ def main() -> int:
         print(json.dumps(result, indent=2, ensure_ascii=False), file=sys.stderr)
         return 1
     finally:
+        if gui_keyboard is not None:
+            try:
+                gui_keyboard.close()
+            except BaseException:
+                traceback.print_exc()
+        if status_window is not None:
+            try:
+                status_window.visible = False
+            except BaseException:
+                traceback.print_exc()
         if rgb_pipeline is not None:
             try:
                 rgb_pipeline.close()
