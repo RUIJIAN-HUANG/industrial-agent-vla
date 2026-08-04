@@ -10,14 +10,12 @@ import pytest
 import scripts.pi05.compute_norm_stats as norm_module
 import scripts.pi05.convert_openpi as convert_module
 import scripts.pi05.smoke_lerobot_loader as loader_module
+from configs.pi05.constants import OPENPI_COMMIT
 from scripts.pi05.provenance_context import (
     ProvenanceContext,
     resolve_provenance_context,
     validate_provenance_context,
 )
-
-
-OPENPI_COMMIT = "15a9616a00943ada6c20a0f158e3adb39df2ccac"
 
 
 def _context() -> ProvenanceContext:
@@ -81,18 +79,29 @@ def test_resolve_context_records_head_dirty_state_and_diff(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     tracked_diff = b"diff --git a/x b/x\n"
+    commands: list[list[str]] = []
+    openpi_root = tmp_path / "openpi"
+    openpi_root.mkdir()
     untracked = tmp_path / "scripts" / "pi05" / "new_source.py"
     untracked.parent.mkdir(parents=True)
     untracked.write_text("VALUE = 1\n", encoding="utf-8")
 
-    def fake_run(command: list[str], **_: Any) -> subprocess.CompletedProcess[bytes]:
+    def fake_run(
+        command: list[str], **kwargs: Any
+    ) -> subprocess.CompletedProcess[bytes]:
+        commands.append(command)
         arguments = command[1:]
+        cwd = Path(kwargs["cwd"])
         if arguments == ["rev-parse", "--show-toplevel"]:
-            stdout = str(tmp_path).encode("utf-8") + b"\n"
+            stdout = str(cwd).encode("utf-8") + b"\n"
         elif arguments == ["rev-parse", "HEAD"]:
-            stdout = b"1" * 40 + b"\n"
+            stdout = (
+                OPENPI_COMMIT.encode("ascii") + b"\n"
+                if cwd == openpi_root
+                else b"1" * 40 + b"\n"
+            )
         elif arguments[:2] == ["status", "--porcelain=v1"]:
-            stdout = b" M scripts/pi05/example.py\n"
+            stdout = b"" if cwd == openpi_root else b" M scripts/pi05/example.py\n"
         elif arguments[:2] == ["diff", "--binary"]:
             stdout = tracked_diff
         elif arguments[:2] == ["ls-files", "--others"]:
@@ -104,6 +113,7 @@ def test_resolve_context_records_head_dirty_state_and_diff(
     monkeypatch.setattr(subprocess, "run", fake_run)
     context = resolve_provenance_context(
         repo_root=tmp_path,
+        openpi_repo_root=openpi_root,
         openpi_commit=OPENPI_COMMIT,
         expected_openpi_commit=OPENPI_COMMIT,
         timeout_s=1.0,
@@ -118,14 +128,69 @@ def test_resolve_context_records_head_dirty_state_and_diff(
     assert context.project_git_sha == "1" * 40
     assert context.project_worktree_dirty is True
     assert context.project_worktree_diff_sha256 == digest.hexdigest()
+    assert [
+        "git",
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=all",
+    ] in commands
+    assert ["git", "diff", "--binary", "--no-ext-diff", "HEAD"] in commands
+    assert ["git", "ls-files", "--others", "--exclude-standard", "-z"] in commands
 
 
 def test_resolve_context_rejects_unpinned_openpi_before_git(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="does not match"):
         resolve_provenance_context(
             repo_root=tmp_path,
+            openpi_repo_root=tmp_path,
             openpi_commit="3" * 40,
             expected_openpi_commit=OPENPI_COMMIT,
+        )
+
+
+@pytest.mark.parametrize(
+    ("actual_commit", "openpi_status", "message"),
+    [
+        ("3" * 40, b"", "actual OpenPI checkout Commit"),
+        (OPENPI_COMMIT, b" M src/openpi/models.py\n", "must be clean"),
+    ],
+)
+def test_resolve_context_rejects_wrong_or_dirty_openpi_checkout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    actual_commit: str,
+    openpi_status: bytes,
+    message: str,
+) -> None:
+    openpi_root = tmp_path / "openpi"
+    openpi_root.mkdir()
+
+    def fake_run(
+        command: list[str], **kwargs: Any
+    ) -> subprocess.CompletedProcess[bytes]:
+        arguments = command[1:]
+        cwd = Path(kwargs["cwd"])
+        if arguments == ["rev-parse", "--show-toplevel"]:
+            stdout = str(cwd).encode("utf-8") + b"\n"
+        elif arguments == ["rev-parse", "HEAD"]:
+            value = actual_commit if cwd == openpi_root else "1" * 40
+            stdout = value.encode("ascii") + b"\n"
+        elif arguments[:2] == ["status", "--porcelain=v1"]:
+            stdout = openpi_status if cwd == openpi_root else b""
+        elif arguments[:2] in (["diff", "--binary"], ["ls-files", "--others"]):
+            stdout = b""
+        else:
+            raise AssertionError(f"unexpected Git command: {command}")
+        return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr=b"")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    with pytest.raises(ValueError, match=message):
+        resolve_provenance_context(
+            repo_root=tmp_path,
+            openpi_repo_root=openpi_root,
+            openpi_commit=OPENPI_COMMIT,
+            expected_openpi_commit=OPENPI_COMMIT,
+            timeout_s=1.0,
         )
 
 
@@ -160,6 +225,7 @@ def test_resolve_context_fails_closed_for_git_errors(
     with pytest.raises(RuntimeError, match=message):
         resolve_provenance_context(
             repo_root=tmp_path,
+            openpi_repo_root=tmp_path,
             openpi_commit=OPENPI_COMMIT,
             expected_openpi_commit=OPENPI_COMMIT,
             timeout_s=1.0,
@@ -178,6 +244,7 @@ def test_converter_cli_returns_nonzero_when_git_provenance_fails(
             "state_mapper": "mapper",
             "split_registry": "registry.json",
             "project_root": str(tmp_path),
+            "openpi_root": str(tmp_path / "openpi"),
             "openpi_commit": OPENPI_COMMIT,
         },
     )()
@@ -206,6 +273,7 @@ def test_norm_stats_cli_returns_nonzero_when_git_provenance_fails(
             "state_mapper": "mapper",
             "split_registry": "registry.json",
             "project_root": str(tmp_path),
+            "openpi_root": str(tmp_path / "openpi"),
             "openpi_commit": OPENPI_COMMIT,
         },
     )()
@@ -234,6 +302,7 @@ def test_loader_cli_returns_nonzero_when_git_provenance_fails(
             "manifest": None,
             "repo_id": "test/pi05",
             "project_root": str(tmp_path),
+            "openpi_root": str(tmp_path / "openpi"),
             "openpi_commit": OPENPI_COMMIT,
         },
     )()

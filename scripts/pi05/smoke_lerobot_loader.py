@@ -15,9 +15,11 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 
 if __package__ in {None, ""}:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    _PROJECT_ROOT = Path(__file__).resolve().parents[2]
+    sys.path.insert(0, str(_PROJECT_ROOT))
+    sys.path.insert(0, str(_PROJECT_ROOT / "src"))
 
-from configs.pi05.train_config import OPENPI_COMMIT
+from configs.pi05.constants import OPENPI_COMMIT
 from scripts.pi05.provenance_context import (
     LEROBOT_PROVENANCE_MANIFEST_TYPE,
     ProvenanceContext,
@@ -479,6 +481,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset-root", required=True)
     parser.add_argument("--repo-id", required=True)
     parser.add_argument("--project-root", required=True)
+    parser.add_argument("--openpi-root", required=True)
     parser.add_argument("--openpi-commit", required=True)
     parser.add_argument(
         "--manifest",
@@ -499,6 +502,7 @@ def main() -> int:
     try:
         provenance_context = resolve_provenance_context(
             repo_root=args.project_root,
+            openpi_repo_root=args.openpi_root,
             openpi_commit=args.openpi_commit,
             expected_openpi_commit=OPENPI_COMMIT,
         )

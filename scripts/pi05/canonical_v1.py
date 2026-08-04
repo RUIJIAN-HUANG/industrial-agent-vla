@@ -19,6 +19,10 @@ from typing import Any, Mapping, Protocol, runtime_checkable
 import numpy as np
 
 from industrial_agent.data import CanonicalEpisodeReader, SplitRegistry
+from industrial_agent.lifecycle import (
+    ARM_A_PACK_HANDOFF_SUBTASK_ID,
+    FixedTaskProfile,
+)
 
 
 CANONICAL_SCHEMA_VERSION = "1.0"
@@ -28,6 +32,8 @@ EXPECTED_EXECUTOR = "pi05"
 EXPECTED_CAMERA_ID = "CAM_A_TOP"
 EXPECTED_IMAGE_SIZE = (1280, 720)
 VALID_SPLITS = frozenset({"train", "val", "test"})
+EXPECTED_INSTRUCTION = FixedTaskProfile().arm_a_instruction
+EXPECTED_SUBTASK_ID = ARM_A_PACK_HANDOFF_SUBTASK_ID
 CANONICAL_TCP_POSE_ORDER = ("x", "y", "z", "qx", "qy", "qz", "qw")
 CANONICAL_QUATERNION_ORDER_XYZW = ("qx", "qy", "qz", "qw")
 LIBRARY_QUATERNION_ORDER_WXYZ = ("qw", "qx", "qy", "qz")
@@ -329,6 +335,13 @@ def read_canonical_episode(
     try:
         metadata = reader.manifest["metadata"]
         episode_id = str(metadata["episode_id"])
+        instruction = str(metadata["instruction"])
+        if instruction != EXPECTED_INSTRUCTION:
+            raise CanonicalV1Error(
+                "instruction does not match the frozen Arm_A task profile",
+                episode_id=episode_id,
+                field="metadata.instruction",
+            )
         assignment = reader.split_assignment
         if assignment is None or assignment.split.value not in VALID_SPLITS:
             raise CanonicalV1Error(
@@ -381,6 +394,13 @@ def read_canonical_episode(
                     episode_id=episode_id,
                     step_index=action.sequence_id,
                     field="actions.arm_id/executor",
+                )
+            if action.subtask_id != EXPECTED_SUBTASK_ID:
+                raise CanonicalV1Error(
+                    f"role-E action must use frozen subtask {EXPECTED_SUBTASK_ID!r}",
+                    episode_id=episode_id,
+                    step_index=action.sequence_id,
+                    field="actions.subtask_id",
                 )
             tick = int(action.physics_tick)
             camera_index = camera_indices.get(tick)
@@ -467,9 +487,9 @@ def read_canonical_episode(
             root=reader.episode_path,
             episode_id=episode_id,
             split=assignment.split.value,
-            instruction=str(metadata["instruction"]),
+            instruction=instruction,
             robot_role=EXPECTED_ROBOT_ROLE,
-            eligible_for_imitation=True,
+            eligible_for_imitation=metadata["outcome"] == "SUCCEEDED",
             meta=metadata,
             steps=tuple(steps),
             recorder_git_sha=str(metadata["git_sha"]),

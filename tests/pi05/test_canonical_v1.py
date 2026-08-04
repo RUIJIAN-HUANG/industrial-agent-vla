@@ -14,6 +14,7 @@ from industrial_agent.data import (
     SplitRegistry,
 )
 from industrial_agent.image_cas import ImageCas, ImageCasConfig
+from industrial_agent.lifecycle import FixedTaskProfile
 from scripts.pi05.canonical_v1 import (
     CanonicalPi05StateMapper,
     CanonicalV1Error,
@@ -43,6 +44,10 @@ def build_episode(
     fallback: bool = False,
     valid_mask: bool = True,
     sentinel: float = 0.1,
+    instruction: str | None = None,
+    subtask_id: str | None = None,
+    outcome: str = "SUCCEEDED",
+    failure_code: str | None = None,
 ) -> Path:
     """Create one compact authoritative HDF5 Episode for role-E tests."""
 
@@ -52,7 +57,7 @@ def build_episode(
         EpisodeMetadata(
             episode_id=episode_id,
             task_id="golden-task-v1",
-            instruction="将四个红色零件装箱并完成交接",
+            instruction=instruction or FixedTaskProfile().arm_a_instruction,
             scene_seed=scene_seed,
             git_sha="a" * 40,
             scene_config_sha256=f"sha256:{'b' * 64}",
@@ -87,7 +92,8 @@ def build_episode(
         recorder.add_action(
             arm_id=arm_id,
             executor=executor,
-            subtask_id=(
+            subtask_id=subtask_id
+            or (
                 "S01_ARM_A_PACK_HANDOFF" if arm_id == "Arm_A" else "S02_ARM_B_TRANSPORT"
             ),
             chunk_id=f"{episode_id}-chunk",
@@ -98,7 +104,7 @@ def build_episode(
         )
         if not valid_mask:
             recorder._h5["actions/valid_mask"][0] = False
-        return recorder.save_episode(outcome="SUCCEEDED")
+        return recorder.save_episode(outcome=outcome, failure_code=failure_code)
 
 
 def build_registry(entries: list[tuple[Path, str]]) -> SplitRegistry:
@@ -169,6 +175,39 @@ def test_external_split_registry_is_required(tmp_path: Path) -> None:
     episode_path = build_episode(tmp_path)
     with pytest.raises(CanonicalV1Error, match="SplitRegistry is required"):
         read_canonical_episode(episode_path)
+
+
+def test_non_frozen_arm_a_instruction_is_rejected(tmp_path: Path) -> None:
+    episode_path = build_episode(
+        tmp_path,
+        instruction="将四个红色零件装箱并完成交接",
+    )
+    registry = build_registry([(episode_path, "train")])
+    with pytest.raises(CanonicalV1Error, match="frozen Arm_A task profile"):
+        read_canonical_episode(episode_path, split_registry=registry)
+
+
+def test_failed_episode_is_not_eligible_for_imitation(tmp_path: Path) -> None:
+    episode_path = build_episode(
+        tmp_path,
+        outcome="FAILED",
+        failure_code="DEMO_FAILURE",
+    )
+    registry = build_registry([(episode_path, "train")])
+
+    episode = read_canonical_episode(episode_path, split_registry=registry)
+
+    assert episode.eligible_for_imitation is False
+    assert episode.training_steps == ()
+    with pytest.raises(CanonicalV1Error, match="no eligible"):
+        _ = episode.imitation_steps
+
+
+def test_non_frozen_arm_a_subtask_is_rejected(tmp_path: Path) -> None:
+    episode_path = build_episode(tmp_path, subtask_id="S99_NOT_FROZEN")
+    registry = build_registry([(episode_path, "train")])
+    with pytest.raises(CanonicalV1Error, match="frozen subtask"):
+        read_canonical_episode(episode_path, split_registry=registry)
 
 
 def test_split_is_derived_from_registry_not_episode_metadata(tmp_path: Path) -> None:

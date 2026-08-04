@@ -17,13 +17,6 @@ LEROBOT_PROVENANCE_MANIFEST_TYPE = "pi05_lerobot_provenance_v3"
 NORM_STATS_SOURCE_MANIFEST_TYPE = "pi05_norm_stats_source_v2"
 _GIT_SHA = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
-_SOURCE_PATHS = (
-    "scripts/pi05",
-    "services/pi05",
-    "configs/pi05",
-    "tests/pi05",
-    "docs",
-)
 
 
 @dataclass(frozen=True)
@@ -128,14 +121,12 @@ def _worktree_fingerprint(repo_root: Path, *, timeout_s: float) -> tuple[bool, s
             "status",
             "--porcelain=v1",
             "--untracked-files=all",
-            "--",
-            *_SOURCE_PATHS,
         ),
         repo_root=repo_root,
         timeout_s=timeout_s,
     )
     tracked_diff = _run_git(
-        ("diff", "--binary", "--no-ext-diff", "HEAD", "--", *_SOURCE_PATHS),
+        ("diff", "--binary", "--no-ext-diff", "HEAD"),
         repo_root=repo_root,
         timeout_s=timeout_s,
     )
@@ -145,8 +136,6 @@ def _worktree_fingerprint(repo_root: Path, *, timeout_s: float) -> tuple[bool, s
             "--others",
             "--exclude-standard",
             "-z",
-            "--",
-            *_SOURCE_PATHS,
         ),
         repo_root=repo_root,
         timeout_s=timeout_s,
@@ -186,11 +175,12 @@ def _worktree_fingerprint(repo_root: Path, *, timeout_s: float) -> tuple[bool, s
 def resolve_provenance_context(
     *,
     repo_root: str | Path,
+    openpi_repo_root: str | Path,
     openpi_commit: str,
     expected_openpi_commit: str,
     timeout_s: float = 5.0,
 ) -> ProvenanceContext:
-    """Resolve a reproducible source identity without mutating Git state."""
+    """Resolve project identity and verify the actual pinned OpenPI checkout."""
 
     if isinstance(timeout_s, bool) or not isinstance(timeout_s, (int, float)):
         raise TypeError("timeout_s must be a positive number")
@@ -233,6 +223,47 @@ def resolve_provenance_context(
         field="project_git_sha",
     )
     dirty, diff_sha = _worktree_fingerprint(root, timeout_s=float(timeout_s))
+
+    openpi_root = Path(openpi_repo_root).resolve()
+    if not openpi_root.is_dir():
+        raise FileNotFoundError(f"OpenPI repository root does not exist: {openpi_root}")
+    discovered_openpi_root = Path(
+        _run_git(
+            ("rev-parse", "--show-toplevel"),
+            repo_root=openpi_root,
+            timeout_s=float(timeout_s),
+        )
+        .decode("utf-8")
+        .strip()
+    ).resolve()
+    if discovered_openpi_root != openpi_root:
+        raise ValueError(
+            "OpenPI repository root mismatch: "
+            f"supplied={openpi_root} actual={discovered_openpi_root}"
+        )
+    actual_openpi_commit = _require_git_sha(
+        _run_git(
+            ("rev-parse", "HEAD"),
+            repo_root=openpi_root,
+            timeout_s=float(timeout_s),
+        )
+        .decode("ascii")
+        .strip(),
+        field="actual_openpi_commit",
+    )
+    if actual_openpi_commit != supplied_commit:
+        raise ValueError(
+            "actual OpenPI checkout Commit does not match the supplied frozen Commit: "
+            f"actual={actual_openpi_commit} expected={supplied_commit}"
+        )
+    openpi_status = _run_git(
+        ("status", "--porcelain=v1", "--untracked-files=all"),
+        repo_root=openpi_root,
+        timeout_s=float(timeout_s),
+    )
+    if openpi_status.strip():
+        raise ValueError("OpenPI checkout must be clean for provenance publication")
+
     return ProvenanceContext(
         project_git_sha=project_git_sha,
         project_worktree_dirty=dirty,

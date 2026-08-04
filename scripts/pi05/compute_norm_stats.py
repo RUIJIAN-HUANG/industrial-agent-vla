@@ -21,9 +21,11 @@ from typing import Any, Mapping
 import numpy as np
 
 if __package__ in {None, ""}:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    _PROJECT_ROOT = Path(__file__).resolve().parents[2]
+    sys.path.insert(0, str(_PROJECT_ROOT))
+    sys.path.insert(0, str(_PROJECT_ROOT / "src"))
 
-from configs.pi05.train_config import OPENPI_COMMIT
+from configs.pi05.constants import OPENPI_COMMIT
 from industrial_agent.data import SplitRegistry
 from scripts.pi05.provenance_context import (
     NORM_STATS_SOURCE_MANIFEST_TYPE,
@@ -372,6 +374,22 @@ def _validate_conversion_provenance(
         raise ValueError(
             "LeRobot provenance Split Registry SHA does not match the supplied registry"
         )
+    seen_episode_ids: set[str] = set()
+    for item in episodes:
+        episode_id = item["canonical_episode_id"]
+        if episode_id in seen_episode_ids:
+            raise ValueError(
+                f"LeRobot provenance repeats Canonical Episode {episode_id!r}"
+            )
+        seen_episode_ids.add(episode_id)
+        authoritative_split = split_registry.get_split(episode_id).value
+        if item["canonical_split"] != authoritative_split:
+            raise ValueError(
+                "LeRobot provenance canonical_split does not match the supplied "
+                f"Split Registry for Episode {episode_id!r}: "
+                f"manifest={item['canonical_split']!r} "
+                f"registry={authoritative_split!r}"
+            )
     return episodes
 
 
@@ -691,6 +709,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--manifest", default=None)
     parser.add_argument("--split-registry", required=True)
     parser.add_argument("--project-root", required=True)
+    parser.add_argument("--openpi-root", required=True)
     parser.add_argument("--openpi-commit", required=True)
     parser.add_argument("--output-path", required=True)
     parser.add_argument("--quiet", action="store_true")
@@ -710,6 +729,7 @@ def main() -> int:
         split_registry = load_split_registry(args.split_registry)
         provenance_context = resolve_provenance_context(
             repo_root=args.project_root,
+            openpi_repo_root=args.openpi_root,
             openpi_commit=args.openpi_commit,
             expected_openpi_commit=OPENPI_COMMIT,
         )

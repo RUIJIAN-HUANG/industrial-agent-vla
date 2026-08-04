@@ -55,6 +55,11 @@ from typing import Any
 
 import numpy as np
 
+try:
+    from configs.pi05.constants import OPENPI_COMMIT as OPENPI_COMMIT
+except ModuleNotFoundError:  # direct ``python configs/pi05/train_config.py`` execution
+    from constants import OPENPI_COMMIT as OPENPI_COMMIT  # type: ignore[no-redef]
+
 # ---------------------------------------------------------------------------
 # 日志
 # ---------------------------------------------------------------------------
@@ -86,7 +91,6 @@ LORA_RANK: int = int(os.environ.get("PI05_LORA_RANK", "32"))
 # 冻结 Arm_A policy state：末端 6D pose + 1 gripper = 7。
 # 作为唯一真相源，供 train.py 与 compute_norm_stats.py 引用
 STATE_DIM: int = int(os.environ.get("PI05_STATE_DIM", "7"))
-OPENPI_COMMIT: str = "15a9616a00943ada6c20a0f158e3adb39df2ccac"
 MODEL_ACTION_DIM: int = 32
 CANONICAL_ACTION_DIM: int = 7
 UNFROZEN_ACTION_HORIZON: int = 10

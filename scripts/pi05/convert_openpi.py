@@ -21,9 +21,11 @@ from typing import Any, Sequence
 import numpy as np
 
 if __package__ in {None, ""}:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    _PROJECT_ROOT = Path(__file__).resolve().parents[2]
+    sys.path.insert(0, str(_PROJECT_ROOT))
+    sys.path.insert(0, str(_PROJECT_ROOT / "src"))
 
-from configs.pi05.train_config import OPENPI_COMMIT
+from configs.pi05.constants import OPENPI_COMMIT
 from industrial_agent.data import SplitRegistry
 from industrial_agent.sync_contract import MODEL_INFERENCE_HZ
 from scripts.pi05.provenance_context import (
@@ -203,12 +205,14 @@ def _prepare_episodes(
 ) -> tuple[PreparedEpisode, ...]:
     prepared: list[PreparedEpisode] = []
     for episode in episodes:
+        if not episode.eligible_for_imitation:
+            continue
         steps = episode.imitation_steps
         states = tuple(map_state(mapper, episode, step) for step in steps)
         prepared.append(PreparedEpisode(episode=episode, steps=steps, states=states))
     if not prepared:
         raise CanonicalV1Error(
-            "dataset contains no eligible Arm_A training Episodes",
+            "dataset contains no eligible successful Arm_A imitation Episodes",
             episode_id="<dataset>",
             field="eligible_for_imitation",
         )
@@ -549,6 +553,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data_dir", required=True)
     parser.add_argument("--split-registry", required=True)
     parser.add_argument("--project-root", required=True)
+    parser.add_argument("--openpi-root", required=True)
     parser.add_argument("--openpi-commit", required=True)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--output_repo_id", default=DEFAULT_REPO_ID)
@@ -577,6 +582,7 @@ def main() -> int:
         split_registry = load_split_registry(args.split_registry)
         provenance_context = resolve_provenance_context(
             repo_root=args.project_root,
+            openpi_repo_root=args.openpi_root,
             openpi_commit=args.openpi_commit,
             expected_openpi_commit=OPENPI_COMMIT,
         )

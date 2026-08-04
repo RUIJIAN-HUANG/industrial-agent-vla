@@ -9,7 +9,8 @@ import numpy as np
 import pytest
 
 import scripts.pi05.compute_norm_stats as norm_stats_module
-from configs.pi05.train_config import OPENPI_COMMIT, require_frozen_action_horizon
+from configs.pi05.constants import OPENPI_COMMIT
+from configs.pi05.train_config import require_frozen_action_horizon
 from industrial_agent.data import SplitRegistry
 from scripts.pi05.canonical_v1 import (
     CanonicalEpisode,
@@ -34,6 +35,7 @@ from scripts.pi05.smoke_lerobot_loader import (
     load_provenance,
     validate_provenance_manifest,
     verify_provenance_checksum,
+    write_provenance_checksum,
 )
 from tests.pi05.test_canonical_v1 import build_episode, build_registry
 
@@ -214,6 +216,44 @@ def test_conversion_uses_hdf5_lineage_and_atomic_offline_reopen(
         expected_repo_id="test/pi05",
         expected_provenance_context=TEST_PROVENANCE_CONTEXT,
     )
+
+
+def test_conversion_excludes_failed_episode_from_imitation_dataset(
+    tmp_path: Path,
+) -> None:
+    canonical_root = tmp_path / "canonical"
+    succeeded = build_episode(
+        canonical_root,
+        episode_id="train-a-success",
+        scene_seed=101,
+    )
+    failed = build_episode(
+        canonical_root,
+        episode_id="train-a-failed",
+        scene_seed=202,
+        outcome="FAILED",
+        failure_code="DEMO_FAILURE",
+    )
+    registry = build_registry([(succeeded, "train"), (failed, "train")])
+
+    result = convert_canonical_to_lerobot(
+        data_dir=canonical_root,
+        output_dir=tmp_path / "lerobot",
+        output_repo_id="test/pi05",
+        fps=10,
+        timestamp_tolerance_ns=0,
+        state_mapper=TestOnlyStateMapper(),
+        split_registry=registry,
+        provenance_context=TEST_PROVENANCE_CONTEXT,
+        production=False,
+        dataset_factory=fake_dataset_factory,
+        dataset_opener=fake_dataset_opener,
+    )
+
+    assert result.manifest["counts"]["episodes"] == 1
+    assert [item["canonical_episode_id"] for item in result.manifest["episodes"]] == [
+        "train-a-success"
+    ]
 
 
 def test_converter_requires_verified_split_registry(tmp_path: Path) -> None:
@@ -453,6 +493,33 @@ def test_lerobot_norm_stats_revalidates_same_split_registry(
         )
 
 
+def test_lerobot_norm_stats_rejects_per_episode_split_relabel(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, registry = _convert_one(tmp_path, split="val")
+    payload = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+    payload["episodes"][0]["canonical_split"] = "train"
+    result.manifest_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    write_provenance_checksum(result.manifest_path)
+    monkeypatch.setattr(norm_stats_module, "open_offline_dataset", fake_dataset_opener)
+
+    with pytest.raises(ValueError, match="canonical_split does not match"):
+        load_dataset(
+            tmp_path / "lerobot",
+            input_format="lerobot",
+            state_mapper=TestOnlyStateMapper(),
+            split_registry=registry,
+            provenance_context=TEST_PROVENANCE_CONTEXT,
+            production=False,
+            repo_id="test/pi05",
+            manifest_path=result.manifest_path,
+        )
+
+
 def test_norm_stats_bundle_is_atomic_and_records_sources(tmp_path: Path) -> None:
     canonical_root = tmp_path / "canonical"
     episode = build_episode(canonical_root)
@@ -498,8 +565,9 @@ def test_norm_stats_bundle_is_atomic_and_records_sources(tmp_path: Path) -> None
 REAL_GATE_VARS = (
     "PI05_REAL_CANONICAL_ROOT",
     "PI05_REAL_SPLIT_REGISTRY",
-    "PI05_PINNED_OPENPI_COMMIT",
     "PI05_PROJECT_ROOT",
+    "PI05_OPENPI_ROOT",
+    "PI05_RELEASE_OUTPUT_ROOT",
 )
 
 
@@ -510,20 +578,25 @@ REAL_GATE_VARS = (
         "environment and external Isaac artifacts"
     ),
 )
-def test_real_five_episode_lerobot_openpi_release_gate(tmp_path: Path) -> None:
+def test_real_five_episode_lerobot_openpi_release_gate() -> None:
     """Mandatory release Gate; ordinary local CI is not release evidence."""
 
-    expected_commit = "15a9616a00943ada6c20a0f158e3adb39df2ccac"
-    assert os.environ["PI05_PINNED_OPENPI_COMMIT"] == expected_commit
+    assert norm_stats_module.OPENPI_NORMALIZE_AVAILABLE
+    release_root = Path(os.environ["PI05_RELEASE_OUTPUT_ROOT"]).resolve()
+    if release_root.exists():
+        raise FileExistsError(
+            f"release evidence root must not already exist: {release_root}"
+        )
     provenance_context = resolve_provenance_context(
         repo_root=os.environ["PI05_PROJECT_ROOT"],
-        openpi_commit=os.environ["PI05_PINNED_OPENPI_COMMIT"],
+        openpi_repo_root=os.environ["PI05_OPENPI_ROOT"],
+        openpi_commit=OPENPI_COMMIT,
         expected_openpi_commit=OPENPI_COMMIT,
     )
     canonical_root = Path(os.environ["PI05_REAL_CANONICAL_ROOT"])
     registry = SplitRegistry.load(os.environ["PI05_REAL_SPLIT_REGISTRY"])
     assert len(find_episode_dirs(canonical_root)) == 5
-    output = tmp_path / "real-lerobot"
+    output = release_root / "lerobot"
     result = convert_canonical_to_lerobot(
         data_dir=canonical_root,
         output_dir=output,
@@ -549,3 +622,33 @@ def test_real_five_episode_lerobot_openpi_release_gate(tmp_path: Path) -> None:
     )
     norm_stats, _ = calculate_norm_stats(loaded, state_dim=7)
     assert set(norm_stats) == {"state", "actions"}
+    norm_stats_sha, source_manifest_path, source_manifest_sha = write_norm_stats_bundle(
+        output_path=release_root / "norm_stats.json",
+        norm_stats=norm_stats,
+        loaded=loaded,
+        mapper=CanonicalPi05StateMapper(),
+        provenance_context=provenance_context,
+    )
+    report = {
+        "schema_version": "1.0",
+        "gate": "pi05_real_five_episode_lerobot_openpi_release",
+        "status": "PASS",
+        "producer": provenance_context.as_manifest(),
+        "split_registry_sha256": registry.registry_sha256,
+        "conversion_manifest": str(result.manifest_path),
+        "conversion_manifest_sha256": result.manifest_sha256,
+        "conversion_counts": result.manifest["counts"],
+        "roundtrip": result.manifest["roundtrip"],
+        "norm_stats": str(release_root / "norm_stats.json"),
+        "norm_stats_sha256": norm_stats_sha,
+        "norm_stats_source_manifest": str(source_manifest_path),
+        "norm_stats_source_manifest_sha256": source_manifest_sha,
+    }
+    report_path = release_root / "pi05-release-gate.json"
+    temporary_report_path = report_path.with_suffix(".json.tmp")
+    temporary_report_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    temporary_report_path.replace(report_path)
+    assert report_path.is_file()
