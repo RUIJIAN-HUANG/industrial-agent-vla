@@ -31,10 +31,13 @@ def _context() -> ProvenanceContext:
 
 def test_validate_context_round_trips_exact_manifest() -> None:
     context = _context()
-    assert validate_provenance_context(
-        context.as_manifest(),
-        expected=context,
-    ) == context
+    assert (
+        validate_provenance_context(
+            context.as_manifest(),
+            expected=context,
+        )
+        == context
+    )
 
 
 @pytest.mark.parametrize(
@@ -180,7 +183,9 @@ def test_converter_cli_returns_nonzero_when_git_provenance_fails(
     )()
     monkeypatch.setattr(convert_module, "parse_args", lambda: args)
     monkeypatch.setattr(convert_module, "load_state_mapper", lambda *_a, **_k: object())
-    monkeypatch.setattr(convert_module, "load_split_registry", lambda *_a, **_k: object())
+    monkeypatch.setattr(
+        convert_module, "load_split_registry", lambda *_a, **_k: object()
+    )
     monkeypatch.setattr(
         convert_module,
         "resolve_provenance_context",

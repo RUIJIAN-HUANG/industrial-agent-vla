@@ -181,8 +181,9 @@ def test_conversion_uses_hdf5_lineage_and_atomic_offline_reopen(
     assert _LAST_DATASET is not None
     assert _LAST_DATASET.writer_closed is True
     assert result.manifest["source_format"] == "canonical_hdf5_v1"
-    assert result.manifest["source_split_registry_sha256"] == (
-        registry.registry_sha256.split(":", 1)[-1]
+    assert (
+        result.manifest["source_split_registry_sha256"]
+        == (registry.registry_sha256.split(":", 1)[-1])
     )
     assert result.manifest["producer"] == TEST_PROVENANCE_CONTEXT.as_manifest()
     assert result.manifest["robot_type"] == "franka"

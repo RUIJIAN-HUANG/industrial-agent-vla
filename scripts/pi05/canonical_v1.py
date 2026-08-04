@@ -213,7 +213,9 @@ def require_state_mapper(
     if not callable(mapper.map_state):
         raise TypeError("StateMapper.map_state must be callable")
     if production and mapper.approved_for_production is not True:
-        raise RuntimeError(f"StateMapper {mapper.name!r} is not approved for production")
+        raise RuntimeError(
+            f"StateMapper {mapper.name!r} is not approved for production"
+        )
     return mapper
 
 
@@ -348,9 +350,7 @@ def read_canonical_episode(
         camera_sequence_ids = np.asarray(
             camera_group["sequence_id"][:], dtype=np.uint64
         )
-        camera_timestamps = np.asarray(
-            camera_group["timestamp_ns"][:], dtype=np.uint64
-        )
+        camera_timestamps = np.asarray(camera_group["timestamp_ns"][:], dtype=np.uint64)
         camera_fallback = np.asarray(camera_group["is_fallback"][:], dtype=np.bool_)
         camera_hashes = _decoded_strings(camera_group["image_sha256"])
         camera_frames = reader.camera_frames(EXPECTED_CAMERA_ID)

@@ -81,7 +81,9 @@ def validate_provenance_context(
         openpi_commit=value["openpi_commit"],
     )
     if expected is not None and context != expected:
-        raise ValueError("PI05 provenance producer does not match the current source tree")
+        raise ValueError(
+            "PI05 provenance producer does not match the current source tree"
+        )
     return context
 
 
@@ -102,7 +104,9 @@ def _run_git(
         )
     except FileNotFoundError as exc:
         logger.error("Git executable is unavailable while resolving PI05 provenance")
-        raise RuntimeError("Git executable is required for production provenance") from exc
+        raise RuntimeError(
+            "Git executable is required for production provenance"
+        ) from exc
     except subprocess.TimeoutExpired as exc:
         logger.error("Git provenance query timed out: command=%s", command)
         raise RuntimeError("Git provenance query timed out") from exc
@@ -160,9 +164,13 @@ def _worktree_fingerprint(repo_root: Path, *, timeout_s: float) -> tuple[bool, s
         try:
             candidate.relative_to(repo_root)
         except ValueError as exc:
-            raise RuntimeError("Git returned an untracked path outside the repository") from exc
+            raise RuntimeError(
+                "Git returned an untracked path outside the repository"
+            ) from exc
         if candidate.is_symlink() or not candidate.is_file():
-            raise RuntimeError(f"untracked provenance input is not a regular file: {relative}")
+            raise RuntimeError(
+                f"untracked provenance input is not a regular file: {relative}"
+            )
         try:
             content_sha = hashlib.sha256(candidate.read_bytes()).hexdigest()
         except OSError as exc:
@@ -194,7 +202,9 @@ def resolve_provenance_context(
         field="expected_openpi_commit",
     )
     if supplied_commit != frozen_commit:
-        raise ValueError("supplied OpenPI Commit does not match the frozen project Commit")
+        raise ValueError(
+            "supplied OpenPI Commit does not match the frozen project Commit"
+        )
 
     root = Path(repo_root).resolve()
     if not root.is_dir():

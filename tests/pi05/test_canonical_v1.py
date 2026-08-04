@@ -88,9 +88,7 @@ def build_episode(
             arm_id=arm_id,
             executor=executor,
             subtask_id=(
-                "S01_ARM_A_PACK_HANDOFF"
-                if arm_id == "Arm_A"
-                else "S02_ARM_B_TRANSPORT"
+                "S01_ARM_A_PACK_HANDOFF" if arm_id == "Arm_A" else "S02_ARM_B_TRANSPORT"
             ),
             chunk_id=f"{episode_id}-chunk",
             timestamp_ns=1_000_000_000,
@@ -227,7 +225,9 @@ def test_cam_a_fallback_frame_is_rejected(tmp_path: Path) -> None:
         read_canonical_episode(episode_path, split_registry=registry)
 
 
-def test_masked_only_episode_is_rejected_by_authoritative_reader(tmp_path: Path) -> None:
+def test_masked_only_episode_is_rejected_by_authoritative_reader(
+    tmp_path: Path,
+) -> None:
     with pytest.raises(ValueError, match="at least one valid action"):
         build_episode(tmp_path, valid_mask=False)
 

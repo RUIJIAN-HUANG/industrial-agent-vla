@@ -175,9 +175,7 @@ def validate_dataset_instance(
         "frames": actual_frames,
         "language_frames": actual_frames,
         "roundtrip_samples": (
-            min(roundtrip_samples, actual_frames)
-            if expected_actions is not None
-            else 0
+            min(roundtrip_samples, actual_frames) if expected_actions is not None else 0
         ),
         "max_action_error": max_error,
     }
@@ -246,9 +244,7 @@ def validate_provenance_manifest(
     if provenance.get("manifest_type") != LEROBOT_PROVENANCE_MANIFEST_TYPE:
         raise ValueError("LeRobot provenance manifest_type is invalid")
     if provenance.get("source_format") != "canonical_hdf5_v1":
-        raise ValueError(
-            "LeRobot provenance source_format must be canonical_hdf5_v1"
-        )
+        raise ValueError("LeRobot provenance source_format must be canonical_hdf5_v1")
     validate_provenance_context(
         provenance.get("producer"),
         expected=expected_provenance_context,
@@ -362,7 +358,9 @@ def validate_provenance_manifest(
         if item.get("canonical_split") not in {"train", "val", "test"}:
             raise ValueError("LeRobot provenance canonical_split is invalid")
         if item.get("robot_role") != "arm_a_pi05":
-            raise ValueError("LeRobot provenance robot_role must be derived as arm_a_pi05")
+            raise ValueError(
+                "LeRobot provenance robot_role must be derived as arm_a_pi05"
+            )
         episode_id = item.get("canonical_episode_id")
         instruction = item.get("instruction")
         count = item.get("step_count")
