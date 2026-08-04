@@ -29,6 +29,7 @@ What is implemented here:
 - mock policy for smoke tests
 - cancel/timeout handling with cooperative request cancellation
 - GPU Docker/Compose deployment, real inference smoke script, public config and tests
+- Canonical HDF5 Arm_B loader and dependency-light RLDS-style export smoke path
 
 Evidence that must come from the team-specific trained artifact:
 
@@ -167,6 +168,40 @@ python services/openvla_oft/scripts/smoke_real.py `
 A zero exit code and a response with `status=ok` are required evidence. Unit
 tests use a fake official binding and therefore do not replace this GPU smoke
 or the Isaac Sim closed-loop acceptance run.
+
+## Canonical to RLDS-style export
+
+The OpenVLA-OFT offline data path reads the verified Canonical HDF5 episode
+through `industrial_agent.data.CanonicalEpisodeReader`, filters only
+`Arm_B/openvla_oft/S02_ARM_B_TRANSPORT`, loads `CAM_B_TOP` RGB pixels, aligns
+Arm_B state and action rows by physics tick, and preserves Canonical source
+lineage for every exported step.
+
+Training export is fail-closed: the Episode must be assigned to `train` by a
+verified external Split Registry, have `outcome=SUCCEEDED`, use the exact frozen
+Arm_B instruction, and contain an exact `CAM_B_TOP` and Arm_B state sample at
+each action physics tick. Fallback camera frames are rejected.
+
+```powershell
+python services/openvla_oft/scripts/convert_canonical_to_rlds.py `
+  --episode artifacts\canonical\arm_b_golden_episode `
+  --split-registry artifacts\canonical\split_registry.json `
+  --output-dir artifacts\openvla_rlds\arm_b_golden_episode
+```
+
+The exporter writes `metadata.json`, `steps.jsonl`, and `arrays.npz`. These are
+intermediate training artifacts and must remain outside Git unless a future
+approved dataset-card PR explicitly records only checksums and reproduction
+commands. `robot_role=arm_b_openvla`, the Train assignment, and the Split
+Registry SHA-256 are persisted in the export. The output directory must not
+already exist; files are written to a sibling staging directory and published
+atomically only after the complete export succeeds. The CLI then reopens and
+fully traverses all three published files, rechecking shapes, dtypes, Episode
+boundaries, role, Split, lineage, and exact source ticks without downloading.
+
+This dependency-light format is an offline smoke interchange, not a production
+TFDS/RLDS dataset. Passing this smoke does not by itself claim that the formal
+OpenVLA TFDS/RLDS training-loader Gate or real-Episode Gate has passed.
 
 ## Test
 
