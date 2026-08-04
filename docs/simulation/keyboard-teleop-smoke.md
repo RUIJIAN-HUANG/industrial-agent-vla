@@ -22,7 +22,7 @@
 ```bash
 cd "$HOME/Sceneconstruction/industrial-agent-vla"
 git fetch origin
-git switch feat/b-keyboard-teleop-collection-smoke
+git switch feat/b-isaac-gui-keyboard-teleop
 git pull --ff-only
 
 export ISAAC_SIM_ROOT="$HOME/isaacsim"
@@ -49,11 +49,15 @@ export ISAAC_SIM_ROOT="$HOME/isaacsim"
 ```json
 {
   "status": "PASS",
+  "action_count": 1,
   "three_rgb_cas_streams": true,
   "online_observation_validated": true,
   "safe_stop_confirmed": true
 }
 ```
+
+未完成任何动作就直接按 `x` 或关闭窗口时，本轮必须返回 `FAIL`，不能作为 RGB、
+Observation 或控制链路的有效验收证据。
 
 还要人工确认：只有 Arm_A 动作、Arm_B 保持静止；没有穿模、飞出、明显抖动；
 画面不是全黑；Stage 中不存在 `/Environment/defaultLight`，只使用冻结场景的

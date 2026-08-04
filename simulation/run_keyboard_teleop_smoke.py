@@ -70,6 +70,15 @@ def _write_result(path: Path, result: dict[str, Any]) -> None:
     )
 
 
+def _require_action_evidence(action_count: int) -> None:
+    """Reject sessions that never exercised the observation/action boundary."""
+
+    if action_count < 1:
+        raise RuntimeError(
+            "teleop smoke requires at least one successful action before exit"
+        )
+
+
 def _start_terminal_reader(output: Queue[str]) -> Thread:
     def read_commands() -> None:
         while True:
@@ -431,6 +440,7 @@ def main() -> int:
                 f"{command.description} COMPLETE"
             )
 
+        _require_action_evidence(action_count)
         phase = "safe_stop"
 
         def stop_workflow() -> Any:
