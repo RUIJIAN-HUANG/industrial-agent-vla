@@ -48,7 +48,7 @@ def main() -> int:
     )
     export_dir = write_rlds_style_episode(steps, args.output_dir)
     summary = load_rlds_style_episode(export_dir)["metadata"]
-    print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
+    print(json.dumps(summary, ensure_ascii=True, indent=2, sort_keys=True))
     return 0
 
 

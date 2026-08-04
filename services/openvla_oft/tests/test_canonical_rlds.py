@@ -346,6 +346,7 @@ def test_conversion_cli_publishes_and_reopens_complete_export(tmp_path: Path) ->
     if environment.get("PYTHONPATH"):
         python_paths.append(environment["PYTHONPATH"])
     environment["PYTHONPATH"] = os.pathsep.join(python_paths)
+    environment["PYTHONIOENCODING"] = "cp1252"
 
     completed = subprocess.run(
         [
