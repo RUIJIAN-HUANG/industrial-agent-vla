@@ -56,6 +56,29 @@ class FrozenSceneLayoutTests(unittest.TestCase):
         )
         self.assertTrue(any("Arm_A -> HANDOFF_CENTER" in error for error in errors))
 
+    def test_rejects_missing_or_changed_explicit_home(self) -> None:
+        mutations = {
+            "missing home": lambda config: config["robots"][0].pop("home"),
+            "wrong arm length": lambda config: config["robots"][0]["home"].update(
+                {"arm_joint_positions_rad": [0.0] * 6}
+            ),
+            "startup-derived drift": lambda config: config["robots"][1]["home"][
+                "arm_joint_positions_rad"
+            ].__setitem__(0, 0.02),
+            "closed home gripper": lambda config: config["robots"][1]["home"].update(
+                {"finger_joint_positions_m": [0.0, 0.0]}
+            ),
+        }
+        for label, mutation in mutations.items():
+            config = deepcopy(self.config)
+            mutation(config)
+            with self.subTest(label=label):
+                errors = validate_scene_config(config)
+                self.assertTrue(
+                    any(".home" in error for error in errors),
+                    errors,
+                )
+
     def test_rejects_inverted_part_pose_recipe_and_token_tampering(self) -> None:
         mutations = {
             "inverted pose": lambda config: config["parts"][1]["pose"].update(

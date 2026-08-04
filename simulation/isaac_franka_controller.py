@@ -7,6 +7,7 @@ writes them to the selected ``SingleArticulation``.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from math import cos, isclose, sin, sqrt
 from threading import Event, Lock, get_ident
 from typing import Any, Mapping
@@ -192,6 +193,7 @@ class IsaacSimFrankaController:
         self._physics_dt_s = float(physics_dt_s)
         self._multi_rate = FROZEN_MULTI_RATE
         self._physics_tick_index = 0
+        self._tick_observer: Callable[[int, bool], None] | None = None
         self._stationary_velocity_rad_s = float(stationary_velocity_rad_s)
         self._safe_stop_action_grace_s = float(safe_stop_action_grace_s)
         self._owner_thread_id = get_ident()
@@ -216,6 +218,31 @@ class IsaacSimFrankaController:
                 lula_solver,
                 end_effector_frame_name,
             )
+
+    @property
+    def physics_tick_index(self) -> int:
+        """Return the current 120 Hz episode-local physics tick."""
+
+        return self._physics_tick_index
+
+    def set_tick_observer(
+        self,
+        observer: Callable[[int, bool], None] | None,
+    ) -> None:
+        """Attach the canonical recorder hook before executing actions.
+
+        The callback runs on the Isaac owner thread after every physics step.
+        ``render_due`` is true only on the frozen 30 Hz render grid.  Replacing
+        the callback while an action is active is rejected so one action can
+        never be split across two recorders.
+        """
+
+        self._require_owner_thread()
+        if observer is not None and not callable(observer):
+            raise TypeError("observer must be callable or None")
+        if not self._action_idle.is_set():
+            raise RuntimeError("cannot replace tick observer during an action")
+        self._tick_observer = observer
 
     def _is_owner_thread(self) -> bool:
         return get_ident() == self._owner_thread_id
@@ -421,6 +448,9 @@ class IsaacSimFrankaController:
                         == 0
                     )
                     self._world.step(render=render_due)
+                    observer = getattr(self, "_tick_observer", None)
+                    if observer is not None:
+                        observer(self._physics_tick_index, render_due)
                     if self._stop_requested.is_set():
                         raise RuntimeError(
                             "control lease was revoked during action execution"

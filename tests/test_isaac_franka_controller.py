@@ -109,6 +109,7 @@ class MultiRateExecutionTests(unittest.TestCase):
         controller._stop_requested = Event()
         controller._multi_rate = FROZEN_MULTI_RATE
         controller._physics_tick_index = 0
+        controller._tick_observer = None
 
         action = ActionStep.from_sequence(
             [0.06, 0.0, 0.0, 0.0, 0.0, 0.06, 1.0],
@@ -128,6 +129,65 @@ class MultiRateExecutionTests(unittest.TestCase):
             [index + 1 for index, flag in enumerate(world.render_flags) if flag],
             [4, 8, 12],
         )
+
+    def test_tick_observer_receives_every_post_step_tick(self):
+        observed = []
+
+        class World:
+            @staticmethod
+            def play():
+                return None
+
+            @staticmethod
+            def step(*, render):
+                del render
+
+        class Lula:
+            @staticmethod
+            def set_robot_base_pose(position, orientation):
+                del position, orientation
+
+        class Solver:
+            @staticmethod
+            def compute_end_effector_pose():
+                return np.zeros(3), np.eye(3)
+
+            @staticmethod
+            def compute_inverse_kinematics(position, orientation):
+                del position, orientation
+                return object(), True
+
+        class Arm:
+            dof_names = ["panda_finger_joint1", "panda_finger_joint2"]
+
+            @staticmethod
+            def get_world_pose():
+                return np.zeros(3), np.asarray([1.0, 0.0, 0.0, 0.0])
+
+            @staticmethod
+            def apply_action(action):
+                del action
+
+        controller = object.__new__(IsaacSimFrankaController)
+        controller._world = World()
+        controller._arms = {"Arm_A": Arm()}
+        controller._solvers = {"Arm_A": Solver()}
+        controller._lula_solvers = {"Arm_A": Lula()}
+        controller._owner_thread_id = __import__("threading").get_ident()
+        controller._action_lock = Lock()
+        controller._action_idle = Event()
+        controller._action_idle.set()
+        controller._stop_requested = Event()
+        controller._multi_rate = FROZEN_MULTI_RATE
+        controller._physics_tick_index = 0
+        controller._tick_observer = lambda tick, render: observed.append((tick, render))
+
+        action = ActionStep.from_sequence([0, 0, 0, 0, 0, 0, 1], duration_ms=100)
+        with patch.dict(sys.modules, _isaac_type_modules()):
+            controller.execute_action(action, arm_id="Arm_A")
+
+        self.assertEqual([tick for tick, _ in observed], list(range(1, 13)))
+        self.assertEqual([tick for tick, render in observed if render], [4, 8, 12])
 
     def test_invalid_rotation_matrix_fails_closed(self):
         with self.assertRaisesRegex(RuntimeError, "invalid"):

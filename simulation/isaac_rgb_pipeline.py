@@ -85,13 +85,18 @@ class IsaacRgbObservationPipeline:
         for _ in range(max(0, int(warmup_updates))):
             self._simulation_app.update()
 
-    def capture(self, active_arm: str) -> dict[str, Any]:
+    def capture_references(self) -> dict[str, Mapping[str, Any]]:
+        """Publish one synchronized three-camera set to CAS."""
+
         self._rep.orchestrator.step(rt_subframes=self._rt_subframes)
         references: dict[str, Mapping[str, Any]] = {}
         for camera_id, (_, annotator) in self._resources.items():
             reference = self._publisher.publish(camera_id, annotator.get_data())
             references[camera_id] = reference.to_dict()
-        return build_camera_payload(references, active_arm)
+        return references
+
+    def capture(self, active_arm: str) -> dict[str, Any]:
+        return build_camera_payload(self.capture_references(), active_arm)
 
     def close(self) -> None:
         resources, self._resources = self._resources, {}
