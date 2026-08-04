@@ -29,6 +29,7 @@ What is implemented here:
 - mock policy for smoke tests
 - cancel/timeout handling with cooperative request cancellation
 - GPU Docker/Compose deployment, real inference smoke script, public config and tests
+- Canonical HDF5 Arm_B loader and dependency-light RLDS-style export smoke path
 
 Evidence that must come from the team-specific trained artifact:
 
@@ -167,6 +168,25 @@ python services/openvla_oft/scripts/smoke_real.py `
 A zero exit code and a response with `status=ok` are required evidence. Unit
 tests use a fake official binding and therefore do not replace this GPU smoke
 or the Isaac Sim closed-loop acceptance run.
+
+## Canonical to RLDS-style export
+
+The OpenVLA-OFT offline data path reads the verified Canonical HDF5 episode
+through `industrial_agent.data.CanonicalEpisodeReader`, filters only
+`Arm_B/openvla_oft/S02_ARM_B_TRANSPORT`, loads `CAM_B_TOP` RGB pixels, aligns
+Arm_B state and action rows by physics tick, and preserves Canonical source
+lineage for every exported step.
+
+```powershell
+python services/openvla_oft/scripts/convert_canonical_to_rlds.py `
+  --episode artifacts\canonical\arm_b_golden_episode `
+  --output-dir artifacts\openvla_rlds\arm_b_golden_episode
+```
+
+The exporter writes `metadata.json`, `steps.jsonl`, and `arrays.npz`. These are
+intermediate training artifacts and must remain outside Git unless a future
+approved dataset-card PR explicitly records only checksums and reproduction
+commands.
 
 ## Test
 
