@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "Lightweight industrial supervisor agent with dual-VLA executors"
 requires-python = ">=3.10"
 dependencies = [
+    "h5py>=3.11,<4",
     "numpy>=1.26,<3",
     "Pillow>=10,<13",
 ]

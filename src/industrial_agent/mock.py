@@ -107,8 +107,16 @@ class FixedDualArmMockSimulator:
             active_arm = "Arm_B"
         else:
             active_arm = "NONE"
-        arm_a_state = [0.5, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5]
-        arm_b_state = [0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5]
+        arm_a_pose = [0.5, 0.0, 0.5, 0.0, 0.0, 0.0]
+        arm_b_pose = [0.4, 0.0, 0.5, 0.0, 0.0, 0.0]
+        arm_a_state = [
+            *arm_a_pose,
+            1.0 if self.arm_a_gripper_open else 0.0,
+        ]
+        arm_b_state = [
+            *arm_b_pose,
+            1.0 if self.arm_b_gripper_open else 0.0,
+        ]
         return {
             "objects": [
                 {
@@ -126,14 +134,14 @@ class FixedDualArmMockSimulator:
             "robot": {
                 "active_arm": active_arm,
                 "arm_a": {
-                    "tcp_pose_m_rad": arm_a_state[:6],
+                    "tcp_pose_m_rad": arm_a_pose,
                     "state": arm_a_state,
                     "retreated": self.arm_a_retreated,
                     "gripper_open": self.arm_a_gripper_open,
                     "stationary": self.arm_a_stationary,
                 },
                 "arm_b": {
-                    "tcp_pose_m_rad": arm_b_state[:6],
+                    "tcp_pose_m_rad": arm_b_pose,
                     "state": arm_b_state,
                     "retreated": self.arm_b_retreated,
                     "gripper_open": self.arm_b_gripper_open,

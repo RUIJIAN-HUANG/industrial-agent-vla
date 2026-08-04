@@ -1,0 +1,392 @@
+{
+  "metadata": {
+    "created_at_utc": "2026-08-03T15:32:34.994375+00:00",
+    "episode_id": "golden_episode_v1",
+    "failure_code": null,
+    "frequency_contract": {
+      "control_hz": 60,
+      "model_inference_hz": 10,
+      "physics_hz": 120,
+      "render_hz": 30
+    },
+    "git_sha": "d0caac18d4e1f63637c22ad48d5879a15a105f32",
+    "instruction": "将工作区中的四个红色零件依次装入料箱；倒放零件先调整为正向。装箱完成后，将料箱放到中央交接位并返回 HOME_A。失败时重新观察后继续。",
+    "offline_gt_included": false,
+    "outcome": "SUCCEEDED",
+    "padding_policy": {
+      "strategy": "none",
+      "target_length": null
+    },
+    "scene_config_sha256": "sha256:8b1656e244232f654049b90d302c1425e9777932dbd9a8d2106d31c8d8f8b000",
+    "scene_id": "single_bin_static_handoff_v1",
+    "scene_seed": 20260803,
+    "task_id": "golden-task-v1",
+    "wrist_image": null
+  },
+  "schema_version": "1.0",
+  "storage": {
+    "episode_file": "episode.h5",
+    "format": "hdf5",
+    "sha256": "sha256:71171b067c81e94a1bb6291a2ffae3734f816e45dabe97187bb9e51f7ee096bf",
+    "structure_file": "structure.json"
+  },
+  "streams": {
+    "actions": {
+      "count": 1,
+      "datasets": {
+        "action_7d": {
+          "dtype": "float32",
+          "path": "/actions/action_7d",
+          "shape": [
+            1,
+            7
+          ]
+        },
+        "arm_id": {
+          "dtype": "utf-8",
+          "path": "/actions/arm_id",
+          "shape": [
+            1
+          ]
+        },
+        "chunk_id": {
+          "dtype": "utf-8",
+          "path": "/actions/chunk_id",
+          "shape": [
+            1
+          ]
+        },
+        "chunk_position": {
+          "dtype": "uint16",
+          "path": "/actions/chunk_position",
+          "shape": [
+            1
+          ]
+        },
+        "duration_ms": {
+          "dtype": "uint16",
+          "path": "/actions/duration_ms",
+          "shape": [
+            1
+          ]
+        },
+        "executor": {
+          "dtype": "utf-8",
+          "path": "/actions/executor",
+          "shape": [
+            1
+          ]
+        },
+        "physics_tick": {
+          "dtype": "uint64",
+          "path": "/actions/physics_tick",
+          "shape": [
+            1
+          ]
+        },
+        "sequence_id": {
+          "dtype": "uint64",
+          "path": "/actions/sequence_id",
+          "shape": [
+            1
+          ]
+        },
+        "subtask_id": {
+          "dtype": "utf-8",
+          "path": "/actions/subtask_id",
+          "shape": [
+            1
+          ]
+        },
+        "timestamp_ns": {
+          "dtype": "uint64",
+          "path": "/actions/timestamp_ns",
+          "shape": [
+            1
+          ]
+        },
+        "valid_mask": {
+          "dtype": "bool",
+          "path": "/actions/valid_mask",
+          "shape": [
+            1
+          ]
+        }
+      },
+      "frequency_hz": 10,
+      "valid_count": 1
+    },
+    "cameras": {
+      "CAM_A_TOP": {
+        "count": 3,
+        "datasets": {
+          "cas_uri": {
+            "dtype": "utf-8",
+            "path": "/cameras/CAM_A_TOP/cas_uri",
+            "shape": [
+              3
+            ]
+          },
+          "dropped_before": {
+            "dtype": "uint32",
+            "path": "/cameras/CAM_A_TOP/dropped_before",
+            "shape": [
+              3
+            ]
+          },
+          "image_sha256": {
+            "dtype": "utf-8",
+            "path": "/cameras/CAM_A_TOP/image_sha256",
+            "shape": [
+              3
+            ]
+          },
+          "is_fallback": {
+            "dtype": "bool",
+            "path": "/cameras/CAM_A_TOP/is_fallback",
+            "shape": [
+              3
+            ]
+          },
+          "physics_tick": {
+            "dtype": "uint64",
+            "path": "/cameras/CAM_A_TOP/physics_tick",
+            "shape": [
+              3
+            ]
+          },
+          "rgb": {
+            "dtype": "uint8",
+            "path": "/cameras/CAM_A_TOP/rgb",
+            "shape": [
+              3,
+              720,
+              1280,
+              3
+            ]
+          },
+          "sequence_id": {
+            "dtype": "uint64",
+            "path": "/cameras/CAM_A_TOP/sequence_id",
+            "shape": [
+              3
+            ]
+          },
+          "timestamp_ns": {
+            "dtype": "uint64",
+            "path": "/cameras/CAM_A_TOP/timestamp_ns",
+            "shape": [
+              3
+            ]
+          }
+        },
+        "fallback_count": 0,
+        "frequency_hz": 30
+      },
+      "CAM_B_TOP": {
+        "count": 3,
+        "datasets": {
+          "cas_uri": {
+            "dtype": "utf-8",
+            "path": "/cameras/CAM_B_TOP/cas_uri",
+            "shape": [
+              3
+            ]
+          },
+          "dropped_before": {
+            "dtype": "uint32",
+            "path": "/cameras/CAM_B_TOP/dropped_before",
+            "shape": [
+              3
+            ]
+          },
+          "image_sha256": {
+            "dtype": "utf-8",
+            "path": "/cameras/CAM_B_TOP/image_sha256",
+            "shape": [
+              3
+            ]
+          },
+          "is_fallback": {
+            "dtype": "bool",
+            "path": "/cameras/CAM_B_TOP/is_fallback",
+            "shape": [
+              3
+            ]
+          },
+          "physics_tick": {
+            "dtype": "uint64",
+            "path": "/cameras/CAM_B_TOP/physics_tick",
+            "shape": [
+              3
+            ]
+          },
+          "rgb": {
+            "dtype": "uint8",
+            "path": "/cameras/CAM_B_TOP/rgb",
+            "shape": [
+              3,
+              720,
+              1280,
+              3
+            ]
+          },
+          "sequence_id": {
+            "dtype": "uint64",
+            "path": "/cameras/CAM_B_TOP/sequence_id",
+            "shape": [
+              3
+            ]
+          },
+          "timestamp_ns": {
+            "dtype": "uint64",
+            "path": "/cameras/CAM_B_TOP/timestamp_ns",
+            "shape": [
+              3
+            ]
+          }
+        },
+        "fallback_count": 0,
+        "frequency_hz": 30
+      },
+      "CAM_HANDOFF": {
+        "count": 3,
+        "datasets": {
+          "cas_uri": {
+            "dtype": "utf-8",
+            "path": "/cameras/CAM_HANDOFF/cas_uri",
+            "shape": [
+              3
+            ]
+          },
+          "dropped_before": {
+            "dtype": "uint32",
+            "path": "/cameras/CAM_HANDOFF/dropped_before",
+            "shape": [
+              3
+            ]
+          },
+          "image_sha256": {
+            "dtype": "utf-8",
+            "path": "/cameras/CAM_HANDOFF/image_sha256",
+            "shape": [
+              3
+            ]
+          },
+          "is_fallback": {
+            "dtype": "bool",
+            "path": "/cameras/CAM_HANDOFF/is_fallback",
+            "shape": [
+              3
+            ]
+          },
+          "physics_tick": {
+            "dtype": "uint64",
+            "path": "/cameras/CAM_HANDOFF/physics_tick",
+            "shape": [
+              3
+            ]
+          },
+          "rgb": {
+            "dtype": "uint8",
+            "path": "/cameras/CAM_HANDOFF/rgb",
+            "shape": [
+              3,
+              720,
+              1280,
+              3
+            ]
+          },
+          "sequence_id": {
+            "dtype": "uint64",
+            "path": "/cameras/CAM_HANDOFF/sequence_id",
+            "shape": [
+              3
+            ]
+          },
+          "timestamp_ns": {
+            "dtype": "uint64",
+            "path": "/cameras/CAM_HANDOFF/timestamp_ns",
+            "shape": [
+              3
+            ]
+          }
+        },
+        "fallback_count": 0,
+        "frequency_hz": 30
+      }
+    },
+    "robot_state": {
+      "Arm_A": {
+        "count": 6,
+        "datasets": {
+          "physics_tick": {
+            "dtype": "uint64",
+            "path": "/robot_state/Arm_A/physics_tick",
+            "shape": [
+              6
+            ]
+          },
+          "sequence_id": {
+            "dtype": "uint64",
+            "path": "/robot_state/Arm_A/sequence_id",
+            "shape": [
+              6
+            ]
+          },
+          "state_7d": {
+            "dtype": "float32",
+            "path": "/robot_state/Arm_A/state_7d",
+            "shape": [
+              6,
+              7
+            ]
+          },
+          "timestamp_ns": {
+            "dtype": "uint64",
+            "path": "/robot_state/Arm_A/timestamp_ns",
+            "shape": [
+              6
+            ]
+          }
+        },
+        "frequency_hz": 60
+      },
+      "Arm_B": {
+        "count": 6,
+        "datasets": {
+          "physics_tick": {
+            "dtype": "uint64",
+            "path": "/robot_state/Arm_B/physics_tick",
+            "shape": [
+              6
+            ]
+          },
+          "sequence_id": {
+            "dtype": "uint64",
+            "path": "/robot_state/Arm_B/sequence_id",
+            "shape": [
+              6
+            ]
+          },
+          "state_7d": {
+            "dtype": "float32",
+            "path": "/robot_state/Arm_B/state_7d",
+            "shape": [
+              6,
+              7
+            ]
+          },
+          "timestamp_ns": {
+            "dtype": "uint64",
+            "path": "/robot_state/Arm_B/timestamp_ns",
+            "shape": [
+              6
+            ]
+          }
+        },
+        "frequency_hz": 60
+      }
+    }
+  }
+}

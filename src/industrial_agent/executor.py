@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from math import isfinite
 from typing import Any, Callable, Mapping, Protocol, Sequence, runtime_checkable
 from uuid import uuid4
 
@@ -24,6 +23,7 @@ from .contracts import (
 )
 from .errors import ContractError, ExecutorError, FailureCode
 from .observation import FROZEN_IMAGE_HEIGHT, FROZEN_IMAGE_WIDTH
+from .sync_contract import canonical_state_7d
 
 ARTIFACT_DIGEST_PATTERN = re.compile(r"sha256:[0-9a-fA-F]{64}")
 CAS_IMAGE_URI_PATTERN = re.compile(r"cas://sha256/([0-9a-fA-F]{64})")
@@ -197,19 +197,15 @@ def _phase_vla_inputs(
             FailureCode.EXECUTOR_BAD_RESPONSE,
             "frozen three-camera profile requires camera.wrist_image=null",
         )
-    state = arm_state.get("state", arm_state.get("tcp_pose_m_rad"))
     tcp_pose = arm_state.get("tcp_pose_m_rad")
-    if state is None:
+    try:
+        state = canonical_state_7d(tcp_pose, arm_state.get("gripper_open"))
+    except (TypeError, ValueError) as exc:
         raise ExecutorError(
             FailureCode.EXECUTOR_BAD_RESPONSE,
-            f"{camera_key}/full_image and robot.{arm_key}.state are required",
-        )
-    state = _finite_numeric_vector(state, f"robot.{arm_key}.state")
-    tcp_pose = _finite_numeric_vector(
-        tcp_pose,
-        f"robot.{arm_key}.tcp_pose_m_rad",
-        minimum_length=6,
-    )
+            f"robot.{arm_key} cannot produce canonical state_7d: {exc}",
+        ) from exc
+    tcp_pose = state[:6]
     return full_image, None, state, tcp_pose
 
 
@@ -286,29 +282,6 @@ def _canonical_image_reference(
         "width": width,
         "height": height,
     }
-
-
-def _finite_numeric_vector(
-    value: Any,
-    field: str,
-    *,
-    minimum_length: int = 1,
-) -> list[float]:
-    if (
-        not _is_sequence(value)
-        or len(value) < minimum_length
-        or any(
-            isinstance(item, bool)
-            or not isinstance(item, (int, float))
-            or not isfinite(float(item))
-            for item in value
-        )
-    ):
-        raise ExecutorError(
-            FailureCode.EXECUTOR_BAD_RESPONSE,
-            f"{field} must contain at least {minimum_length} finite numbers",
-        )
-    return [float(item) for item in value]
 
 
 def _validate_health_response(

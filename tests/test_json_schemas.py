@@ -167,6 +167,17 @@ class JsonSchemaTests(unittest.TestCase):
             self.assertEqual(image_schema["width"]["const"], 1280)
             self.assertEqual(image_schema["height"]["const"], 720)
 
+        openvla_state = definitions["openVlaModelInput"]["properties"]["state"]
+        pi05_robot = definitions["pi05ModelInput"]["properties"]["observation"][
+            "properties"
+        ]["robot"]["properties"]
+        for state_schema in (openvla_state, pi05_robot["state"]):
+            self.assertEqual(state_schema["minItems"], 7)
+            self.assertEqual(state_schema["maxItems"], 7)
+            self.assertIn("rotation vector", state_schema["description"])
+        self.assertEqual(pi05_robot["tcp_pose_m_rad"]["minItems"], 6)
+        self.assertEqual(pi05_robot["tcp_pose_m_rad"]["maxItems"], 6)
+
 
 if __name__ == "__main__":
     unittest.main()

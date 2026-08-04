@@ -100,8 +100,10 @@ A_ONLY
 }
 ```
 
-`uri` 中的摘要必须与 `image_sha256` 完全一致。真实 Adapter 只能从只读 CAS
-解析图像；不得跟随重定向或读取任意主机路径。
+`uri` 中的摘要必须与 `image_sha256` 完全一致。π0.5、OpenVLA-OFT、YOLO
+三个模型服务只能从只读 CAS 解析图像；不得跟随重定向或读取任意主机路径。
+Isaac Adapter 是唯一在线图像 Producer，必须以读写方式挂载 CAS，并在原子写入
+成功后发布 `ImageReference`。
 
 权威实现是 `industrial_agent.image_cas.ImageCas`，完整决策见
 [`ADR-0004-shared-image-cas.md`](ADR-0004-shared-image-cas.md)。固定规则为：
@@ -207,14 +209,14 @@ JSON `null`；不得用 `full_image` 或其他顶视图伪装腕部视角。
     "active_arm": "Arm_A",
     "arm_a": {
       "tcp_pose_m_rad": [0.45, 0.0, 0.4, 0.0, 0.0, 0.0],
-      "state": [0.45, 0.0, 0.4, 0.0, 0.0, 0.0, 0.5],
+      "state": [0.45, 0.0, 0.4, 0.0, 0.0, 0.0, 1.0],
       "retreated": false,
       "gripper_open": true,
       "stationary": true
     },
     "arm_b": {
       "tcp_pose_m_rad": [0.40, 0.0, 0.4, 0.0, 0.0, 0.0],
-      "state": [0.40, 0.0, 0.4, 0.0, 0.0, 0.0, 0.5],
+      "state": [0.40, 0.0, 0.4, 0.0, 0.0, 0.0, 1.0],
       "retreated": true,
       "gripper_open": true,
       "stationary": true
@@ -248,6 +250,37 @@ status
 
 同一帧不得同时声明 `bin_at_handoff=true` 和 `bin_at_finished=true`。
 `quality.confidence` 必须存在且为 `[0,1]` 内有限数。
+
+### 4.4 冻结的 `state_7d` 与相机空值
+
+双 VLA 接收的本体状态必须逐项为：
+
+```text
+[x_m, y_m, z_m, ax_rad, ay_rad, az_rad, gripper_norm]
+```
+
+- 坐标系固定为 `robot_base`；
+- `[ax_rad, ay_rad, az_rad]` 是一个 rotation-vector（旋转轴乘旋转角），
+  绝对不是 roll/pitch/yaw 欧拉角；
+- `tcp_pose_m_rad` 恰好为前 6 项，`state_7d` 的第 7 项只能由控制器确认的
+  `gripper_open` 生成；
+- 冻结场景只有 `CAM_A_TOP`、`CAM_HANDOFF`、`CAM_B_TOP` 三台相机。
+  所有 VLA 请求都显式携带 `wrist_image=null`；在线观测缺少该可选键时，
+  适配器必须规范化为 `null`，不得创建全黑占位图。
+
+### 4.5 冻结的多频合同
+
+| 层级 | 频率 | 对齐规则 |
+|---|---:|---|
+| Isaac PhysX | 120Hz | 基础时间栅格 |
+| Franka Controller | 60Hz | 每 2 个物理步更新一次控制目标 |
+| RGB Render | 30Hz | 每 4 个物理步渲染一帧 |
+| VLA Model | 10Hz | 每步 100ms；展开为 6 个控制更新、12 个物理步、3 帧渲染 |
+
+动作块中的每个 7D 增量表示整个 100ms 模型周期的总增量。Isaac 适配器按
+60Hz 对平移和 rotation-vector 做分数插值；禁止把完整增量重复执行 6 次。
+任何无法同时落在 120Hz 和 60Hz 栅格上的 `duration_ms` 必须在物理写入前拒绝，
+不得四舍五入造成跨动作块的相位漂移。
 
 ## 5. YOLO Agent
 
@@ -613,6 +646,7 @@ Arm_A 交接帧必须同时满足：
 - Arm_A 夹爪已释放、已退避；
 - Arm_B 已退避；
 - 两臂均静止；
+- 无急停、保护停和系统故障；
 - 质量字段有效。
 
 通过后先将 `handoff.verified` 事件 fsync 到 durable JSONL，再发布并 fsync

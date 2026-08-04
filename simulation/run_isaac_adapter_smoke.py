@@ -115,14 +115,16 @@ def _arm_state(
         names.index("panda_finger_joint1"),
         names.index("panda_finger_joint2"),
     ]
+    tcp_pose_m_rad = [
+        *(round(float(item), 8) for item in base_position),
+        *(round(item, 8) for item in _quaternion_to_rotvec(base_orientation)),
+    ]
+    gripper_open = bool(np.mean(positions[finger_indices]) >= 0.02)
     return {
-        "tcp_pose_m_rad": [
-            *(round(float(item), 8) for item in base_position),
-            *(round(item, 8) for item in _quaternion_to_rotvec(base_orientation)),
-        ],
-        "state": [round(float(item), 8) for item in positions],
+        "tcp_pose_m_rad": tcp_pose_m_rad,
+        "state": [*tcp_pose_m_rad, 1.0 if gripper_open else 0.0],
         "retreated": _is_retreated(world_position, config),
-        "gripper_open": bool(np.mean(positions[finger_indices]) >= 0.02),
+        "gripper_open": gripper_open,
         "stationary": bool(
             velocities.size
             and np.all(np.isfinite(velocities))

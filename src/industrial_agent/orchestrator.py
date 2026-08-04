@@ -59,6 +59,7 @@ from .perception import (
     PERCEPTION_CONFIG_FIELDS,
 )
 from .safety import ActionSafetyValidator, SafetyPolicy, safety_state_failure
+from .sync_contract import canonical_state_7d
 from .telemetry import EventRecord, EventSink, MemoryStore, RunMemory
 from .verifier import PostconditionVerifier, VerificationResult, Verdict
 
@@ -1148,13 +1149,13 @@ class IndustrialAgent:
                 )
             tcp_pose = arm_state.get("tcp_pose_m_rad")
             state = arm_state.get("state")
-            for field_name, values, minimum_length in (
+            for field_name, values, expected_length in (
                 ("tcp_pose_m_rad", tcp_pose, 6),
-                ("state", state, 1),
+                ("state", state, 7),
             ):
                 if (
                     not isinstance(values, (list, tuple))
-                    or len(values) < minimum_length
+                    or len(values) != expected_length
                     or any(
                         isinstance(item, bool)
                         or not isinstance(item, (int, float))
@@ -1163,8 +1164,8 @@ class IndustrialAgent:
                     )
                 ):
                     return (
-                        f"robot.{arm_key}.{field_name} must contain at least "
-                        f"{minimum_length} finite numbers"
+                        f"robot.{arm_key}.{field_name} must contain exactly "
+                        f"{expected_length} finite numbers"
                     )
             retreated = arm_state.get("retreated")
             if not isinstance(retreated, bool):
@@ -1172,6 +1173,18 @@ class IndustrialAgent:
             gripper_open = arm_state.get("gripper_open")
             if not isinstance(gripper_open, bool):
                 return f"robot.{arm_key}.gripper_open must be boolean"
+            try:
+                expected_state = canonical_state_7d(tcp_pose, gripper_open)
+            except (TypeError, ValueError) as exc:
+                return f"robot.{arm_key} cannot produce canonical state_7d: {exc}"
+            if any(
+                abs(float(actual) - expected) > 1e-9
+                for actual, expected in zip(state, expected_state)
+            ):
+                return (
+                    f"robot.{arm_key}.state must equal tcp_pose_m_rad plus "
+                    "controller-confirmed gripper state"
+                )
             stationary = arm_state.get("stationary")
             if not isinstance(stationary, bool):
                 return f"robot.{arm_key}.stationary must be boolean"

@@ -45,10 +45,10 @@ Stage：Z-up，metersPerUnit=1
 | `/World/Workcell/Table` | `(0.00,0.00,0.725)` | `2.30×1.10×0.05 m` |
 | `/World/Robots/Arm_A` | `(-0.55,-0.30,0.750)` | Franka，面向 `+Y` |
 | `/World/Robots/Arm_B` | `(+0.50,-0.30,0.750)` | Franka，面向 `+Y` |
-| `/World/Stations/Pack` | `(-0.35,-0.15,0.750)` | 蓝区下方中间的初始装箱位 |
+| `/World/Stations/PACK_STATION` | `(-0.35,-0.15,0.750)` | 蓝区下方中间的初始装箱位 |
 | `/World/Bins/Bin_01` | `(-0.35,-0.15,0.785)` | 初始位于 `PACK_STATION`，`0.18×0.12×0.07 m` |
-| `/World/Handoff/Center` | `(0.00,0.00,0.785)` | 满箱交接 ROI，建议 `0.26×0.20 m` |
-| `/World/Finished/Slot_01` | `(+0.70,+0.10,0.785)` | 唯一成品位 |
+| `/World/Stations/HANDOFF_CENTER` | `(0.00,0.00,0.785)` | 满箱交接 ROI，建议 `0.26×0.20 m` |
+| `/World/Stations/FINISHED_01` | `(+0.70,+0.10,0.785)` | 唯一成品位 |
 
 按上述坐标计算的水平距离：
 
@@ -115,19 +115,16 @@ A_ONLY
 
 禁止直接从 `A_ONLY` 切到 `B_ONLY`。
 
-`HANDOFF_VERIFY` 期间：
+进入 `HANDOFF_VERIFY` 前：
 
 1. 两臂新动作均锁定；
-2. A 臂旧 ActionChunk 已取消；
-3. A 臂连续 3 个控制周期满足 `TCP x≤-0.30`；
-4. A 臂全部关节速度 `<0.02 rad/s`；
-5. A 夹爪已张开；
-6. 料箱在交接 ROI 内连续 3 个新帧稳定；
-7. 料箱帧间中心移动 `<3 px`；
-8. 料箱偏航误差 `<5°`。
+2. A 臂旧 ActionChunk 已取消。
 
-进入 `HANDOFF_VERIFY` 前，Supervisor 先用当前新鲜帧做候选预检并记录
-`handoff.candidate_checked`；该帧不计入最终投票。锁定双臂后重新采集恰好三帧，
+Supervisor 先用当前新鲜帧做候选预检并记录 `handoff.candidate_checked`；
+该帧不计入最终投票。候选通过后锁定双臂并进入 `HANDOFF_VERIFY`。
+
+`HANDOFF_VERIFY` 期间重新采集恰好三帧，每帧按已冻结的交接条件
+（见 [agent-framework.md §10](agent-framework.md#10-交接核验)）逐帧全条件检查；
 2/3 通过时依次持久化 `handoff.verified`、`handoff.ready`。只有 durable
 `handoff.ready` 才允许把令牌切为 `B_ONLY`。自然语言中的 `handoff_ready`
 仍是业务信号名称，不是事件类型。
@@ -137,19 +134,17 @@ A_ONLY
 π0.5 主指令：
 
 ```text
-将工作区中的四个红色零件依次装入料箱；倒放零件先调整为正向。
-装箱完成后，将料箱放到中央交接位并返回 HOME_A。
-失败时重新观察后继续。
+将工作区中的四个红色零件依次装入料箱；倒放零件先调整为正向。装箱完成后，将料箱放到中央交接位并返回 HOME_A。失败时重新观察后继续。
 ```
 
 OpenVLA 固定协作指令：
 
 ```text
-收到 handoff_ready 后，观察中央交接位，抓稳 Bin_01 并保持水平，
-将其搬到 FINISHED_01，松开夹爪并返回 HOME_B。
+收到 handoff_ready 后，观察中央交接位，抓稳 Bin_01 并保持水平，将其搬到 FINISHED_01，松开夹爪并返回 HOME_B。
 ```
 
-Supervisor 不解析上述语言，只根据冻结 TaskProfile 管理生命周期。
+以上两条代码块与 `configs/agent.default.json` 中的冻结值逐字一致，代码块内不包含
+换行符。Supervisor 不解析上述语言，只根据冻结 TaskProfile 管理生命周期。
 
 ## 6. 单箱闭环
 

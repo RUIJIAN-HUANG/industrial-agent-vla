@@ -95,8 +95,8 @@ def sample_observation(sample_rgb_front, sample_rgb_wrist):
         step_id=7,
         timestamp_ns=1_700_000_000_000_000_000,
         rgb_front=sample_rgb_front,
-        rgb_wrist=sample_rgb_wrist,
-        robot_state=np.arange(8, dtype=np.float32),
+        rgb_wrist=None,
+        robot_state=np.arange(7, dtype=np.float32),
         instruction="pick up the red cylinder and place it into cell row 2 col 3",
         runtime_flags={"terminated": False, "truncated": False, "camera_ok": True},
     )
@@ -109,8 +109,8 @@ def _make_minimal_obs(step_id: int = 1, episode_id: str = "mini") -> ObsPacket:
         step_id=step_id,
         timestamp_ns=0,
         rgb_front=np.zeros((480, 640, 3), dtype=np.uint8),
-        rgb_wrist=np.zeros((224, 224, 3), dtype=np.uint8),
-        robot_state=np.zeros(8, dtype=np.float32),
+        rgb_wrist=None,
+        robot_state=np.zeros(7, dtype=np.float32),
         instruction=episode_id,
         runtime_flags={"terminated": False, "truncated": False, "camera_ok": True},
     )
@@ -336,7 +336,7 @@ def test_process_observation_pixel_audit(mock_executor, caplog):
         timestamp_ns=0,
         rgb_front=FIXED_TEST_IMAGE.copy(),
         rgb_wrist=None,
-        robot_state=np.zeros(8, dtype=np.float32),
+        robot_state=np.zeros(7, dtype=np.float32),
         instruction="audit",
         runtime_flags={},
     )
@@ -448,7 +448,7 @@ def test_norm_stats_no_double_denormalization(clean_pi05_env, monkeypatch, tmp_p
     mean = np.array([0.1, -0.2, 0.0, 0.3, -0.1, 0.2, 0.5], dtype=np.float32)
     std = np.array([0.5, 0.5, 0.5, 1.0, 1.0, 1.0, 0.5], dtype=np.float32)
 
-    raw_state = np.arange(8, dtype=np.float32)
+    raw_state = np.arange(7, dtype=np.float32)
     captured: dict = {}
 
     # 模拟 openpi output_transform 已反归一化的物理动作（均在安全限幅内，仅夹爪需取整）

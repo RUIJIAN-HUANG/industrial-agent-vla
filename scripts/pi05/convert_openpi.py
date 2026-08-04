@@ -38,6 +38,8 @@ from typing import Any
 
 import numpy as np
 
+from industrial_agent.sync_contract import MODEL_INFERENCE_HZ
+
 # ---------------------------------------------------------------------------
 # 日志
 # ---------------------------------------------------------------------------
@@ -106,7 +108,7 @@ except Exception:
 # 常量
 # ---------------------------------------------------------------------------
 ACTION_DIM: int = 7  # [dx,dy,dz,dax,day,daz,gripper]，方案书 §5.1
-DEFAULT_FPS: int = 10  # 方案书 §3.4 control_hz=10
+DEFAULT_FPS: int = MODEL_INFERENCE_HZ
 DEFAULT_STATE_DIM: int = 7  # frozen Arm_A: TCP pose(6) + gripper(1)
 DEFAULT_ROBOT_TYPE: str = "franka"
 DEFAULT_REPO_ID: str = "your_team/industrial"
@@ -284,7 +286,7 @@ def parse_args() -> argparse.Namespace:
         "--fps",
         type=int,
         default=DEFAULT_FPS,
-        help="数据集 fps（方案书 §3.4 control_hz=10）。",
+        help="数据集 fps（冻结为 10Hz 模型动作采样频率）。",
     )
     parser.add_argument(
         "--state_dim",

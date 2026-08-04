@@ -98,6 +98,19 @@ VLA 使用新观测做一次有界重规划。任何写后失败或结果未知�
 Lula IK 本身不提供双臂/环境碰撞规划。本 Adapter 仍依赖冻结 workspace、单臂令牌、
 对侧退避互锁和小步滚动时域；它不能被宣传为 collision-aware planner。
 
+### 4.1 120/60/30/10Hz 多频同步
+
+`src/industrial_agent/sync_contract.py` 是频率真源：PhysX 120Hz、控制器
+60Hz、RGB 渲染 30Hz、VLA 推理/动作采样 10Hz。一个 100ms 模型动作必须严格
+展开为 6 个控制目标、12 个物理步和 3 次渲染。控制目标使用同一初始 TCP 的
+笛卡尔分数插值，旋转部分始终缩放同一个 robot_base rotation-vector；因此最终
+增量只执行一次，不会被 6 倍放大。渲染按全局物理 tick 降采样，跨 ActionChunk
+保持相位连续。
+
+`duration_ms` 必须同时落在 120Hz 物理栅格和 60Hz 控制栅格上，否则 Controller
+在任何 IK/关节写入前 fail-closed。标准双 VLA 响应固定为每步 100ms；250ms 等
+控制器 smoke 诊断时长仍可使用，只要满足整数栅格。
+
 ## 5. Supervisor 接线要求
 
 构造环境时必须显式提供：

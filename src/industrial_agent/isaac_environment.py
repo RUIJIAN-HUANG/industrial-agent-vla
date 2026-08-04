@@ -25,6 +25,7 @@ from .environment import (
     execution_guard_digest,
 )
 from .isaac_runtime import IsaacGateTimeoutError
+from .sync_contract import FROZEN_MULTI_RATE
 
 
 class IsaacFrankaController(Protocol):
@@ -871,6 +872,12 @@ class IsaacExecutionEnvironment:
             raise RuntimeError("empty controller command_id rejected")
         if action.has_non_finite():
             raise RuntimeError("Isaac controller rejected non-finite action")
+        try:
+            FROZEN_MULTI_RATE.control_ticks_for_duration_ms(action.duration_ms)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(
+                f"Isaac controller rejected unaligned action timing: {exc}"
+            ) from exc
 
         request_digest = self._request_digest(
             action,

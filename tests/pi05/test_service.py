@@ -114,7 +114,7 @@ def make_valid_request(
     if isinstance(rgb_wrist, np.ndarray):
         rgb_wrist = rgb_wrist.tolist()
     if robot_state is None:
-        robot_state = [0.0] * 8
+        robot_state = [0.0] * 7
     elif isinstance(robot_state, np.ndarray):
         robot_state = robot_state.tolist()
     if runtime_flags is None:
@@ -1034,7 +1034,7 @@ def _make_http_infer_body(
         full_image = dict(TEST_FULL_IMAGE_REFERENCE)
     if robot_state is None:
         robot_state = [0.51, -0.03, 0.42, 0.01, 0.02, -0.01, 0.0]
-    # tcp_pose_m_rad 至少 6 维（schemas/executor-infer.schema.json minItems=6）
+    # tcp_pose_m_rad 恰好 6 维，末三项是 robot_base rotation-vector。
     tcp_pose = [0.51, -0.03, 0.42, 0.01, 0.02, -0.01]
 
     return {

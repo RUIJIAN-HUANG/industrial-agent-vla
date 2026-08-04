@@ -315,12 +315,17 @@
         "tcp_pose_m_rad": {
           "type": "array",
           "minItems": 6,
+          "maxItems": 6,
+          "description": "TCP pose [x_m,y_m,z_m,ax_rad,ay_rad,az_rad] in robot_base; the final three values are one rotation vector, not Euler angles.",
           "items": {
             "type": "number"
           }
         },
         "state": {
           "type": "array",
+          "minItems": 7,
+          "maxItems": 7,
+          "description": "Canonical state_7d [x_m,y_m,z_m,ax_rad,ay_rad,az_rad,gripper_norm] in robot_base; ax/ay/az form one rotation vector.",
           "items": {
             "type": "number"
           }
