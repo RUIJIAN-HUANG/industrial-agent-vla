@@ -1,0 +1,501 @@
+"""Run one physical P01 scripted-expert TEST episode in Isaac Sim 5.1.
+
+This is the first task-level gate after the Recorder integration smoke.  It is
+always assigned to the TEST split and is never training-eligible.  Isaac ground
+truth is read only through :mod:`offline_gt`; detailed values are written only
+below the sibling ``offline_gt`` artifact directory.
+"""
+
+from __future__ import annotations
+
+import argparse
+from hashlib import sha256
+import json
+from pathlib import Path
+import subprocess
+import sys
+import time
+import traceback
+from typing import Any
+
+import numpy as np
+
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+REPOSITORY_ROOT = SCRIPT_DIR.parent
+SOURCE_DIR = REPOSITORY_ROOT / "src"
+DEFAULT_CONFIG = SCRIPT_DIR / "configs" / "single_bin_scene_v1.json"
+DEFAULT_SCENE = SCRIPT_DIR / "generated" / "single_bin_scene_v1.usda"
+DEFAULT_ARTIFACT_ROOT = REPOSITORY_ROOT / "artifacts" / "scripted-expert-p01-smoke"
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Automatic P01 pick/place TEST gate with Canonical recording."
+    )
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    parser.add_argument("--output-scene", type=Path, default=DEFAULT_SCENE)
+    parser.add_argument("--artifact-root", type=Path, default=DEFAULT_ARTIFACT_ROOT)
+    parser.add_argument("--franka-usd")
+    parser.add_argument("--tcp-grasp-offset-z-m", type=float, default=0.105)
+    parser.add_argument("--approach-clearance-m", type=float, default=0.10)
+    parser.add_argument("--max-cartesian-step-m", type=float, default=0.02)
+    parser.add_argument(
+        "--headless",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+    )
+    return parser.parse_args()
+
+
+def _file_digest(path: Path) -> str:
+    digest = sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return f"sha256:{digest.hexdigest()}"
+
+
+def _clean_git_sha() -> str:
+    status = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=REPOSITORY_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    if status.strip():
+        raise RuntimeError("P01 collection requires a clean committed Git tree")
+    value = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=REPOSITORY_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    if len(value) != 40:
+        raise RuntimeError("git rev-parse HEAD did not return a full SHA")
+    return value
+
+
+def _write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def main() -> int:
+    args = _parse_args()
+    for path in (REPOSITORY_ROOT, SOURCE_DIR, SCRIPT_DIR):
+        if str(path) not in sys.path:
+            sys.path.insert(0, str(path))
+
+    import isaac_compat
+    import scene_layout
+    from scripted_expert_plan import P01ExpertTuning
+
+    tuning = P01ExpertTuning(
+        tcp_grasp_offset_z_m=args.tcp_grasp_offset_z_m,
+        approach_clearance_m=args.approach_clearance_m,
+        max_cartesian_step_m=args.max_cartesian_step_m,
+    )
+    tuning.validate()
+    config_path = args.config.expanduser().resolve()
+    config = scene_layout.load_config(config_path)
+    errors = scene_layout.validate_scene_config(config)
+    if errors:
+        raise ValueError("Frozen scene contract failed: " + "; ".join(errors))
+
+    git_sha = _clean_git_sha()
+    scene_config_sha256 = _file_digest(config_path)
+    episode_id = f"scripted-expert-p01-smoke-{time.strftime('%Y%m%d-%H%M%S')}"
+    artifact_root = args.artifact_root.expanduser().resolve()
+    episode_root = artifact_root / "episodes"
+    cas_root = artifact_root / "cas"
+    offline_gt_root = artifact_root / "offline_gt"
+    result_path = artifact_root / f"{episode_id}-result.json"
+    registry_path = artifact_root / "split_registry.json"
+    phase = "launch_simulation_app"
+    bridge = None
+    rgb_pipeline = None
+    simulation_app = isaac_compat.launch_simulation_app(headless=args.headless)
+    try:
+        phase = "verify_isaac_version"
+        isaac_version = isaac_compat.require_isaac_sim_51()
+        import single_bin_scene_builder
+        from canonical_recorder_bridge import CanonicalRecorderBridge
+        from isaac_franka_controller import (
+            IsaacSimFrankaController,
+            _quat_inverse,
+            _rotate_vector,
+        )
+        from isaacsim.core.api import World
+        from isaacsim.core.prims import SingleArticulation
+
+        from industrial_agent.contracts import ActionStep
+        from industrial_agent.data.recorder import CanonicalRecorder, EpisodeMetadata
+        from industrial_agent.data.replay import (
+            CanonicalEpisodeReader,
+            OfflineEpisodeReplay,
+        )
+        from industrial_agent.data.split_registry import SplitRegistry
+        from industrial_agent.image_cas import ImageCas, ImageCasConfig
+        from offline_gt import OfflineGtProbe
+        from scripted_expert_plan import (
+            bounded_world_delta,
+            conservative_step_limit,
+            first_bin_slot_local_center,
+            frozen_success_vote,
+        )
+        from simulation.isaac_rgb_pipeline import IsaacRgbObservationPipeline
+        from simulation.rgb_cas_bridge import IsaacRgbCasPublisher
+        from simulation.run_g0_acceptance import _write_explicit_home
+        from simulation.run_isaac_adapter_smoke import _arm_state
+
+        phase = "build_scene"
+        stage = isaac_compat.create_new_stage()
+        franka_asset = isaac_compat.resolve_franka_asset(args.franka_usd)
+        single_bin_scene_builder.build_scene(
+            stage,
+            config,
+            franka_asset_path=franka_asset,
+            include_robots=True,
+        )
+        isaac_compat.wait_for_stage_loading(simulation_app, timeout_seconds=180.0)
+        isaac_compat.save_stage_checked(args.output_scene)
+
+        physics = config["physics"]
+        if World.instance():
+            World.instance().clear_instance()
+        world = World(
+            physics_dt=float(physics["physics_dt_s"]),
+            rendering_dt=float(physics["rendering_dt_s"]),
+            stage_units_in_meters=1.0,
+        )
+        arms = {
+            arm_id: world.scene.add(
+                SingleArticulation(
+                    prim_path=f"/World/Robots/{arm_id}",
+                    name=f"p01_smoke_{arm_id.lower()}",
+                )
+            )
+            for arm_id in ("Arm_A", "Arm_B")
+        }
+        world.reset()
+        for arm_id, arm in arms.items():
+            _write_explicit_home(config, arm, arm_id)
+        for _ in range(120):
+            world.step(render=True)
+
+        phase = "initialize_recorder_and_offline_gt"
+        controller = IsaacSimFrankaController(
+            world=world,
+            arms=arms,
+            physics_dt_s=float(physics["physics_dt_s"]),
+        )
+        gt = OfflineGtProbe(isaac_compat.get_current_stage())
+        image_cas = ImageCas(ImageCasConfig(root=cas_root))
+        image_cas.assert_ready(writable=True)
+        publisher = IsaacRgbCasPublisher.from_scene_config(image_cas, config)
+        rgb_pipeline = IsaacRgbObservationPipeline(
+            simulation_app=simulation_app,
+            scene_config=config,
+            publisher=publisher,
+        )
+        metadata = EpisodeMetadata(
+            episode_id=episode_id,
+            task_id="B-SCRIPTED-EXPERT-P01-SMOKE-NOT-TRAINING",
+            instruction=(
+                "TEST only: Arm_A places P01 into the first Bin_01 slot; "
+                "offline_gt is excluded from all Canonical fields"
+            ),
+            scene_seed=0,
+            git_sha=git_sha,
+            scene_config_sha256=scene_config_sha256,
+        )
+        recorder = CanonicalRecorder(episode_root, metadata, image_cas=image_cas)
+
+        def state_source() -> dict[str, list[float]]:
+            return {
+                arm_id: list(
+                    _arm_state(controller, arm_id, arms[arm_id], config)["state"]
+                )
+                for arm_id in ("Arm_A", "Arm_B")
+            }
+
+        bridge = CanonicalRecorderBridge(
+            recorder=recorder,
+            rgb_pipeline=rgb_pipeline,
+            state_source=state_source,
+        )
+        bridge.record_initial(physics_tick=controller.physics_tick_index)
+
+        vote_reports: list[dict[str, Any]] = []
+        vote_mode = False
+        bin_config = config["bin"]
+
+        def observe(physics_tick: int, render_due: bool) -> None:
+            bridge.observe_physics_tick(physics_tick, render_due)
+            if vote_mode and render_due and len(vote_reports) < 3:
+                report = gt.part_fully_inside_bin(
+                    part_path="/World/Parts/P01",
+                    bin_path="/World/Bins/Bin_01",
+                    bin_config=bin_config,
+                    numerical_tolerance_m=0.001,
+                )
+                report["vote_index"] = len(vote_reports) + 1
+                report["physics_tick"] = physics_tick
+                vote_reports.append(report)
+
+        controller.set_tick_observer(observe)
+        action_index = 0
+
+        def execute(
+            *,
+            subtask_id: str,
+            base_delta: np.ndarray,
+            gripper_open: bool,
+        ) -> None:
+            nonlocal action_index
+            values = [
+                float(base_delta[0]),
+                float(base_delta[1]),
+                float(base_delta[2]),
+                0.0,
+                0.0,
+                0.0,
+                1.0 if gripper_open else 0.0,
+            ]
+            action = ActionStep.from_sequence(values, duration_ms=100)
+            bridge.record_action(
+                action,
+                arm_id="Arm_A",
+                subtask_id=subtask_id,
+                chunk_id=f"p01-smoke-{action_index:04d}",
+                physics_tick=controller.physics_tick_index,
+            )
+            controller.execute_action(action, arm_id="Arm_A")
+            action_index += 1
+
+        def move_tcp_world(
+            *,
+            subtask_id: str,
+            target_world: np.ndarray,
+            gripper_open: bool,
+        ) -> None:
+            initial_position, _ = controller.end_effector_pose("Arm_A")
+            limit = conservative_step_limit(
+                float(np.linalg.norm(target_world - initial_position)),
+                tuning.max_cartesian_step_m,
+            )
+            for _ in range(limit):
+                current_position, _ = controller.end_effector_pose("Arm_A")
+                error = target_world - current_position
+                if float(np.linalg.norm(error)) <= tuning.position_tolerance_m:
+                    return
+                world_delta = bounded_world_delta(
+                    current_position,
+                    target_world,
+                    max_step_m=tuning.max_cartesian_step_m,
+                )
+                _, base_orientation = arms["Arm_A"].get_world_pose()
+                base_delta = _rotate_vector(
+                    _quat_inverse(np.asarray(base_orientation, dtype=float)),
+                    world_delta,
+                )
+                execute(
+                    subtask_id=subtask_id,
+                    base_delta=base_delta,
+                    gripper_open=gripper_open,
+                )
+            final_position, _ = controller.end_effector_pose("Arm_A")
+            remaining_error_m = float(np.linalg.norm(target_world - final_position))
+            raise RuntimeError(
+                f"Arm_A did not reach {subtask_id} within {limit} steps; initial_world_m={initial_position.tolist()}; target_world_m={target_world.tolist()}; final_world_m={final_position.tolist()}; remaining_error_m={remaining_error_m:.6f}"
+            )
+
+        def hold(*, subtask_id: str, gripper_open: bool, steps: int) -> None:
+            for _ in range(steps):
+                execute(
+                    subtask_id=subtask_id,
+                    base_delta=np.zeros(3, dtype=float),
+                    gripper_open=gripper_open,
+                )
+
+        phase = "execute_p01_pick_place"
+        p01_center = np.asarray(gt.world_position("/World/Parts/P01"), dtype=float)
+        grasp_tcp = p01_center + np.asarray(
+            [0.0, 0.0, tuning.tcp_grasp_offset_z_m], dtype=float
+        )
+        grasp_approach = grasp_tcp + np.asarray(
+            [0.0, 0.0, tuning.approach_clearance_m], dtype=float
+        )
+        part_config = next(part for part in config["parts"] if part["id"] == "P01")
+        slot_local = first_bin_slot_local_center(
+            size_m=bin_config["size_m"],
+            wall_thickness_m=float(bin_config["wall_thickness_m"]),
+            bottom_thickness_m=float(bin_config["bottom_thickness_m"]),
+            part_height_m=float(part_config["geometry"]["height_m"]),
+        )
+        slot_part_center = np.asarray(
+            gt.local_point_to_world("/World/Bins/Bin_01", slot_local), dtype=float
+        )
+        place_tcp = slot_part_center + np.asarray(
+            [0.0, 0.0, tuning.tcp_grasp_offset_z_m], dtype=float
+        )
+        place_approach = place_tcp + np.asarray(
+            [0.0, 0.0, tuning.approach_clearance_m], dtype=float
+        )
+
+        move_tcp_world(
+            subtask_id="p01-approach",
+            target_world=grasp_approach,
+            gripper_open=True,
+        )
+        move_tcp_world(
+            subtask_id="p01-descend",
+            target_world=grasp_tcp,
+            gripper_open=True,
+        )
+        hold(subtask_id="p01-close", gripper_open=False, steps=tuning.close_steps)
+        move_tcp_world(
+            subtask_id="p01-lift",
+            target_world=grasp_approach,
+            gripper_open=False,
+        )
+        move_tcp_world(
+            subtask_id="p01-transfer",
+            target_world=place_approach,
+            gripper_open=False,
+        )
+        move_tcp_world(
+            subtask_id="p01-place",
+            target_world=place_tcp,
+            gripper_open=False,
+        )
+        hold(subtask_id="p01-release", gripper_open=True, steps=tuning.release_steps)
+        move_tcp_world(
+            subtask_id="p01-retreat",
+            target_world=place_approach,
+            gripper_open=True,
+        )
+
+        phase = "three_fresh_frame_offline_gt_vote"
+        vote_mode = True
+        hold(subtask_id="p01-final-lock", gripper_open=True, steps=1)
+        vote_mode = False
+        if len(vote_reports) != 3:
+            raise RuntimeError(
+                f"expected exactly 3 fresh offline_gt frames, got {len(vote_reports)}"
+            )
+        task_succeeded = frozen_success_vote(
+            [bool(report["pass"]) for report in vote_reports]
+        )
+        _write_json(
+            offline_gt_root / "p01_containment_votes.json",
+            {
+                "isolation": "offline_gt_only",
+                "canonical_included": False,
+                "rule": "exactly 3 fresh frames; at least 2 whole-frame passes",
+                "votes": vote_reports,
+                "passed": task_succeeded,
+            },
+        )
+
+        controller.set_tick_observer(None)
+        phase = "publish_test_episode"
+        episode_path = bridge.save(
+            outcome="SUCCEEDED" if task_succeeded else "FAILED",
+            failure_code=None if task_succeeded else "P01_NOT_FULLY_IN_BIN",
+        )
+        bridge = None
+        registry = (
+            SplitRegistry.load(registry_path)
+            if registry_path.exists()
+            else SplitRegistry()
+        )
+        registry.assign_episode(
+            episode_id,
+            "test",
+            scenario_group_id="scripted-expert-p01-smoke",
+            scene_seed=0,
+            asset_variant="frozen-single-bin-v1",
+            camera_seed=0,
+            lighting_seed=0,
+        )
+        registry.save(registry_path)
+
+        phase = "reader_replay_validation"
+        with CanonicalEpisodeReader(
+            episode_path,
+            split_registry=registry,
+            is_training=False,
+        ) as reader:
+            replay_actions = OfflineEpisodeReplay(reader).actions()
+            camera_counts = {
+                camera_id: int(reader.camera_frames(camera_id).shape[0])
+                for camera_id in ("CAM_A_TOP", "CAM_HANDOFF", "CAM_B_TOP")
+            }
+            state_counts = {
+                arm_id: int(reader.state_stream(arm_id)["state_7d"].shape[0])
+                for arm_id in ("Arm_A", "Arm_B")
+            }
+        if len(replay_actions) != action_index:
+            raise RuntimeError("Reader replay action count does not match execution")
+
+        result = {
+            "status": "PASS" if task_succeeded else "TASK_FAILED",
+            "smoke_only": True,
+            "training_allowed": False,
+            "split": "test",
+            "task_scope": "P01_ONLY_NOT_FULL_FROZEN_TASK",
+            "episode_id": episode_id,
+            "episode_path": str(episode_path),
+            "registry_path": str(registry_path),
+            "offline_gt_report": str(offline_gt_root / "p01_containment_votes.json"),
+            "offline_gt_in_canonical": False,
+            "success_votes": sum(bool(report["pass"]) for report in vote_reports),
+            "fresh_frame_count": len(vote_reports),
+            "git_sha": git_sha,
+            "scene_config_sha256": scene_config_sha256,
+            "isaac_sim_version": isaac_version,
+            "camera_counts": camera_counts,
+            "state_counts": state_counts,
+            "replay_action_count": len(replay_actions),
+        }
+        _write_json(result_path, result)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if task_succeeded else 2
+    except BaseException as exc:
+        if bridge is not None:
+            try:
+                bridge.abort()
+            except BaseException:
+                pass
+        result = {
+            "status": "ERROR",
+            "smoke_only": True,
+            "training_allowed": False,
+            "task_scope": "P01_ONLY_NOT_FULL_FROZEN_TASK",
+            "episode_id": episode_id,
+            "phase": phase,
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+            "traceback": traceback.format_exc(),
+        }
+        _write_json(result_path, result)
+        print(json.dumps(result, ensure_ascii=False, indent=2), file=sys.stderr)
+        return 1
+    finally:
+        if rgb_pipeline is not None:
+            try:
+                rgb_pipeline.close()
+            except BaseException:
+                pass
+        simulation_app.close()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
