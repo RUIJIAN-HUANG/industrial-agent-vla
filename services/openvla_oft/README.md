@@ -177,16 +177,31 @@ through `industrial_agent.data.CanonicalEpisodeReader`, filters only
 Arm_B state and action rows by physics tick, and preserves Canonical source
 lineage for every exported step.
 
+Training export is fail-closed: the Episode must be assigned to `train` by a
+verified external Split Registry, have `outcome=SUCCEEDED`, use the exact frozen
+Arm_B instruction, and contain an exact `CAM_B_TOP` and Arm_B state sample at
+each action physics tick. Fallback camera frames are rejected.
+
 ```powershell
 python services/openvla_oft/scripts/convert_canonical_to_rlds.py `
   --episode artifacts\canonical\arm_b_golden_episode `
+  --split-registry artifacts\canonical\split_registry.json `
   --output-dir artifacts\openvla_rlds\arm_b_golden_episode
 ```
 
 The exporter writes `metadata.json`, `steps.jsonl`, and `arrays.npz`. These are
 intermediate training artifacts and must remain outside Git unless a future
 approved dataset-card PR explicitly records only checksums and reproduction
-commands.
+commands. `robot_role=arm_b_openvla`, the Train assignment, and the Split
+Registry SHA-256 are persisted in the export. The output directory must not
+already exist; files are written to a sibling staging directory and published
+atomically only after the complete export succeeds. The CLI then reopens and
+fully traverses all three published files, rechecking shapes, dtypes, Episode
+boundaries, role, Split, lineage, and exact source ticks without downloading.
+
+This dependency-light format is an offline smoke interchange, not a production
+TFDS/RLDS dataset. Passing this smoke does not by itself claim that the formal
+OpenVLA TFDS/RLDS training-loader Gate or real-Episode Gate has passed.
 
 ## Test
 

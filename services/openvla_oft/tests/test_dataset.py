@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import pytest
 
-from openvla_oft.dataset import build_model_input, build_training_sample
+from openvla_oft.dataset import (
+    ARM_B_INSTRUCTION,
+    build_model_input,
+    build_training_sample,
+)
 from openvla_oft.exceptions import ServiceError
 
 
@@ -45,7 +49,7 @@ def _canonical_step() -> dict[str, object]:
 def test_build_training_sample_accepts_frozen_arm_b_step():
     sample = build_training_sample(
         _canonical_step(),
-        task_description="transport the bin after handoff_ready",
+        task_description=ARM_B_INSTRUCTION,
     )
 
     assert sample["robot_role"] == "arm_b_openvla"
@@ -66,7 +70,7 @@ def test_build_model_input_derives_state_from_tcp_pose_when_state_absent():
 
     model_input = build_model_input(
         step,
-        task_description="transport the bin after handoff_ready",
+        task_description=ARM_B_INSTRUCTION,
     )
 
     assert model_input["state"] == [0.4, 0.0, 0.4, 0.0, 0.0, 0.0, 1.0]
@@ -79,7 +83,7 @@ def test_build_training_sample_rejects_non_null_wrist_image():
     camera["wrist_image"] = _image("CAM_B_WRIST")
 
     with pytest.raises(ServiceError, match="wrist_image must be null"):
-        build_training_sample(step, task_description="transport")
+        build_training_sample(step, task_description=ARM_B_INSTRUCTION)
 
 
 def test_build_training_sample_rejects_arm_a_role():
@@ -87,7 +91,7 @@ def test_build_training_sample_rejects_arm_a_role():
     step["subtask_id"] = "S01_ARM_A_PACK_HANDOFF"
 
     with pytest.raises(ServiceError, match="S02 Arm_B"):
-        build_training_sample(step, task_description="transport")
+        build_training_sample(step, task_description=ARM_B_INSTRUCTION)
 
 
 def test_build_training_sample_rejects_wrong_camera():
@@ -97,7 +101,7 @@ def test_build_training_sample_rejects_wrong_camera():
     camera["arm_b_rgb"] = _image("CAM_HANDOFF")
 
     with pytest.raises(ServiceError, match="CAM_B_TOP"):
-        build_training_sample(step, task_description="transport")
+        build_training_sample(step, task_description=ARM_B_INSTRUCTION)
 
 
 def test_build_training_sample_rejects_missing_arm_b_rgb_even_with_full_image():
@@ -108,7 +112,7 @@ def test_build_training_sample_rejects_missing_arm_b_rgb_even_with_full_image():
     del camera["arm_b_rgb"]
 
     with pytest.raises(ServiceError, match="camera.arm_b_rgb"):
-        build_training_sample(step, task_description="transport")
+        build_training_sample(step, task_description=ARM_B_INSTRUCTION)
 
 
 def test_build_training_sample_rejects_digest_mismatch():
@@ -120,7 +124,7 @@ def test_build_training_sample_rejects_digest_mismatch():
     image["image_sha256"] = f"sha256:{'b' * 64}"
 
     with pytest.raises(ServiceError, match="digest must match"):
-        build_training_sample(step, task_description="transport")
+        build_training_sample(step, task_description=ARM_B_INSTRUCTION)
 
 
 def test_build_training_sample_rejects_state_with_extra_values():
@@ -132,7 +136,7 @@ def test_build_training_sample_rejects_state_with_extra_values():
     arm_b["state"] = [0.0] * 8
 
     with pytest.raises(ServiceError, match="exactly 7"):
-        build_training_sample(step, task_description="transport")
+        build_training_sample(step, task_description=ARM_B_INSTRUCTION)
 
 
 def test_build_training_sample_rejects_missing_episode_id():
@@ -140,7 +144,7 @@ def test_build_training_sample_rejects_missing_episode_id():
     del step["episode_id"]
 
     with pytest.raises(ServiceError, match="episode_id"):
-        build_training_sample(step, task_description="transport")
+        build_training_sample(step, task_description=ARM_B_INSTRUCTION)
 
 
 def test_build_training_sample_rejects_invalid_action_shape():
@@ -148,4 +152,21 @@ def test_build_training_sample_rejects_invalid_action_shape():
     step["action"] = [[0.0, 0.0]]
 
     with pytest.raises(ServiceError, match="exactly 7"):
-        build_training_sample(step, task_description="transport")
+        build_training_sample(step, task_description=ARM_B_INSTRUCTION)
+
+
+def test_build_training_sample_rejects_non_frozen_instruction():
+    with pytest.raises(ServiceError, match="frozen Arm_B instruction"):
+        build_training_sample(
+            _canonical_step(),
+            task_description="transport the bin after handoff_ready",
+        )
+
+
+@pytest.mark.parametrize("missing_field", ["subtask_id", "robot_role"])
+def test_build_training_sample_requires_explicit_frozen_role(missing_field: str):
+    step = _canonical_step()
+    del step[missing_field]
+
+    with pytest.raises(ServiceError):
+        build_training_sample(step, task_description=ARM_B_INSTRUCTION)

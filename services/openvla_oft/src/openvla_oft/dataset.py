@@ -5,12 +5,18 @@ from __future__ import annotations
 import re
 from typing import Any, Mapping
 
+from industrial_agent.lifecycle import (
+    ARM_B_TRANSPORT_SUBTASK_ID,
+    FixedTaskProfile,
+)
+
 from .exceptions import ServiceError
 from .utils import finite_vector, validate_action_matrix
 
-ARM_B_SUBTASK_ID = "S02_ARM_B_TRANSPORT"
+ARM_B_SUBTASK_ID = ARM_B_TRANSPORT_SUBTASK_ID
 ARM_B_ROLE = "arm_b_openvla"
 ARM_B_CAMERA_ID = "CAM_B_TOP"
+ARM_B_INSTRUCTION = FixedTaskProfile().arm_b_instruction
 FROZEN_IMAGE_SIZE = (1280, 720)
 OPENVLA_MODEL_INPUT_KEYS = frozenset(
     {"task_description", "full_image", "wrist_image", "state"}
@@ -56,8 +62,10 @@ def build_model_input(
 ) -> dict[str, Any]:
     """Return the exact ``/v1/infer`` ``model_input`` for Arm_B OpenVLA-OFT."""
 
-    if not isinstance(task_description, str) or not task_description.strip():
-        raise _bad_sample("task_description must be a non-empty string")
+    if task_description != ARM_B_INSTRUCTION:
+        raise _bad_sample(
+            "task_description must exactly match the frozen Arm_B instruction"
+        )
     full_image = _extract_arm_b_image(step)
     _reject_wrist_image(step)
     state = _extract_arm_b_state(step)
@@ -74,10 +82,10 @@ def build_model_input(
 
 def _validate_arm_b_role(step: Mapping[str, Any]) -> None:
     subtask_id = step.get("subtask_id")
-    if subtask_id is not None and subtask_id != ARM_B_SUBTASK_ID:
+    if subtask_id != ARM_B_SUBTASK_ID:
         raise _bad_sample("OpenVLA-OFT training samples must use S02 Arm_B transport")
     robot_role = step.get("robot_role")
-    if robot_role is not None and robot_role != ARM_B_ROLE:
+    if robot_role != ARM_B_ROLE:
         raise _bad_sample(
             "OpenVLA-OFT training samples must use robot_role=arm_b_openvla"
         )
