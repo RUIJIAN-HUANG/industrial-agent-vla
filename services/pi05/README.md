@@ -31,18 +31,22 @@ YOLO DetectionPacket 不是推理前置条件。π0.5 必须针对这一固定�
 
 ## Canonical v1 数据 Gate
 
-`scripts/pi05/canonical_v1.py` 是转换与 norm-stats 共用的唯一读取器，只接受
-`meta.json + steps.jsonl + rgb/CAM_A_TOP + checksums.sha256`。旧的
-`steps.parquet`、`steps.hdf5` 和 `front_rgb` 会直接失败。转换命令必须显式提供
-正整数 `--fps`、非负整数 `--timestamp-tolerance-ns` 和 `module:attribute` 形式
-的 `--state-mapper`；时间戳间隔必须在显式容差内匹配 FPS。转换阶段保留原始
-1280×720 RGB，不执行 224×224 缩放。
+`scripts/pi05/canonical_v1.py` 是角色 E 的薄适配层，底层强制复用主线
+`industrial_agent.data.CanonicalEpisodeReader`。只接受权威
+`episode.h5 + structure.json` Canonical Episode 和经过 SHA 校验的外部 Split
+Registry；不得复制 Reader 或另建 Canonical 格式。旧的
+`meta.json + steps.jsonl`、`steps.parquet`、`steps.hdf5` 和 `front_rgb` 均不接受。
 
-生产 state 已冻结为
-`[x_m,y_m,z_m,ax_rad,ay_rad,az_rad,gripper_norm]`。Canonical TCP 固定使用
-`[x,y,z,qx,qy,qz,qw]`（xyzw 不可配置），并转换为最短 rotation-vector；最后一维
-只由 `robot.arm_a.gripper_open` 布尔值映射为 1.0/0.0，不读取
-`gripper_state` 阈值。生产仍要求通过 `--state-mapper` 显式注入
+每个 `valid_mask=true` 的 Arm_A/`pi05` 动作以自身 `physics_tick` 为锚点，必须
+精确找到同 tick 的 Arm_A 状态和 `CAM_A_TOP` 帧；缺失、fallback、Arm_B 混入、
+7D 维度错误、NaN/Inf、时间戳/sequence_id/SHA/Split 不合法均 fail-closed。
+不同频率流不要求逐行同 tick。转换阶段保留原始 1280×720 RGB，不执行
+224×224 缩放。
+
+生产 state/action 已冻结为
+`[x_m,y_m,z_m,ax_rad,ay_rad,az_rad,gripper_norm]`，适配层直接使用权威 Reader
+验证后的 7D rotvec 数据，不重建另一套姿态表示。生产仍要求通过
+`--state-mapper` 显式注入
 `scripts.pi05.canonical_v1:CanonicalPi05StateMapper`，没有隐式默认值。
 
 固定 LeRobot API 没有 `consolidate()`。发布 Gate 是：保存 Episode、关闭 writer、
@@ -54,6 +58,9 @@ Canonical→LeRobot（`10` 是已冻结模型采样 FPS，不是 action horizon�
 ```bash
 python scripts/pi05/convert_openpi.py \
   --data_dir <CANONICAL_ROOT> \
+  --split-registry <SPLIT_REGISTRY_JSON> \
+  --project-root <PROJECT_GIT_ROOT> \
+  --openpi-commit 15a9616a00943ada6c20a0f158e3adb39df2ccac \
   --output-dir <LEROBOT_DATASET_ROOT> \
   --output_repo_id <ORG/REPO_ID> \
   --fps 10 \
@@ -68,6 +75,8 @@ HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
 python scripts/pi05/smoke_lerobot_loader.py \
   --dataset-root <LEROBOT_DATASET_ROOT> \
   --repo-id <ORG/REPO_ID> \
+  --project-root <PROJECT_GIT_ROOT> \
+  --openpi-commit 15a9616a00943ada6c20a0f158e3adb39df2ccac \
   --manifest <LEROBOT_DATASET_ROOT>/pi05_provenance.json
 ```
 
@@ -77,6 +86,9 @@ Train-only norm-stats：
 HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
 python scripts/pi05/compute_norm_stats.py \
   --dataset-path <LEROBOT_DATASET_ROOT> \
+  --split-registry <SPLIT_REGISTRY_JSON> \
+  --project-root <PROJECT_GIT_ROOT> \
+  --openpi-commit 15a9616a00943ada6c20a0f158e3adb39df2ccac \
   --input-format lerobot \
   --state-mapper scripts.pi05.canonical_v1:CanonicalPi05StateMapper \
   --repo-id <ORG/REPO_ID> \
@@ -85,9 +97,17 @@ python scripts/pi05/compute_norm_stats.py \
 ```
 
 转换阶段保留原始 uint8 1280×720 RGB；resize-with-pad 属于 OpenPI transform。
-正式 norm-stats 必须使用真实 `openpi.shared.normalize`。`action_horizon=10` 是
+首次固定联调可使用 1 条 Episode；正式发布 Gate 必须使用 5 条真实 Arm_A Isaac
+Golden Episode，完成关闭/重开/全量遍历并至少抽查 10 条来源映射。正式
+norm-stats 只能读取同一已验证 Split Registry 的 Train Split，并必须使用真实
+`openpi.shared.normalize`。`action_horizon=10` 是
 ARCH-2026-001 item 4 的未冻结 LIBERO 哨兵，正式训练配置会直接报错，不会静默
 使用。真实 LeRobot/OpenPI 集成测试由 Ubuntu/Docker 环境执行。
+
+转换、离线 Loader 和 norm-stats 必须使用同一个 provenance producer：当前项目
+完整 Git SHA、工作树 dirty 标志、包含未跟踪文件内容的工作树 diff SHA-256，以及
+冻结 OpenPI Commit。开发阶段允许 dirty 工作树，但正式发布必须同时保存这些证据；
+禁止使用 `unknown` 或空值代替来源。
 
 不要在此目录提交 checkpoint、训练数据、缓存或个人机器路径。完整接口见
 [`../../docs/architecture/interface-contracts.md`](../../docs/architecture/interface-contracts.md)。

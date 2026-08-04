@@ -14,6 +14,17 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from configs.pi05.train_config import OPENPI_COMMIT
+from scripts.pi05.provenance_context import (
+    LEROBOT_PROVENANCE_MANIFEST_TYPE,
+    ProvenanceContext,
+    resolve_provenance_context,
+    validate_provenance_context,
+)
+
 PROVENANCE_FILENAME = "pi05_provenance.json"
 PROVENANCE_SHA256_FILENAME = "pi05_provenance.sha256"
 REQUIRED_FRAME_KEYS = ("image", "state", "actions", "task")
@@ -143,13 +154,9 @@ def validate_dataset_instance(
             raise ValueError(
                 "expected action count does not match the traversed LeRobot dataset"
             )
-        if actual_frames < roundtrip_samples:
-            raise ValueError(
-                f"action roundtrip requires at least {roundtrip_samples} frames; "
-                f"got {actual_frames}"
-            )
+        sample_count = min(roundtrip_samples, actual_frames)
         rng = np.random.default_rng(20260802)
-        indices = rng.choice(actual_frames, size=roundtrip_samples, replace=False)
+        indices = rng.choice(actual_frames, size=sample_count, replace=False)
         for index in indices:
             expected = np.asarray(expected_actions[int(index)], dtype=np.float32)
             error = float(
@@ -167,7 +174,11 @@ def validate_dataset_instance(
         "episodes": expected_episodes,
         "frames": actual_frames,
         "language_frames": actual_frames,
-        "roundtrip_samples": roundtrip_samples if expected_actions is not None else 0,
+        "roundtrip_samples": (
+            min(roundtrip_samples, actual_frames)
+            if expected_actions is not None
+            else 0
+        ),
         "max_action_error": max_error,
     }
 
@@ -228,19 +239,29 @@ def validate_provenance_manifest(
     provenance: Mapping[str, Any],
     *,
     expected_repo_id: str | None = None,
+    expected_provenance_context: ProvenanceContext | None = None,
 ) -> list[dict[str, Any]]:
     """Validate conversion traceability before any dataset frame is trusted."""
 
-    if provenance.get("manifest_type") != "pi05_lerobot_provenance_v1":
+    if provenance.get("manifest_type") != LEROBOT_PROVENANCE_MANIFEST_TYPE:
         raise ValueError("LeRobot provenance manifest_type is invalid")
-    if provenance.get("source_format") != "canonical_v1":
-        raise ValueError("LeRobot provenance source_format must be canonical_v1")
-    source_root = provenance.get("source_root")
-    if not isinstance(source_root, str) or not source_root.strip():
-        raise ValueError("LeRobot provenance source_root must be a non-empty string")
+    if provenance.get("source_format") != "canonical_hdf5_v1":
+        raise ValueError(
+            "LeRobot provenance source_format must be canonical_hdf5_v1"
+        )
+    validate_provenance_context(
+        provenance.get("producer"),
+        expected=expected_provenance_context,
+    )
+    registry_sha = provenance.get("source_split_registry_sha256")
+    if not isinstance(registry_sha, str) or _SHA256_HEX.fullmatch(registry_sha) is None:
+        raise ValueError("LeRobot provenance Split Registry SHA-256 is invalid")
     repo_id = provenance.get("repo_id")
     if not isinstance(repo_id, str) or not repo_id.strip():
         raise ValueError("LeRobot provenance repo_id must be a non-empty string")
+    robot_type = provenance.get("robot_type")
+    if not isinstance(robot_type, str) or not robot_type.strip():
+        raise ValueError("LeRobot provenance robot_type must be a non-empty string")
     if expected_repo_id is not None and provenance.get("repo_id") != expected_repo_id:
         raise ValueError(
             "LeRobot provenance repo_id does not match the requested dataset"
@@ -259,6 +280,7 @@ def validate_provenance_manifest(
         "dtype": "uint8",
         "shape": [720, 1280, 3],
         "preprocessed": False,
+        "wrist_image": None,
     }:
         raise ValueError("LeRobot provenance image contract is invalid")
     mapper = provenance.get("state_mapper")
@@ -320,7 +342,7 @@ def validate_provenance_manifest(
     if (
         isinstance(samples, bool)
         or not isinstance(samples, int)
-        or samples < 10
+        or samples != min(10, frame_count)
         or samples > frame_count
         or isinstance(max_error, bool)
         or not isinstance(max_error, (int, float))
@@ -339,6 +361,8 @@ def validate_provenance_manifest(
             raise ValueError("LeRobot provenance episode indices must be contiguous")
         if item.get("canonical_split") not in {"train", "val", "test"}:
             raise ValueError("LeRobot provenance canonical_split is invalid")
+        if item.get("robot_role") != "arm_a_pi05":
+            raise ValueError("LeRobot provenance robot_role must be derived as arm_a_pi05")
         episode_id = item.get("canonical_episode_id")
         instruction = item.get("instruction")
         count = item.get("step_count")
@@ -353,17 +377,31 @@ def validate_provenance_manifest(
             != hashlib.sha256(instruction.encode("utf-8")).hexdigest()
         ):
             raise ValueError("LeRobot provenance instruction SHA-256 is invalid")
-        for key in ("source_meta_sha256", "source_steps_sha256"):
+        for key in (
+            "source_structure_sha256",
+            "source_hdf5_sha256",
+            "source_split_registry_sha256",
+        ):
             if (
                 not isinstance(item.get(key), str)
                 or _SHA256_HEX.fullmatch(item[key]) is None
             ):
                 raise ValueError(f"LeRobot provenance {key} is invalid")
+        recorder_git_sha = item.get("source_recorder_git_sha")
+        if (
+            not isinstance(recorder_git_sha, str)
+            or re.fullmatch(r"[0-9a-f]{40}", recorder_git_sha) is None
+        ):
+            raise ValueError("LeRobot provenance source_recorder_git_sha is invalid")
         vectors = (
-            ("source_step_indices", int),
-            ("source_observation_ids", str),
-            ("source_timestamp_ns", int),
-            ("source_image_paths", str),
+            ("source_action_sequence_ids", int),
+            ("source_action_timestamp_ns", int),
+            ("source_physics_ticks", int),
+            ("source_camera_sequence_ids", int),
+            ("source_camera_timestamp_ns", int),
+            ("source_state_sequence_ids", int),
+            ("source_state_timestamp_ns", int),
+            ("source_image_datasets", str),
             ("source_image_sha256", str),
             ("source_action_duration_s", (int, float)),
         )
@@ -383,27 +421,32 @@ def validate_provenance_manifest(
             for value in item["source_image_sha256"]
         ):
             raise ValueError("LeRobot provenance source_image_sha256 is invalid")
-        indices = item["source_step_indices"]
-        if indices != list(range(count)):
+        indices = item["source_action_sequence_ids"]
+        if any(value < 0 for value in indices) or any(
+            current <= previous for previous, current in zip(indices, indices[1:])
+        ):
             raise ValueError(
-                "LeRobot provenance source_step_indices must be contiguous from 0"
+                "LeRobot provenance action sequence IDs must strictly increase"
             )
-        if any(not value for value in item["source_observation_ids"]):
-            raise ValueError("LeRobot provenance source_observation_ids is invalid")
-        if len(set(item["source_observation_ids"])) != count:
-            raise ValueError("LeRobot provenance source_observation_ids must be unique")
-        timestamps = item["source_timestamp_ns"]
+        timestamps = item["source_action_timestamp_ns"]
         if any(value < 0 for value in timestamps) or any(
             current <= previous for previous, current in zip(timestamps, timestamps[1:])
         ):
-            raise ValueError("LeRobot provenance source_timestamp_ns must increase")
-        if any(
-            not value.startswith("rgb/CAM_A_TOP/")
-            or "\\" in value
-            or ".." in Path(value).parts
-            for value in item["source_image_paths"]
+            raise ValueError("LeRobot provenance action timestamps must increase")
+        ticks = item["source_physics_ticks"]
+        if any(value < 0 for value in ticks) or any(
+            current <= previous for previous, current in zip(ticks, ticks[1:])
         ):
-            raise ValueError("LeRobot provenance source_image_paths is invalid")
+            raise ValueError("LeRobot provenance physics ticks must increase")
+        if item["source_split_registry_sha256"] != registry_sha:
+            raise ValueError("Episode Split Registry SHA does not match provenance")
+        if any(
+            not value.startswith("/cameras/CAM_A_TOP/rgb[")
+            or not value.endswith("]")
+            or "\\" in value
+            for value in item["source_image_datasets"]
+        ):
+            raise ValueError("LeRobot provenance source_image_datasets is invalid")
         if any(
             not math.isfinite(float(value)) or value <= 0
             for value in item["source_action_duration_s"]
@@ -437,6 +480,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--dataset-root", required=True)
     parser.add_argument("--repo-id", required=True)
+    parser.add_argument("--project-root", required=True)
+    parser.add_argument("--openpi-commit", required=True)
     parser.add_argument(
         "--manifest",
         default=None,
@@ -454,8 +499,17 @@ def main() -> int:
         else dataset_root / PROVENANCE_FILENAME
     )
     try:
+        provenance_context = resolve_provenance_context(
+            repo_root=args.project_root,
+            openpi_commit=args.openpi_commit,
+            expected_openpi_commit=OPENPI_COMMIT,
+        )
         manifest = load_provenance(manifest_path)
-        episodes = validate_provenance_manifest(manifest, expected_repo_id=args.repo_id)
+        episodes = validate_provenance_manifest(
+            manifest,
+            expected_repo_id=args.repo_id,
+            expected_provenance_context=provenance_context,
+        )
         counts = manifest.get("counts")
         if not isinstance(counts, dict):
             raise ValueError("provenance manifest is missing counts")

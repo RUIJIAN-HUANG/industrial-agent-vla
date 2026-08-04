@@ -1,8 +1,8 @@
-"""Convert validated PI05 Canonical v1 Episodes to one LeRobot dataset.
+"""Convert framework-validated Canonical HDF5 Episodes to LeRobot.
 
-Accepted input is exactly ``meta.json + steps.jsonl + rgb/CAM_A_TOP`` with
-``checksums.sha256``.  Legacy parquet/HDF5/front_rgb inputs are rejected.
-Images remain raw uint8 1280x720 RGB; OpenPI owns resize-with-pad.
+Input is exactly ``episode.h5 + structure.json`` plus a verified external
+Split Registry.  Images remain raw uint8 1280x720 RGB; OpenPI owns
+resize-with-pad.  Publication stays offline, staged, and atomic.
 """
 
 from __future__ import annotations
@@ -20,7 +20,17 @@ from typing import Any, Sequence
 
 import numpy as np
 
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from configs.pi05.train_config import OPENPI_COMMIT
+from industrial_agent.data import SplitRegistry
 from industrial_agent.sync_contract import MODEL_INFERENCE_HZ
+from scripts.pi05.provenance_context import (
+    LEROBOT_PROVENANCE_MANIFEST_TYPE,
+    ProvenanceContext,
+    resolve_provenance_context,
+)
 
 try:
     from scripts.pi05.canonical_v1 import (
@@ -30,6 +40,7 @@ try:
         StateMapper,
         find_episode_dirs,
         load_rgb_image,
+        load_split_registry,
         load_state_mapper,
         map_state,
         read_canonical_dataset,
@@ -52,6 +63,7 @@ except ModuleNotFoundError:  # direct ``python scripts/pi05/...`` execution
         StateMapper,
         find_episode_dirs,
         load_rgb_image,
+        load_split_registry,
         load_state_mapper,
         map_state,
         read_canonical_dataset,
@@ -131,10 +143,17 @@ def load_image_as_array(
     return np.ascontiguousarray(array) if array.shape == (720, 1280, 3) else None
 
 
-def load_steps(episode_dir: Path) -> tuple[CanonicalStep, ...]:
+def load_steps(
+    episode_dir: Path,
+    *,
+    split_registry: SplitRegistry,
+) -> tuple[CanonicalStep, ...]:
     """Compatibility entry point backed only by the shared Canonical v1 reader."""
 
-    return read_canonical_episode(episode_dir).steps
+    return read_canonical_episode(
+        episode_dir,
+        split_registry=split_registry,
+    ).steps
 
 
 def find_episodes(data_dir: Path) -> list[Path]:
@@ -271,6 +290,8 @@ def convert_canonical_to_lerobot(
     fps: int,
     timestamp_tolerance_ns: int,
     state_mapper: StateMapper,
+    split_registry: SplitRegistry,
+    provenance_context: ProvenanceContext,
     robot_type: str = DEFAULT_ROBOT_TYPE,
     production: bool = True,
     dataset_factory: Any | None = None,
@@ -292,8 +313,15 @@ def convert_canonical_to_lerobot(
         raise ValueError(
             "timestamp_tolerance_ns must be an explicit non-negative integer"
         )
+    if not isinstance(split_registry, SplitRegistry):
+        raise TypeError("split_registry must be a verified SplitRegistry")
+    if not isinstance(provenance_context, ProvenanceContext):
+        raise TypeError("provenance_context must be a verified ProvenanceContext")
     mapper = require_state_mapper(state_mapper, production=production)
-    episodes = read_canonical_dataset(data_dir)
+    episodes = read_canonical_dataset(
+        data_dir,
+        split_registry=split_registry,
+    )
     prepared = _prepare_episodes(episodes, mapper)
     for item in prepared:
         _validate_episode_timing(
@@ -369,18 +397,35 @@ def convert_canonical_to_lerobot(
                     "lerobot_episode_index": output_episode_index,
                     "canonical_episode_id": source.episode_id,
                     "canonical_split": source.split,
+                    "robot_role": source.robot_role,
                     "instruction": source.instruction,
                     "instruction_sha256": hashlib.sha256(
                         source.instruction.encode("utf-8")
                     ).hexdigest(),
-                    "source_meta_sha256": _sha256_file(source.root / "meta.json"),
-                    "source_steps_sha256": _sha256_file(source.root / "steps.jsonl"),
-                    "source_step_indices": [step.step_index for step in item.steps],
-                    "source_observation_ids": [
-                        step.observation_id for step in item.steps
+                    "source_structure_sha256": source.structure_sha256,
+                    "source_hdf5_sha256": source.hdf5_sha256,
+                    "source_split_registry_sha256": source.split_registry_sha256,
+                    "source_recorder_git_sha": source.recorder_git_sha,
+                    "source_action_sequence_ids": [
+                        step.action_sequence_id for step in item.steps
                     ],
-                    "source_timestamp_ns": [step.timestamp_ns for step in item.steps],
-                    "source_image_paths": [
+                    "source_action_timestamp_ns": [
+                        step.timestamp_ns for step in item.steps
+                    ],
+                    "source_physics_ticks": [step.physics_tick for step in item.steps],
+                    "source_camera_sequence_ids": [
+                        step.camera_sequence_id for step in item.steps
+                    ],
+                    "source_camera_timestamp_ns": [
+                        step.camera_timestamp_ns for step in item.steps
+                    ],
+                    "source_state_sequence_ids": [
+                        step.state_sequence_id for step in item.steps
+                    ],
+                    "source_state_timestamp_ns": [
+                        step.state_timestamp_ns for step in item.steps
+                    ],
+                    "source_image_datasets": [
                         step.cam_a_top_relative_path for step in item.steps
                     ],
                     "source_image_sha256": [
@@ -419,10 +464,14 @@ def convert_canonical_to_lerobot(
         )
         manifest = {
             "schema_version": "1.0",
-            "manifest_type": "pi05_lerobot_provenance_v1",
-            "source_format": "canonical_v1",
-            "source_root": str(data_dir.resolve()),
+            "manifest_type": LEROBOT_PROVENANCE_MANIFEST_TYPE,
+            "source_format": "canonical_hdf5_v1",
+            "producer": provenance_context.as_manifest(),
+            "source_split_registry_sha256": split_registry.registry_sha256.split(
+                ":", 1
+            )[-1],
             "repo_id": output_repo_id,
+            "robot_type": robot_type,
             "fps": fps,
             "timestamp_tolerance_ns": timestamp_tolerance_ns,
             "image": {
@@ -430,6 +479,7 @@ def convert_canonical_to_lerobot(
                 "dtype": "uint8",
                 "shape": [720, 1280, 3],
                 "preprocessed": False,
+                "wrist_image": None,
             },
             "state_mapper": {
                 "name": mapper.name,
@@ -460,6 +510,7 @@ def convert_canonical_to_lerobot(
         validate_provenance_manifest(
             validated_manifest,
             expected_repo_id=output_repo_id,
+            expected_provenance_context=provenance_context,
         )
         if final_output_dir.exists():
             raise FileExistsError(
@@ -496,6 +547,9 @@ def parse_args() -> argparse.Namespace:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--data_dir", required=True)
+    parser.add_argument("--split-registry", required=True)
+    parser.add_argument("--project-root", required=True)
+    parser.add_argument("--openpi-commit", required=True)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--output_repo_id", default=DEFAULT_REPO_ID)
     parser.add_argument("--fps", type=int, required=True)
@@ -520,6 +574,12 @@ def main() -> int:
         return 2
     try:
         mapper = load_state_mapper(args.state_mapper, production=True)
+        split_registry = load_split_registry(args.split_registry)
+        provenance_context = resolve_provenance_context(
+            repo_root=args.project_root,
+            openpi_commit=args.openpi_commit,
+            expected_openpi_commit=OPENPI_COMMIT,
+        )
         result = convert_canonical_to_lerobot(
             data_dir=Path(args.data_dir),
             output_dir=Path(args.output_dir).resolve(),
@@ -527,6 +587,8 @@ def main() -> int:
             fps=args.fps,
             timestamp_tolerance_ns=args.timestamp_tolerance_ns,
             state_mapper=mapper,
+            split_registry=split_registry,
+            provenance_context=provenance_context,
             robot_type=args.robot_type,
             production=True,
         )

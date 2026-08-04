@@ -20,9 +20,21 @@ from typing import Any, Mapping
 
 import numpy as np
 
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from configs.pi05.train_config import OPENPI_COMMIT
+from industrial_agent.data import SplitRegistry
+from scripts.pi05.provenance_context import (
+    NORM_STATS_SOURCE_MANIFEST_TYPE,
+    ProvenanceContext,
+    resolve_provenance_context,
+)
+
 try:
     from scripts.pi05.canonical_v1 import (
         StateMapper,
+        load_split_registry,
         load_state_mapper,
         map_state,
         read_canonical_dataset,
@@ -37,6 +49,7 @@ try:
 except ModuleNotFoundError:  # direct ``python scripts/pi05/...`` execution
     from canonical_v1 import (  # type: ignore
         StateMapper,
+        load_split_registry,
         load_state_mapper,
         map_state,
         read_canonical_dataset,
@@ -267,8 +280,9 @@ def _load_canonical(
     path: Path,
     *,
     mapper: StateMapper,
+    split_registry: SplitRegistry,
 ) -> LoadedDataset:
-    episodes = read_canonical_dataset(path)
+    episodes = read_canonical_dataset(path, split_registry=split_registry)
     states: list[np.ndarray] = []
     actions: list[np.ndarray] = []
     sources: list[dict[str, Any]] = []
@@ -290,9 +304,14 @@ def _load_canonical(
                 {
                     "canonical_episode_id": episode.episode_id,
                     "split": episode.split,
-                    "source_step_indices": [step.step_index for step in selected],
-                    "source_meta_sha256": compute_sha256(episode.root / "meta.json"),
-                    "source_steps_sha256": compute_sha256(episode.root / "steps.jsonl"),
+                    "source_action_sequence_ids": [
+                        step.action_sequence_id for step in selected
+                    ],
+                    "source_physics_ticks": [step.physics_tick for step in selected],
+                    "source_structure_sha256": episode.structure_sha256,
+                    "source_hdf5_sha256": episode.hdf5_sha256,
+                    "source_split_registry_sha256": episode.split_registry_sha256,
+                    "source_recorder_git_sha": episode.recorder_git_sha,
                 }
             )
     if not states:
@@ -305,6 +324,7 @@ def _load_canonical(
             "input_format": "canonical_v1",
             "input_path": str(path.resolve()),
             "split": "train",
+            "split_registry_sha256": split_registry.registry_sha256,
             "sources": sources,
             "excluded": excluded,
         },
@@ -326,10 +346,13 @@ def _validate_conversion_provenance(
     *,
     repo_id: str,
     mapper: StateMapper,
+    split_registry: SplitRegistry,
+    provenance_context: ProvenanceContext,
 ) -> list[dict[str, Any]]:
     episodes = validate_provenance_manifest(
         provenance,
         expected_repo_id=repo_id,
+        expected_provenance_context=provenance_context,
     )
     mapper_info = provenance.get("state_mapper")
     if not isinstance(mapper_info, dict):
@@ -344,6 +367,11 @@ def _validate_conversion_provenance(
         raise ValueError(
             "LeRobot provenance StateMapper does not match the injected mapper"
         )
+    expected_registry_sha = split_registry.registry_sha256.split(":", 1)[-1]
+    if provenance.get("source_split_registry_sha256") != expected_registry_sha:
+        raise ValueError(
+            "LeRobot provenance Split Registry SHA does not match the supplied registry"
+        )
     return episodes
 
 
@@ -352,6 +380,8 @@ def _load_lerobot(
     *,
     repo_id: str,
     mapper: StateMapper,
+    split_registry: SplitRegistry,
+    provenance_context: ProvenanceContext,
     manifest_path: Path | None,
 ) -> LoadedDataset:
     provenance_path = manifest_path or path / PROVENANCE_FILENAME
@@ -360,6 +390,8 @@ def _load_lerobot(
         provenance,
         repo_id=repo_id,
         mapper=mapper,
+        split_registry=split_registry,
+        provenance_context=provenance_context,
     )
     dataset = open_offline_dataset(path, repo_id)
     expected_total = sum(int(item["step_count"]) for item in episodes)
@@ -461,8 +493,10 @@ def _load_lerobot(
             "input_path": str(path.resolve()),
             "repo_id": repo_id,
             "split": "train",
+            "split_registry_sha256": split_registry.registry_sha256,
             "conversion_manifest_path": str(provenance_path.resolve()),
             "conversion_manifest_sha256": compute_sha256(provenance_path),
+            "conversion_producer": provenance["producer"],
             "sources": sources,
             "excluded": {
                 "non_train_episodes": len(episodes) - len(sources),
@@ -476,15 +510,25 @@ def load_dataset(
     *,
     input_format: str,
     state_mapper: StateMapper,
+    split_registry: SplitRegistry,
+    provenance_context: ProvenanceContext,
     production: bool = True,
     repo_id: str | None = None,
     manifest_path: Path | None = None,
 ) -> LoadedDataset:
     """Load one explicit format without guessing or legacy fallback."""
 
+    if not isinstance(split_registry, SplitRegistry):
+        raise TypeError("split_registry must be a verified SplitRegistry")
+    if not isinstance(provenance_context, ProvenanceContext):
+        raise TypeError("provenance_context must be a verified ProvenanceContext")
     mapper = require_state_mapper(state_mapper, production=production)
     if input_format == "canonical-v1":
-        return _load_canonical(path, mapper=mapper)
+        return _load_canonical(
+            path,
+            mapper=mapper,
+            split_registry=split_registry,
+        )
     if input_format == "lerobot":
         if not repo_id:
             raise ValueError("repo_id is required for LeRobot input")
@@ -492,6 +536,8 @@ def load_dataset(
             path,
             repo_id=repo_id,
             mapper=mapper,
+            split_registry=split_registry,
+            provenance_context=provenance_context,
             manifest_path=manifest_path,
         )
     raise ValueError(
@@ -523,6 +569,7 @@ def write_norm_stats_bundle(
     norm_stats: Mapping[str, NormStats],
     loaded: LoadedDataset,
     mapper: StateMapper,
+    provenance_context: ProvenanceContext,
 ) -> tuple[str, Path, str]:
     """QA first, then atomically publish stats and their source manifest."""
 
@@ -534,7 +581,8 @@ def write_norm_stats_bundle(
     stats_sha = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
     source_manifest = {
         "schema_version": "1.0",
-        "manifest_type": "pi05_norm_stats_source_v1",
+        "manifest_type": NORM_STATS_SOURCE_MANIFEST_TYPE,
+        "producer": provenance_context.as_manifest(),
         "state_mapper": {
             "name": mapper.name,
             "state_dim": int(mapper.state_dim),
@@ -641,6 +689,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--state-mapper", required=True)
     parser.add_argument("--repo-id", default=None)
     parser.add_argument("--manifest", default=None)
+    parser.add_argument("--split-registry", required=True)
+    parser.add_argument("--project-root", required=True)
+    parser.add_argument("--openpi-commit", required=True)
     parser.add_argument("--output-path", required=True)
     parser.add_argument("--quiet", action="store_true")
     return parser.parse_args()
@@ -656,10 +707,18 @@ def main() -> int:
                 "openpi.shared.normalize is required for production norm-stats publication"
             )
         mapper = load_state_mapper(args.state_mapper, production=True)
+        split_registry = load_split_registry(args.split_registry)
+        provenance_context = resolve_provenance_context(
+            repo_root=args.project_root,
+            openpi_commit=args.openpi_commit,
+            expected_openpi_commit=OPENPI_COMMIT,
+        )
         loaded = load_dataset(
             Path(args.dataset_path),
             input_format=args.input_format,
             state_mapper=mapper,
+            split_registry=split_registry,
+            provenance_context=provenance_context,
             production=True,
             repo_id=args.repo_id,
             manifest_path=Path(args.manifest) if args.manifest else None,
@@ -672,6 +731,7 @@ def main() -> int:
             norm_stats=norm_stats,
             loaded=loaded,
             mapper=mapper,
+            provenance_context=provenance_context,
         )
     except Exception as exc:
         logger.error("norm stats blocked: %s", exc)
