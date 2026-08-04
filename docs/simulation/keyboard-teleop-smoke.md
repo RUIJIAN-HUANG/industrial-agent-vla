@@ -22,7 +22,7 @@
 ```bash
 cd "$HOME/Sceneconstruction/industrial-agent-vla"
 git fetch origin
-git switch feat/b-isaac-gui-keyboard-teleop
+git switch main
 git pull --ff-only
 
 export ISAAC_SIM_ROOT="$HOME/isaacsim"

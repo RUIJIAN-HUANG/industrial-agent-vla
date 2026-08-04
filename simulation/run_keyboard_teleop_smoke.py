@@ -79,6 +79,23 @@ def _require_action_evidence(action_count: int) -> None:
         )
 
 
+def _result_identity(
+    *,
+    session_id: str,
+    arm_id: str,
+    input_mode: str,
+) -> dict[str, object]:
+    """Return metadata shared by successful and failed smoke results."""
+
+    return {
+        "smoke_only": True,
+        "not_canonical_episode": True,
+        "session_id": session_id,
+        "arm_id": arm_id,
+        "input_mode": input_mode,
+    }
+
+
 def _start_terminal_reader(output: Queue[str]) -> Thread:
     def read_commands() -> None:
         while True:
@@ -454,13 +471,13 @@ def main() -> int:
             raise RuntimeError("safe-stop readback was not confirmed")
         result = {
             "status": "PASS",
-            "smoke_only": True,
-            "not_canonical_episode": True,
-            "session_id": session_id,
+            **_result_identity(
+                session_id=session_id,
+                arm_id=args.arm_id,
+                input_mode=args.input_mode,
+            ),
             "isaac_sim_version": isaac_version,
             "scene_id": config["scene_id"],
-            "arm_id": args.arm_id,
-            "input_mode": args.input_mode,
             "action_count": action_count,
             "checkpoint_count": checkpoint_count,
             "three_rgb_cas_streams": True,
@@ -488,8 +505,11 @@ def main() -> int:
                 }
         result = {
             "status": "FAIL",
-            "smoke_only": True,
-            "session_id": session_id,
+            **_result_identity(
+                session_id=session_id,
+                arm_id=args.arm_id,
+                input_mode=args.input_mode,
+            ),
             "phase": phase,
             "action_count": action_count,
             "error_type": type(exc).__name__,
