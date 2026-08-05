@@ -19,10 +19,12 @@ import numpy as np
 class P01ExpertTuning:
     """Explicit, reviewable parameters for the first physical grasp probe."""
 
-    tcp_grasp_offset_z_m: float = 0.105
     approach_clearance_m: float = 0.10
     max_cartesian_step_m: float = 0.02
-    position_tolerance_m: float = 0.003
+    position_tolerance_m: float = 0.005
+    grasp_probe_lift_m: float = 0.04
+    minimum_grasp_follow_ratio: float = 0.60
+    maximum_grasp_follow_error_m: float = 0.015
     transit_clearance_m: float = 0.04
     slot_work_radius_margin_m: float = 0.03
     max_actual_step_m: float = 0.06
@@ -32,8 +34,6 @@ class P01ExpertTuning:
     release_steps: int = 3
 
     def validate(self) -> None:
-        if not 0.05 <= self.tcp_grasp_offset_z_m <= 0.18:
-            raise ValueError("tcp_grasp_offset_z_m must be in [0.05, 0.18]")
         if not 0.05 <= self.approach_clearance_m <= 0.20:
             raise ValueError("approach_clearance_m must be in [0.05, 0.20]")
         if not 0.005 <= self.max_cartesian_step_m <= 0.03:
@@ -54,6 +54,79 @@ class P01ExpertTuning:
             raise ValueError("max_consecutive_divergent_steps must be positive")
         if self.close_steps < 1 or self.release_steps < 1:
             raise ValueError("close_steps and release_steps must be positive")
+        if not 0.02 <= self.grasp_probe_lift_m <= 0.06:
+            raise ValueError("grasp_probe_lift_m must be in [0.02, 0.06]")
+        if not 0.5 <= self.minimum_grasp_follow_ratio <= 0.9:
+            raise ValueError("minimum_grasp_follow_ratio must be in [0.5, 0.9]")
+        if not 0.005 <= self.maximum_grasp_follow_error_m <= 0.02:
+            raise ValueError("maximum_grasp_follow_error_m must be in [0.005, 0.02]")
+
+
+def measured_tcp_to_grasp_center_offset(
+    tcp_world_m: Sequence[float],
+    grasp_center_world_m: Sequence[float],
+) -> np.ndarray:
+    """Return a guarded TCP-minus-physical-grasp-center calibration vector."""
+
+    tcp = np.asarray(tcp_world_m, dtype=float)
+    center = np.asarray(grasp_center_world_m, dtype=float)
+    if tcp.shape != (3,) or center.shape != (3,):
+        raise ValueError("TCP and grasp center must be 3-D")
+    offset = tcp - center
+    if not np.all(np.isfinite(offset)):
+        raise ValueError("measured grasp offset must be finite")
+    if float(np.linalg.norm(offset[:2])) > 0.05:
+        raise ValueError("measured grasp center is more than 5 cm laterally from TCP")
+    if not -0.03 <= float(offset[2]) <= 0.18:
+        raise ValueError("measured vertical grasp offset is outside [-0.03, 0.18] m")
+    return offset
+
+
+def grasp_follow_report(
+    *,
+    tcp_before_world_m: Sequence[float],
+    tcp_after_world_m: Sequence[float],
+    part_before_world_m: Sequence[float],
+    part_after_world_m: Sequence[float],
+    minimum_follow_ratio: float,
+    maximum_follow_error_m: float,
+) -> dict[str, float | bool | str]:
+    """Verify that a closed-gripper probe lift actually carries the part."""
+
+    tcp_before = np.asarray(tcp_before_world_m, dtype=float)
+    tcp_after = np.asarray(tcp_after_world_m, dtype=float)
+    part_before = np.asarray(part_before_world_m, dtype=float)
+    part_after = np.asarray(part_after_world_m, dtype=float)
+    if any(
+        value.shape != (3,)
+        for value in (tcp_before, tcp_after, part_before, part_after)
+    ):
+        raise ValueError("grasp verification positions must be 3-D")
+    if not all(
+        np.all(np.isfinite(value))
+        for value in (tcp_before, tcp_after, part_before, part_after)
+    ):
+        raise ValueError("grasp verification positions must be finite")
+    tcp_delta = tcp_after - tcp_before
+    part_delta = part_after - part_before
+    tcp_lift = float(tcp_delta[2])
+    part_lift = float(part_delta[2])
+    follow_error = float(np.linalg.norm(part_delta - tcp_delta))
+    required_part_lift = max(0.01, tcp_lift * float(minimum_follow_ratio))
+    passed = (
+        tcp_lift >= 0.015
+        and part_lift >= required_part_lift
+        and follow_error <= float(maximum_follow_error_m)
+    )
+    reason = "part followed probe lift" if passed else "part did not follow probe lift"
+    return {
+        "pass": passed,
+        "reason": reason,
+        "tcp_lift_m": tcp_lift,
+        "part_lift_m": part_lift,
+        "required_part_lift_m": required_part_lift,
+        "follow_error_m": follow_error,
+    }
 
 
 def bounded_world_delta(

@@ -46,6 +46,60 @@ class OfflineGtProbe:
         translation = self._world_matrix(path).ExtractTranslation()
         return [float(value) for value in translation]
 
+    def combined_world_bound_by_names(
+        self,
+        *,
+        under_path: str,
+        prim_names: Sequence[str],
+    ) -> dict[str, Any]:
+        """Measure one combined world AABB for uniquely named descendant prims."""
+
+        names = tuple(str(name) for name in prim_names)
+        if not names or len(set(names)) != len(names):
+            raise ValueError("prim_names must contain unique non-empty names")
+        matches: dict[str, list[Any]] = {name: [] for name in names}
+        prefix = under_path.rstrip("/") + "/"
+        for candidate in self._stage.Traverse():
+            path = str(candidate.GetPath())
+            name = path.rsplit("/", 1)[-1]
+            if path.startswith(prefix) and name in matches:
+                matches[name].append(candidate)
+        ambiguous = {
+            name: [str(prim.GetPath()) for prim in prims]
+            for name, prims in matches.items()
+            if len(prims) != 1
+        }
+        if ambiguous:
+            raise RuntimeError(
+                "offline_gt expected one descendant for every requested prim name: "
+                f"{ambiguous}"
+            )
+
+        cache = self._UsdGeom.BBoxCache(
+            self._Usd.TimeCode.Default(),
+            [self._UsdGeom.Tokens.default_, self._UsdGeom.Tokens.render],
+            useExtentsHint=False,
+            ignoreVisibility=True,
+        )
+        paths: dict[str, str] = {}
+        minima: list[list[float]] = []
+        maxima: list[list[float]] = []
+        for name in names:
+            prim = matches[name][0]
+            paths[name] = str(prim.GetPath())
+            world_range = cache.ComputeWorldBound(prim).ComputeAlignedRange()
+            minima.append([float(value) for value in world_range.GetMin()])
+            maxima.append([float(value) for value in world_range.GetMax()])
+        combined_min = [min(values[axis] for values in minima) for axis in range(3)]
+        combined_max = [max(values[axis] for values in maxima) for axis in range(3)]
+        center = [(combined_min[axis] + combined_max[axis]) / 2.0 for axis in range(3)]
+        return {
+            "under_path": under_path,
+            "prim_paths": paths,
+            "world_aabb_m": {"min": combined_min, "max": combined_max},
+            "center_world_m": center,
+        }
+
     def local_point_to_world(
         self,
         path: str,

@@ -11,6 +11,8 @@ from simulation.scripted_expert_plan import (
     conservative_step_limit,
     first_bin_slot_local_center,
     frozen_success_vote,
+    grasp_follow_report,
+    measured_tcp_to_grasp_center_offset,
     minimum_xy_radius_along_segment,
     motion_sample_violation,
     orthogonal_transfer_waypoints,
@@ -21,6 +23,35 @@ from simulation.scripted_expert_plan import (
 class ScriptedExpertPlanTests(unittest.TestCase):
     def test_default_tuning_is_valid(self) -> None:
         P01ExpertTuning().validate()
+
+    def test_measured_grasp_offset_is_tcp_minus_finger_center(self) -> None:
+        offset = measured_tcp_to_grasp_center_offset(
+            [-0.5, 0.2, 1.0],
+            [-0.5, 0.2, 0.91],
+        )
+        np.testing.assert_allclose(offset, [0.0, 0.0, 0.09])
+
+    def test_probe_lift_rejects_empty_grasp(self) -> None:
+        report = grasp_follow_report(
+            tcp_before_world_m=[0.0, 0.0, 0.80],
+            tcp_after_world_m=[0.0, 0.0, 0.84],
+            part_before_world_m=[0.0, 0.0, 0.77],
+            part_after_world_m=[0.0, 0.0, 0.77],
+            minimum_follow_ratio=0.60,
+            maximum_follow_error_m=0.015,
+        )
+        self.assertFalse(report["pass"])
+
+    def test_probe_lift_accepts_part_following_tcp(self) -> None:
+        report = grasp_follow_report(
+            tcp_before_world_m=[0.0, 0.0, 0.80],
+            tcp_after_world_m=[0.0, 0.0, 0.84],
+            part_before_world_m=[0.0, 0.0, 0.77],
+            part_after_world_m=[0.001, 0.0, 0.809],
+            minimum_follow_ratio=0.60,
+            maximum_follow_error_m=0.015,
+        )
+        self.assertTrue(report["pass"])
 
     def test_world_delta_is_bounded_without_changing_direction(self) -> None:
         delta = bounded_world_delta(

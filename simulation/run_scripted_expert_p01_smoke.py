@@ -37,7 +37,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--output-scene", type=Path, default=DEFAULT_SCENE)
     parser.add_argument("--artifact-root", type=Path, default=DEFAULT_ARTIFACT_ROOT)
     parser.add_argument("--franka-usd")
-    parser.add_argument("--tcp-grasp-offset-z-m", type=float, default=0.105)
+    parser.add_argument(
+        "--tcp-grasp-offset-z-m",
+        type=float,
+        help="Manual emergency override; default measures the live finger geometry.",
+    )
     parser.add_argument("--approach-clearance-m", type=float, default=0.10)
     parser.add_argument("--max-cartesian-step-m", type=float, default=0.02)
     parser.add_argument(
@@ -97,7 +101,6 @@ def main() -> int:
     from scripted_expert_plan import P01ExpertTuning
 
     tuning = P01ExpertTuning(
-        tcp_grasp_offset_z_m=args.tcp_grasp_offset_z_m,
         approach_clearance_m=args.approach_clearance_m,
         max_cartesian_step_m=args.max_cartesian_step_m,
     )
@@ -149,6 +152,8 @@ def main() -> int:
             bounded_world_delta,
             conservative_step_limit,
             frozen_success_vote,
+            grasp_follow_report,
+            measured_tcp_to_grasp_center_offset,
             motion_sample_violation,
             orthogonal_transfer_waypoints,
             select_safest_slot_index,
@@ -352,9 +357,24 @@ def main() -> int:
 
         phase = "execute_p01_pick_place"
         p01_center = np.asarray(gt.world_position("/World/Parts/P01"), dtype=float)
-        grasp_tcp = p01_center + np.asarray(
-            [0.0, 0.0, tuning.tcp_grasp_offset_z_m], dtype=float
+        tcp_calibration_position, _ = controller.end_effector_pose("Arm_A")
+        finger_bound = gt.combined_world_bound_by_names(
+            under_path="/World/Robots/Arm_A",
+            prim_names=("panda_leftfinger", "panda_rightfinger"),
         )
+        measured_offset = measured_tcp_to_grasp_center_offset(
+            tcp_calibration_position,
+            finger_bound["center_world_m"],
+        )
+        if args.tcp_grasp_offset_z_m is not None:
+            tcp_to_grasp_center = np.asarray(
+                [0.0, 0.0, float(args.tcp_grasp_offset_z_m)], dtype=float
+            )
+            calibration_source = "manual_emergency_override"
+        else:
+            tcp_to_grasp_center = measured_offset
+            calibration_source = "live_combined_finger_world_bound"
+        grasp_tcp = p01_center + tcp_to_grasp_center
         grasp_approach = grasp_tcp + np.asarray(
             [0.0, 0.0, tuning.approach_clearance_m], dtype=float
         )
@@ -373,8 +393,7 @@ def main() -> int:
             for slot_local in slot_locals
         )
         slot_tcp_candidates = tuple(
-            center + np.asarray([0.0, 0.0, tuning.tcp_grasp_offset_z_m], dtype=float)
-            for center in slot_part_centers
+            center + tcp_to_grasp_center for center in slot_part_centers
         )
         arm_config = next(robot for robot in config["robots"] if robot["id"] == "Arm_A")
         arm_base_world = np.asarray(arm_config["base_pose"]["position_m"], dtype=float)
@@ -403,6 +422,10 @@ def main() -> int:
                 "slot_index": slot_index,
                 "slot_local_m": slot_local.tolist(),
                 "arm_base_world_m": arm_base_world.tolist(),
+                "grasp_calibration_source": calibration_source,
+                "measured_tcp_to_grasp_center_m": measured_offset.tolist(),
+                "applied_tcp_to_grasp_center_m": tcp_to_grasp_center.tolist(),
+                "finger_world_bound": finger_bound,
                 "grasp_approach_world_m": grasp_approach.tolist(),
                 "place_approach_world_m": place_approach.tolist(),
                 "transfer_waypoints_world_m": [
@@ -422,6 +445,46 @@ def main() -> int:
             gripper_open=True,
         )
         hold(subtask_id="p01-close", gripper_open=False, steps=tuning.close_steps)
+        probe_tcp_before, _ = controller.end_effector_pose("Arm_A")
+        probe_part_before = np.asarray(
+            gt.world_position("/World/Parts/P01"), dtype=float
+        )
+        probe_target = probe_tcp_before + np.asarray(
+            [0.0, 0.0, tuning.grasp_probe_lift_m], dtype=float
+        )
+        move_tcp_world(
+            subtask_id="p01-grasp-probe-lift",
+            target_world=probe_target,
+            gripper_open=False,
+        )
+        probe_tcp_after, _ = controller.end_effector_pose("Arm_A")
+        probe_part_after = np.asarray(
+            gt.world_position("/World/Parts/P01"), dtype=float
+        )
+        grasp_report = grasp_follow_report(
+            tcp_before_world_m=probe_tcp_before,
+            tcp_after_world_m=probe_tcp_after,
+            part_before_world_m=probe_part_before,
+            part_after_world_m=probe_part_after,
+            minimum_follow_ratio=tuning.minimum_grasp_follow_ratio,
+            maximum_follow_error_m=tuning.maximum_grasp_follow_error_m,
+        )
+        grasp_report.update(
+            {
+                "isolation": "offline_gt_only",
+                "canonical_included": False,
+                "tcp_before_world_m": probe_tcp_before.tolist(),
+                "tcp_after_world_m": probe_tcp_after.tolist(),
+                "part_before_world_m": probe_part_before.tolist(),
+                "part_after_world_m": probe_part_after.tolist(),
+            }
+        )
+        _write_json(offline_gt_root / "p01_grasp_verification.json", grasp_report)
+        if not grasp_report["pass"]:
+            controller.safe_stop("P01 grasp probe failed")
+            raise RuntimeError(
+                "GRASP_FAILED: P01 did not follow the probe lift; see offline_gt report"
+            )
         move_tcp_world(
             subtask_id="p01-lift",
             target_world=grasp_approach,
