@@ -1,0 +1,17 @@
+.git
+.github
+.agents
+.codex
+.venv
+__pycache__
+*.pyc
+*.pt
+*.pth
+*.onnx
+*.engine
+artifacts
+data
+docs
+reports
+simulation
+tests
