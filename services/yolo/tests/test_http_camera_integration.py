@@ -57,6 +57,7 @@ def test_mock_http_service_accepts_one_synchronized_camera_triplet(
             agent,
             run_id="http-smoke-run",
             task_id="http-smoke-task",
+            subtask_id="S01_ARM_A_PACK_HANDOFF",
             evidence_jsonl_path=evidence_path,
         )
     finally:

@@ -67,7 +67,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--require-yolo-detection",
         action="store_true",
-        help="Fail unless at least one of the three camera probes detects an object.",
+        help="Record whether at least one camera detects an object; never gate control.",
     )
     return parser.parse_args()
 
@@ -177,6 +177,8 @@ def main() -> int:
     action_count = 0
     checkpoint_count = 0
     yolo_probe_count = 0
+    yolo_successful_probe_count = 0
+    yolo_failure_count = 0
     yolo_detection_count = 0
     try:
         phase = "verify_isaac_version"
@@ -197,6 +199,7 @@ def main() -> int:
         from simulation.rgb_cas_bridge import IsaacRgbCasPublisher
         from simulation.run_isaac_adapter_smoke import _arm_state
         from simulation.yolo_camera_probe import (
+            append_yolo_probe_evidence,
             discover_yolo_http_agent,
             probe_yolo_cameras,
         )
@@ -261,13 +264,76 @@ def main() -> int:
         last_timestamp_ms = -1
         last_validated_observation = None
 
+        yolo_subtask_id = (
+            "S01_ARM_A_PACK_HANDOFF"
+            if args.arm_id == "Arm_A"
+            else "S02_ARM_B_TRANSPORT"
+        )
+
+        def record_yolo_sidecar_failure(
+            *,
+            failure_phase: str,
+            probe_step_id: int,
+            error: Exception,
+        ) -> dict[str, Any]:
+            raw_code = getattr(error, "code", "PERC_2201_UNAVAILABLE")
+            code = getattr(raw_code, "value", str(raw_code))
+            record: dict[str, Any] = {
+                "probe_schema_version": "1.0",
+                "record_type": "yolo_sidecar_failure",
+                "status": "failed",
+                "run_id": session_id,
+                "task_id": "keyboard-teleop-yolo-smoke",
+                "subtask_id": yolo_subtask_id,
+                "step_id": probe_step_id,
+                "phase": failure_phase,
+                "results": [],
+                "successful_camera_count": 0,
+                "failed_camera_count": (
+                    3 if failure_phase == "three_camera_yolo_probe" else 0
+                ),
+                "error": {
+                    "code": code,
+                    "type": type(error).__name__,
+                    "message": str(error),
+                    "retryable": bool(getattr(error, "retryable", False)),
+                },
+            }
+            try:
+                append_yolo_probe_evidence(yolo_evidence_path, record)
+            except Exception as persistence_error:
+                record["evidence_persistence_error"] = {
+                    "type": type(persistence_error).__name__,
+                    "message": str(persistence_error),
+                }
+                print(
+                    f"警告：YOLO 旁路失败且证据持久化失败：{persistence_error}",
+                    file=sys.stderr,
+                )
+            return record
+
         if args.yolo_base_url:
             phase = "discover_yolo_service"
-            yolo_perception, yolo_health = discover_yolo_http_agent(
-                args.yolo_base_url,
-                timeout_ms=args.yolo_timeout_ms,
-                allow_mock=args.allow_mock_yolo,
-            )
+            try:
+                yolo_perception, yolo_health = discover_yolo_http_agent(
+                    args.yolo_base_url,
+                    timeout_ms=args.yolo_timeout_ms,
+                    allow_mock=args.allow_mock_yolo,
+                )
+            except Exception as error:
+                yolo_failure_count += 1
+                yolo_health = {
+                    "status": "degraded",
+                    "error": record_yolo_sidecar_failure(
+                        failure_phase=phase,
+                        probe_step_id=0,
+                        error=error,
+                    )["error"],
+                }
+                print(
+                    f"警告：YOLO 服务不可用，遥操作继续：{error}",
+                    file=sys.stderr,
+                )
 
         def guarded_state() -> dict[str, Any]:
             return {
@@ -327,22 +393,32 @@ def main() -> int:
             observation = dict(environment.observe())
             if yolo_perception is None:
                 return observation, None
-            validated = last_validated_observation
-            if validated is None or validated.observation_id != observation.get(
-                "observation_id"
-            ):
-                raise RuntimeError("YOLO probe lost the validated observation identity")
-            summary = probe_yolo_cameras(
-                validated,
-                yolo_perception,
-                run_id=session_id,
-                task_id="keyboard-teleop-yolo-smoke",
-                step_id=probe_step_id,
-                timeout_ms=args.yolo_timeout_ms,
-                confidence_threshold=args.yolo_confidence_threshold,
-                iou_threshold=args.yolo_iou_threshold,
-                evidence_jsonl_path=yolo_evidence_path,
-            )
+            try:
+                validated = last_validated_observation
+                if validated is None or validated.observation_id != observation.get(
+                    "observation_id"
+                ):
+                    raise RuntimeError(
+                        "YOLO probe lost the validated observation identity"
+                    )
+                summary = probe_yolo_cameras(
+                    validated,
+                    yolo_perception,
+                    run_id=session_id,
+                    task_id="keyboard-teleop-yolo-smoke",
+                    subtask_id=yolo_subtask_id,
+                    step_id=probe_step_id,
+                    timeout_ms=args.yolo_timeout_ms,
+                    confidence_threshold=args.yolo_confidence_threshold,
+                    iou_threshold=args.yolo_iou_threshold,
+                    evidence_jsonl_path=yolo_evidence_path,
+                )
+            except Exception as error:
+                summary = record_yolo_sidecar_failure(
+                    failure_phase="three_camera_yolo_probe",
+                    probe_step_id=probe_step_id,
+                    error=error,
+                )
             return observation, summary
 
         if yolo_perception is not None:
@@ -351,12 +427,17 @@ def main() -> int:
                 lambda: capture_and_probe_yolo(0),
                 idle_callback=simulation_app.update,
             )
-            if preflight_summary is None:
-                raise RuntimeError("YOLO preflight returned no summary")
-            yolo_probe_count += 1
-            yolo_detection_count += sum(
-                int(item["detection_count"]) for item in preflight_summary["results"]
-            )
+            if preflight_summary is not None:
+                yolo_probe_count += 1
+                if preflight_summary["status"] == "ok":
+                    yolo_successful_probe_count += 1
+                yolo_failure_count += int(
+                    preflight_summary.get("failed_camera_count", 1)
+                )
+                yolo_detection_count += sum(
+                    int(item["detection_count"])
+                    for item in preflight_summary["results"]
+                )
         active_state = guarded_state()["robot"][args.arm_id.lower()]
         mapper = KeyboardTeleopMapper(
             translation_step_m=args.translation_step_m,
@@ -471,6 +552,11 @@ def main() -> int:
                 )
                 if yolo_summary is not None:
                     yolo_probe_count += 1
+                    if yolo_summary["status"] == "ok":
+                        yolo_successful_probe_count += 1
+                    yolo_failure_count += int(
+                        yolo_summary.get("failed_camera_count", 1)
+                    )
                     yolo_detection_count += sum(
                         int(item["detection_count"]) for item in yolo_summary["results"]
                     )
@@ -543,9 +629,15 @@ def main() -> int:
             )
 
         _require_action_evidence(action_count)
-        if args.require_yolo_detection and yolo_detection_count < 1:
-            raise RuntimeError(
-                "YOLO smoke required at least one real detection across three cameras"
+        yolo_detection_requirement_met = yolo_detection_count >= 1
+        if args.require_yolo_detection and not yolo_detection_requirement_met:
+            yolo_failure_count += 1
+            record_yolo_sidecar_failure(
+                failure_phase="detection_requirement",
+                probe_step_id=max(checkpoint_count, 0),
+                error=RuntimeError(
+                    "no real detection was produced across the three cameras"
+                ),
             )
         phase = "safe_stop"
 
@@ -571,12 +663,17 @@ def main() -> int:
             "checkpoint_count": checkpoint_count,
             "three_rgb_cas_streams": True,
             "online_observation_validated": True,
-            "three_camera_yolo_verified": yolo_probe_count >= 1,
+            "three_camera_yolo_verified": yolo_successful_probe_count >= 1,
             "yolo_probe_count": yolo_probe_count,
+            "yolo_successful_probe_count": yolo_successful_probe_count,
+            "yolo_failure_count": yolo_failure_count,
             "yolo_detection_count": yolo_detection_count,
+            "yolo_detection_requirement_met": yolo_detection_requirement_met,
             "yolo_identity": yolo_health,
             "yolo_evidence_path": (
-                str(yolo_evidence_path) if yolo_probe_count else None
+                str(yolo_evidence_path)
+                if yolo_probe_count or yolo_failure_count
+                else None
             ),
             "safe_stop_confirmed": True,
             "trace_path": str(trace_path),
@@ -609,6 +706,8 @@ def main() -> int:
             "phase": phase,
             "action_count": action_count,
             "yolo_probe_count": yolo_probe_count,
+            "yolo_successful_probe_count": yolo_successful_probe_count,
+            "yolo_failure_count": yolo_failure_count,
             "yolo_detection_count": yolo_detection_count,
             "error_type": type(exc).__name__,
             "error": str(exc),

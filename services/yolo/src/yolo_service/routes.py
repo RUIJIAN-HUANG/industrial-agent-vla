@@ -13,7 +13,7 @@ from industrial_agent.service_images import CasRequestImageResolver
 
 from .exceptions import ServiceError
 from .handler import build_v1_detect_handler
-from .model import Detection, YoloModel, build_model
+from .model import Detection, ModelOutput, YoloModel, build_model
 from .schemas import (
     build_cancel_response,
     build_error_response,
@@ -40,14 +40,40 @@ class YoloService:
         self._executor = ThreadPoolExecutor(
             max_workers=int(config["api"]["max_concurrent_requests"])
         )
-        self._active_by_task: dict[str, dict[str, Future[list[Detection]]]] = {}
+        self._active_by_task: dict[str, dict[str, Future[ModelOutput]]] = {}
         self._state_lock = RLock()
+        self._quarantined = False
+        self._quarantine_reason: str | None = None
 
     def health(self) -> tuple[int, dict[str, Any]]:
-        return 200, build_health_response(self.config)
+        with self._state_lock:
+            quarantined = self._quarantined
+            reason = self._quarantine_reason
+        response = build_health_response(self.config)
+        if quarantined:
+            response["status"] = "degraded"
+            response["device"] = {
+                **response["device"],
+                "quarantined": True,
+                "quarantine_reason": reason,
+            }
+        return 200, response
 
     def detect(self, payload: Any) -> tuple[int, dict[str, Any]]:
         request_for_error = payload if isinstance(payload, Mapping) else {}
+        with self._state_lock:
+            quarantined = self._quarantined
+        if quarantined:
+            error = ServiceError(
+                "PERC_2201_UNAVAILABLE",
+                "YOLO instance is quarantined until service restart",
+                retryable=False,
+            )
+            return 503, build_error_response(
+                request_for_error,
+                error,
+                self.config,
+            )
         try:
             request = validate_detect_request(payload, self.config)
             image_reference = dict(request["image"])
@@ -59,8 +85,9 @@ class YoloService:
             start_inference = perf_counter()
             future = self._submit(request, image)
             try:
-                detections = future.result(timeout=request["deadline_ms"] / 1000)
+                output = future.result(timeout=request["deadline_ms"] / 1000)
             except TimeoutError as exc:
+                self._enter_quarantine("hard inference timeout")
                 future.cancel()
                 raise ServiceError(
                     "PERC_2202_TIMEOUT",
@@ -72,7 +99,7 @@ class YoloService:
             timing = {
                 "preprocess_ms": preprocess_ms,
                 "inference_ms": inference_ms,
-                "nms_ms": 0.0,
+                "nms_ms": output.nms_ms,
                 "total_ms": (perf_counter() - start_total) * 1000,
             }
             return 200, build_success_response(
@@ -84,7 +111,7 @@ class YoloService:
                         index,
                         class_names=self.config["class_names"],
                     )
-                    for index, item in enumerate(detections)
+                    for index, item in enumerate(output.detections)
                 ],
                 timing,
             )
@@ -130,8 +157,14 @@ class YoloService:
         self,
         request: Mapping[str, Any],
         image: Any,
-    ) -> Future[list[Detection]]:
+    ) -> Future[ModelOutput]:
         with self._state_lock:
+            if self._quarantined:
+                raise ServiceError(
+                    "PERC_2201_UNAVAILABLE",
+                    "YOLO instance is quarantined until service restart",
+                    retryable=False,
+                )
             active_total = sum(len(items) for items in self._active_by_task.values())
             maximum = int(self.config["api"]["max_concurrent_requests"])
             if active_total >= maximum:
@@ -163,7 +196,7 @@ class YoloService:
         self,
         task_id: str,
         request_id: str,
-        completed: Future[list[Detection]],
+        completed: Future[ModelOutput],
     ) -> None:
         with self._state_lock:
             active = self._active_by_task.get(task_id)
@@ -173,6 +206,11 @@ class YoloService:
                 active.pop(request_id, None)
             if not active:
                 self._active_by_task.pop(task_id, None)
+
+    def _enter_quarantine(self, reason: str) -> None:
+        with self._state_lock:
+            self._quarantined = True
+            self._quarantine_reason = reason
 
     def close(self) -> None:
         """Reject queued work and release the inference worker."""

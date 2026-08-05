@@ -15,7 +15,11 @@ from threading import Lock
 from typing import Any, Mapping, Sequence
 
 from industrial_agent.contracts import Observation
-from industrial_agent.errors import ContractError, FailureCode
+from industrial_agent.errors import (
+    PERCEPTION_FAILURE_CODES,
+    ContractError,
+    FailureCode,
+)
 from industrial_agent.http_transport import BoundedHTTPTransport
 from industrial_agent.observation import FROZEN_IMAGE_HEIGHT, FROZEN_IMAGE_WIDTH
 from industrial_agent.perception import (
@@ -29,6 +33,7 @@ from industrial_agent.perception import (
 
 
 PROBE_SCHEMA_VERSION = "1.0"
+FROZEN_SUBTASK_IDS = frozenset({"S01_ARM_A_PACK_HANDOFF", "S02_ARM_B_TRANSPORT"})
 CAMERA_STREAMS: tuple[tuple[str, str], ...] = (
     ("arm_a_rgb", "CAM_A_TOP"),
     ("handoff_rgb", "CAM_HANDOFF"),
@@ -162,6 +167,7 @@ def _result_summary(
     packet: DetectionPacket,
 ) -> dict[str, Any]:
     return {
+        "status": "ok",
         "stream_name": stream_name,
         "camera_id": packet.camera_id,
         "image_sha256": packet.image_sha256,
@@ -172,6 +178,43 @@ def _result_summary(
         "detection_count": len(packet.detections),
         "detections": [detection.to_dict() for detection in packet.detections],
         "timing": packet.timing.to_dict(),
+    }
+
+
+def _error_summary(
+    *,
+    stream_name: str,
+    image: ImageReference,
+    error: Exception,
+) -> dict[str, Any]:
+    raw_code = getattr(error, "code", FailureCode.PERCEPTION_BAD_RESPONSE)
+    if isinstance(raw_code, FailureCode) and raw_code not in PERCEPTION_FAILURE_CODES:
+        raw_code = FailureCode.PERCEPTION_BAD_RESPONSE
+    code = raw_code.value if isinstance(raw_code, FailureCode) else str(raw_code)
+    status = (
+        "timeout"
+        if isinstance(error, TimeoutError)
+        or code == FailureCode.PERCEPTION_TIMEOUT.value
+        else "error"
+    )
+    return {
+        "status": status,
+        "stream_name": stream_name,
+        "camera_id": image.camera_id,
+        "image_sha256": image.image_sha256,
+        "image_width": image.width,
+        "image_height": image.height,
+        "packet_id": None,
+        "request_id": None,
+        "detection_count": 0,
+        "detections": [],
+        "timing": None,
+        "error": {
+            "code": code,
+            "type": type(error).__name__,
+            "message": str(error),
+            "retryable": bool(getattr(error, "retryable", False)),
+        },
     }
 
 
@@ -233,13 +276,22 @@ def _append_durable_jsonl(path: Path, record: Mapping[str, Any]) -> None:
             ) from exc
 
 
+def append_yolo_probe_evidence(
+    path: str | Path,
+    record: Mapping[str, Any],
+) -> None:
+    """Durably append one JSON-safe YOLO sidecar evidence record."""
+
+    _append_durable_jsonl(Path(path), record)
+
+
 def probe_yolo_cameras(
     observation: Observation,
     perception: PerceptionAgent,
     *,
     run_id: str,
     task_id: str,
-    subtask_id: str = "three-camera-yolo-probe",
+    subtask_id: str,
     step_id: int = 0,
     timeout_ms: int = 5_000,
     allowed_class_names: Sequence[str] = (),
@@ -257,6 +309,10 @@ def probe_yolo_cameras(
 
     descriptor = _require_yolo_descriptor(perception)
     references = _camera_references(observation)
+    if subtask_id not in FROZEN_SUBTASK_IDS:
+        raise ValueError(
+            "subtask_id must be S01_ARM_A_PACK_HANDOFF or S02_ARM_B_TRANSPORT"
+        )
     if isinstance(allowed_class_names, (str, bytes, bytearray)):
         raise TypeError("allowed_class_names must be a sequence of class names")
     class_names = tuple(allowed_class_names)
@@ -275,19 +331,38 @@ def probe_yolo_cameras(
             confidence_threshold=confidence_threshold,
             iou_threshold=iou_threshold,
         )
-        packet = perception.detect(context)
-        if not isinstance(packet, DetectionPacket):
-            raise TypeError("perception.detect() must return a DetectionPacket")
-        _validate_packet_correlation(
-            packet,
-            context=context,
-            descriptor=descriptor,
-        )
-        results.append(_result_summary(stream_name=stream_name, packet=packet))
+        try:
+            packet = perception.detect(context)
+            if not isinstance(packet, DetectionPacket):
+                raise TypeError("perception.detect() must return a DetectionPacket")
+            _validate_packet_correlation(
+                packet,
+                context=context,
+                descriptor=descriptor,
+            )
+            result = _result_summary(stream_name=stream_name, packet=packet)
+        except Exception as exc:
+            result = _error_summary(
+                stream_name=stream_name,
+                image=image,
+                error=exc,
+            )
+        results.append(result)
+
+    successful_count = sum(item["status"] == "ok" for item in results)
+    failure_count = len(results) - successful_count
+    batch_status = (
+        "ok"
+        if failure_count == 0
+        else "failed"
+        if successful_count == 0
+        else "partial_failure"
+    )
 
     summary: dict[str, Any] = {
         "probe_schema_version": PROBE_SCHEMA_VERSION,
         "record_type": "three_camera_yolo_probe",
+        "status": batch_status,
         "run_id": run_id,
         "task_id": task_id,
         "subtask_id": subtask_id,
@@ -299,6 +374,8 @@ def probe_yolo_cameras(
         "config_sha": descriptor.config_sha,
         "detection_contract_version": descriptor.detection_contract_version,
         "camera_order": [camera_id for _stream, camera_id in CAMERA_STREAMS],
+        "successful_camera_count": successful_count,
+        "failed_camera_count": failure_count,
         "results": results,
     }
     _encode_jsonl_record(summary)
@@ -309,7 +386,9 @@ def probe_yolo_cameras(
 
 __all__ = [
     "CAMERA_STREAMS",
+    "FROZEN_SUBTASK_IDS",
     "PROBE_SCHEMA_VERSION",
+    "append_yolo_probe_evidence",
     "discover_yolo_http_agent",
     "probe_yolo_cameras",
 ]

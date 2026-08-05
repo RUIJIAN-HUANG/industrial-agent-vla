@@ -76,7 +76,13 @@ class _FakeYolo:
 
     def predict(self, **kwargs: Any) -> list[Any]:
         self.predict_kwargs = kwargs
-        return []
+        return [
+            SimpleNamespace(
+                speed={"postprocess": 1.25},
+                names=self.names,
+                boxes=[],
+            )
+        ]
 
 
 def test_ultralytics_boundary_converts_rgb_to_bgr_and_filters_classes(
@@ -98,7 +104,8 @@ def test_ultralytics_boundary_converts_rgb_to_bgr_and_filters_classes(
         iou=0.4,
     )
 
-    assert detections == []
+    assert detections.detections == ()
+    assert detections.nms_ms == 1.25
     kwargs = _FakeYolo.instances[0].predict_kwargs
     assert kwargs is not None
     assert kwargs["source"].tolist() == [[[30, 20, 10]]]
@@ -126,3 +133,31 @@ def test_ultralytics_boundary_rejects_checkpoint_class_map(
 
     with pytest.raises(RuntimeError, match="class map does not match"):
         UltralyticsYoloModel(real_config)
+
+
+def test_ultralytics_boundary_rejects_missing_postprocess_timing(
+    config: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class MissingTimingYolo(_FakeYolo):
+        def predict(self, **kwargs: Any) -> list[Any]:
+            self.predict_kwargs = kwargs
+            return [SimpleNamespace(speed={}, names=self.names, boxes=[])]
+
+    monkeypatch.setitem(
+        sys.modules,
+        "ultralytics",
+        SimpleNamespace(YOLO=MissingTimingYolo),
+    )
+    real_config = dict(config)
+    real_config["mock_mode"] = False
+    real_config["checkpoint_path"] = "best.pt"
+    model = UltralyticsYoloModel(real_config)
+
+    with pytest.raises(RuntimeError, match="invalid postprocess timing"):
+        model.detect(
+            np.zeros((1, 1, 3), dtype=np.uint8),
+            allowed_class_names=(),
+            confidence=0.25,
+            iou=0.45,
+        )

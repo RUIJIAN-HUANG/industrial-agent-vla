@@ -10,8 +10,10 @@ from unittest.mock import patch
 import pytest
 
 from industrial_agent.contracts import Observation
+from industrial_agent.errors import FailureCode
 from industrial_agent.perception import (
     DetectionPacket,
+    PerceptionError,
     PerceptionContext,
     PerceptionDescriptor,
     PerceptionTiming,
@@ -133,7 +135,7 @@ def _run_probe(
         perception,
         run_id="run-1",
         task_id="task-1",
-        subtask_id="probe-subtask",
+        subtask_id="S01_ARM_A_PACK_HANDOFF",
         step_id=7,
         timeout_ms=3210,
         allowed_class_names=("part", "bin"),
@@ -168,6 +170,9 @@ def test_probe_detects_all_three_cameras_in_frozen_order_on_same_observation() -
         "arm_b_rgb",
     ]
     assert [result["detection_count"] for result in summary["results"]] == [0, 0, 0]
+    assert summary["status"] == "ok"
+    assert summary["successful_camera_count"] == 3
+    assert summary["failed_camera_count"] == 0
     assert json.loads(json.dumps(summary, allow_nan=False)) == summary
 
 
@@ -184,7 +189,7 @@ def test_probe_validates_every_reference_before_calling_detector() -> None:
     assert perception.calls == []
 
 
-def test_probe_rejects_wrong_frame_packet_and_writes_no_evidence(
+def test_probe_persists_partial_failure_and_continues_remaining_camera(
     tmp_path: Path,
 ) -> None:
     class WrongFrameYolo(RecordingYolo):
@@ -197,14 +202,56 @@ def test_probe_rejects_wrong_frame_packet_and_writes_no_evidence(
     evidence_path = tmp_path / "probe.jsonl"
     perception = WrongFrameYolo()
 
-    with pytest.raises(Exception, match="frame/deployment mismatch"):
-        _run_probe(perception, evidence_jsonl_path=evidence_path)
+    summary = _run_probe(perception, evidence_jsonl_path=evidence_path)
 
     assert [call.image.camera_id for call in perception.calls] == [
         "CAM_A_TOP",
         "CAM_HANDOFF",
+        "CAM_B_TOP",
     ]
-    assert not evidence_path.exists()
+    assert summary["status"] == "partial_failure"
+    assert [item["status"] for item in summary["results"]] == [
+        "ok",
+        "error",
+        "ok",
+    ]
+    assert summary["results"][1]["error"]["code"] == "PERC_2203_BAD_RESPONSE"
+    assert json.loads(evidence_path.read_text(encoding="utf-8")) == summary
+
+
+def test_probe_persists_all_timeout_failures(tmp_path: Path) -> None:
+    class TimeoutYolo(RecordingYolo):
+        def detect(self, context: PerceptionContext) -> DetectionPacket:
+            self.calls.append(context)
+            raise PerceptionError(
+                FailureCode.PERCEPTION_TIMEOUT,
+                "detector timed out",
+                retryable=True,
+            )
+
+    evidence_path = tmp_path / "probe.jsonl"
+    perception = TimeoutYolo()
+
+    summary = _run_probe(perception, evidence_jsonl_path=evidence_path)
+
+    assert len(perception.calls) == 3
+    assert summary["status"] == "failed"
+    assert summary["successful_camera_count"] == 0
+    assert summary["failed_camera_count"] == 3
+    assert {item["status"] for item in summary["results"]} == {"timeout"}
+    assert all(item["error"]["retryable"] for item in summary["results"])
+    assert json.loads(evidence_path.read_text(encoding="utf-8")) == summary
+
+
+def test_probe_rejects_non_frozen_subtask_id() -> None:
+    with pytest.raises(ValueError, match="subtask_id must be"):
+        probe_yolo_cameras(
+            _observation(),
+            RecordingYolo(),
+            run_id="run-1",
+            task_id="task-1",
+            subtask_id="three-camera-yolo-probe",
+        )
 
 
 def test_probe_durably_appends_one_json_line_after_complete_success(

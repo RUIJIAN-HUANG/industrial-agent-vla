@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import isfinite
 from typing import Any, Mapping, Protocol, Sequence
 
 import numpy as np
@@ -18,6 +19,14 @@ class Detection:
     bbox_xyxy: tuple[float, float, float, float]
 
 
+@dataclass(frozen=True)
+class ModelOutput:
+    """Validated inference output and backend-measured NMS/postprocess time."""
+
+    detections: tuple[Detection, ...]
+    nms_ms: float
+
+
 class YoloModel(Protocol):
     """Interface shared by mock and real YOLO implementations."""
 
@@ -28,7 +37,7 @@ class YoloModel(Protocol):
         allowed_class_names: Sequence[str],
         confidence: float,
         iou: float,
-    ) -> list[Detection]:
+    ) -> ModelOutput:
         """Run inference on one immutable RGB image."""
 
 
@@ -42,7 +51,7 @@ class MockYoloModel:
         allowed_class_names: Sequence[str],
         confidence: float,
         iou: float,
-    ) -> list[Detection]:
+    ) -> ModelOutput:
         del allowed_class_names, confidence, iou
 
         if not isinstance(image, np.ndarray):
@@ -50,7 +59,7 @@ class MockYoloModel:
         if image.ndim != 3 or image.shape[2] != 3:
             raise ValueError("image must have shape (height, width, 3)")
 
-        return []
+        return ModelOutput(detections=(), nms_ms=0.0)
 
 
 class UltralyticsYoloModel:
@@ -83,7 +92,7 @@ class UltralyticsYoloModel:
         allowed_class_names: Sequence[str],
         confidence: float,
         iou: float,
-    ) -> list[Detection]:
+    ) -> ModelOutput:
         if not isinstance(image, np.ndarray):
             raise TypeError("image must be a numpy array")
         if image.dtype != np.uint8 or image.ndim != 3 or image.shape[2] != 3:
@@ -109,9 +118,24 @@ class UltralyticsYoloModel:
             classes=allowed_ids,
             verbose=False,
         )
+        if not results:
+            raise RuntimeError("YOLO returned no per-image result or timing")
+        nms_ms = 0.0
         detections: list[Detection] = []
         allowed = set(allowed_class_names)
         for result in results:
+            speed = getattr(result, "speed", None)
+            if not isinstance(speed, Mapping):
+                raise RuntimeError("YOLO result exposes no timing map")
+            postprocess_ms = speed.get("postprocess")
+            if (
+                isinstance(postprocess_ms, bool)
+                or not isinstance(postprocess_ms, (int, float))
+                or not isfinite(postprocess_ms)
+                or postprocess_ms < 0.0
+            ):
+                raise RuntimeError("YOLO result has invalid postprocess timing")
+            nms_ms += float(postprocess_ms)
             names = result.names
             for box in result.boxes:
                 class_id = int(box.cls.item())
@@ -127,7 +151,7 @@ class UltralyticsYoloModel:
                         bbox_xyxy=xyxy,
                     )
                 )
-        return detections
+        return ModelOutput(detections=tuple(detections), nms_ms=nms_ms)
 
 
 def build_model(config: Mapping[str, Any]) -> YoloModel:
