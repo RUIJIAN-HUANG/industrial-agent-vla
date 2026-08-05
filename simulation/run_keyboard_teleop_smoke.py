@@ -52,6 +52,23 @@ def _parse_args() -> argparse.Namespace:
         default=50,
         help="Hard safety cap for one smoke session.",
     )
+    parser.add_argument(
+        "--yolo-base-url",
+        help="Optional live YOLO service URL; enables a three-camera CAS probe.",
+    )
+    parser.add_argument("--yolo-timeout-ms", type=int, default=5_000)
+    parser.add_argument("--yolo-confidence-threshold", type=float, default=0.25)
+    parser.add_argument("--yolo-iou-threshold", type=float, default=0.45)
+    parser.add_argument(
+        "--allow-mock-yolo",
+        action="store_true",
+        help="Permit mock YOLO only for software plumbing tests.",
+    )
+    parser.add_argument(
+        "--require-yolo-detection",
+        action="store_true",
+        help="Record whether at least one camera detects an object; never gate control.",
+    )
     return parser.parse_args()
 
 
@@ -121,6 +138,14 @@ def main() -> int:
         raise ValueError("--translation-step-m must be in (0, 0.01]")
     if args.rotation_step_deg <= 0.0 or args.rotation_step_deg > 5.0:
         raise ValueError("--rotation-step-deg must be in (0, 5]")
+    if not 1 <= args.yolo_timeout_ms <= 120_000:
+        raise ValueError("--yolo-timeout-ms must be in [1, 120000]")
+    for field_name in ("yolo_confidence_threshold", "yolo_iou_threshold"):
+        value = getattr(args, field_name)
+        if not 0.0 <= value <= 1.0:
+            raise ValueError(f"--{field_name.replace('_', '-')} must be in [0, 1]")
+    if args.require_yolo_detection and not args.yolo_base_url:
+        raise ValueError("--require-yolo-detection requires --yolo-base-url")
     for path in (REPOSITORY_ROOT, SOURCE_DIR, SCRIPT_DIR):
         if str(path) not in sys.path:
             sys.path.insert(0, str(path))
@@ -138,6 +163,7 @@ def main() -> int:
     result_path = artifact_dir / "result.json"
     command_ledger = artifact_dir / "command-ids.jsonl"
     cas_root = artifact_dir / "cas"
+    yolo_evidence_path = artifact_dir / "yolo-camera-evidence.jsonl"
     session_id = f"keyboard-smoke-{uuid4()}"
     phase = "launch_simulation_app"
     environment = None
@@ -145,9 +171,15 @@ def main() -> int:
     rgb_pipeline = None
     gui_keyboard = None
     status_window = None
+    yolo_perception = None
+    yolo_health: dict[str, Any] | None = None
     simulation_app = isaac_compat.launch_simulation_app(headless=False)
     action_count = 0
     checkpoint_count = 0
+    yolo_probe_count = 0
+    yolo_successful_probe_count = 0
+    yolo_failure_count = 0
+    yolo_detection_count = 0
     try:
         phase = "verify_isaac_version"
         isaac_version = isaac_compat.require_isaac_sim_51()
@@ -166,6 +198,11 @@ def main() -> int:
         from simulation.keyboard_teleop import KeyboardTeleopMapper
         from simulation.rgb_cas_bridge import IsaacRgbCasPublisher
         from simulation.run_isaac_adapter_smoke import _arm_state
+        from simulation.yolo_camera_probe import (
+            append_yolo_probe_evidence,
+            discover_yolo_http_agent,
+            probe_yolo_cameras,
+        )
 
         phase = "build_scene"
         stage = isaac_compat.create_new_stage()
@@ -225,6 +262,78 @@ def main() -> int:
         observation_gateway = ObservationGateway()
         observation_counter = 0
         last_timestamp_ms = -1
+        last_validated_observation = None
+
+        yolo_subtask_id = (
+            "S01_ARM_A_PACK_HANDOFF"
+            if args.arm_id == "Arm_A"
+            else "S02_ARM_B_TRANSPORT"
+        )
+
+        def record_yolo_sidecar_failure(
+            *,
+            failure_phase: str,
+            probe_step_id: int,
+            error: Exception,
+        ) -> dict[str, Any]:
+            raw_code = getattr(error, "code", "PERC_2201_UNAVAILABLE")
+            code = getattr(raw_code, "value", str(raw_code))
+            record: dict[str, Any] = {
+                "probe_schema_version": "1.0",
+                "record_type": "yolo_sidecar_failure",
+                "status": "failed",
+                "run_id": session_id,
+                "task_id": "keyboard-teleop-yolo-smoke",
+                "subtask_id": yolo_subtask_id,
+                "step_id": probe_step_id,
+                "phase": failure_phase,
+                "results": [],
+                "successful_camera_count": 0,
+                "failed_camera_count": (
+                    3 if failure_phase == "three_camera_yolo_probe" else 0
+                ),
+                "error": {
+                    "code": code,
+                    "type": type(error).__name__,
+                    "message": str(error),
+                    "retryable": bool(getattr(error, "retryable", False)),
+                },
+            }
+            try:
+                append_yolo_probe_evidence(yolo_evidence_path, record)
+            except Exception as persistence_error:
+                record["evidence_persistence_error"] = {
+                    "type": type(persistence_error).__name__,
+                    "message": str(persistence_error),
+                }
+                print(
+                    f"警告：YOLO 旁路失败且证据持久化失败：{persistence_error}",
+                    file=sys.stderr,
+                )
+            return record
+
+        if args.yolo_base_url:
+            phase = "discover_yolo_service"
+            try:
+                yolo_perception, yolo_health = discover_yolo_http_agent(
+                    args.yolo_base_url,
+                    timeout_ms=args.yolo_timeout_ms,
+                    allow_mock=args.allow_mock_yolo,
+                )
+            except Exception as error:
+                yolo_failure_count += 1
+                yolo_health = {
+                    "status": "degraded",
+                    "error": record_yolo_sidecar_failure(
+                        failure_phase=phase,
+                        probe_step_id=0,
+                        error=error,
+                    )["error"],
+                }
+                print(
+                    f"警告：YOLO 服务不可用，遥操作继续：{error}",
+                    file=sys.stderr,
+                )
 
         def guarded_state() -> dict[str, Any]:
             return {
@@ -250,7 +359,7 @@ def main() -> int:
             }
 
         def observation_source() -> dict[str, Any]:
-            nonlocal observation_counter, last_timestamp_ms
+            nonlocal observation_counter, last_timestamp_ms, last_validated_observation
             observation_counter += 1
             timestamp_ms = max(int(time.time() * 1000), last_timestamp_ms + 1)
             last_timestamp_ms = timestamp_ms
@@ -261,7 +370,7 @@ def main() -> int:
                 "camera": rgb_pipeline.capture(args.arm_id),
                 **guarded_state(),
             }
-            observation_gateway.ingest_online(raw)
+            last_validated_observation = observation_gateway.ingest_online(raw)
             return raw
 
         environment = IsaacExecutionEnvironment(
@@ -277,6 +386,58 @@ def main() -> int:
             runtime_action_timeout_s=10.0,
             runtime_stop_timeout_s=2.0,
         )
+
+        def capture_and_probe_yolo(
+            probe_step_id: int,
+        ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+            observation = dict(environment.observe())
+            if yolo_perception is None:
+                return observation, None
+            try:
+                validated = last_validated_observation
+                if validated is None or validated.observation_id != observation.get(
+                    "observation_id"
+                ):
+                    raise RuntimeError(
+                        "YOLO probe lost the validated observation identity"
+                    )
+                summary = probe_yolo_cameras(
+                    validated,
+                    yolo_perception,
+                    run_id=session_id,
+                    task_id="keyboard-teleop-yolo-smoke",
+                    subtask_id=yolo_subtask_id,
+                    step_id=probe_step_id,
+                    timeout_ms=args.yolo_timeout_ms,
+                    confidence_threshold=args.yolo_confidence_threshold,
+                    iou_threshold=args.yolo_iou_threshold,
+                    evidence_jsonl_path=yolo_evidence_path,
+                )
+            except Exception as error:
+                summary = record_yolo_sidecar_failure(
+                    failure_phase="three_camera_yolo_probe",
+                    probe_step_id=probe_step_id,
+                    error=error,
+                )
+            return observation, summary
+
+        if yolo_perception is not None:
+            phase = "three_camera_yolo_preflight"
+            _, preflight_summary = runtime_gate.run_worker_until_complete(
+                lambda: capture_and_probe_yolo(0),
+                idle_callback=simulation_app.update,
+            )
+            if preflight_summary is not None:
+                yolo_probe_count += 1
+                if preflight_summary["status"] == "ok":
+                    yolo_successful_probe_count += 1
+                yolo_failure_count += int(
+                    preflight_summary.get("failed_camera_count", 1)
+                )
+                yolo_detection_count += sum(
+                    int(item["detection_count"])
+                    for item in preflight_summary["results"]
+                )
         active_state = guarded_state()["robot"][args.arm_id.lower()]
         mapper = KeyboardTeleopMapper(
             translation_step_m=args.translation_step_m,
@@ -304,6 +465,8 @@ def main() -> int:
                     "gripper_norm",
                 ],
                 "timestamp_ms": int(time.time() * 1000),
+                "yolo_enabled": yolo_perception is not None,
+                "yolo_base_url": args.yolo_base_url,
             },
         )
 
@@ -383,13 +546,20 @@ def main() -> int:
             if command.kind == "checkpoint":
                 checkpoint_count += 1
 
-                def capture_checkpoint() -> dict[str, Any]:
-                    return dict(environment.observe())
-
-                observation = runtime_gate.run_worker_until_complete(
-                    capture_checkpoint,
+                observation, yolo_summary = runtime_gate.run_worker_until_complete(
+                    lambda: capture_and_probe_yolo(checkpoint_count),
                     idle_callback=simulation_app.update,
                 )
+                if yolo_summary is not None:
+                    yolo_probe_count += 1
+                    if yolo_summary["status"] == "ok":
+                        yolo_successful_probe_count += 1
+                    yolo_failure_count += int(
+                        yolo_summary.get("failed_camera_count", 1)
+                    )
+                    yolo_detection_count += sum(
+                        int(item["detection_count"]) for item in yolo_summary["results"]
+                    )
                 _append_jsonl(
                     trace_path,
                     {
@@ -398,6 +568,7 @@ def main() -> int:
                         "session_id": session_id,
                         "checkpoint_index": checkpoint_count,
                         "observation": observation,
+                        "yolo_probe": yolo_summary,
                     },
                 )
                 print(f"检查点 {checkpoint_count} 已写入。")
@@ -458,6 +629,16 @@ def main() -> int:
             )
 
         _require_action_evidence(action_count)
+        yolo_detection_requirement_met = yolo_detection_count >= 1
+        if args.require_yolo_detection and not yolo_detection_requirement_met:
+            yolo_failure_count += 1
+            record_yolo_sidecar_failure(
+                failure_phase="detection_requirement",
+                probe_step_id=max(checkpoint_count, 0),
+                error=RuntimeError(
+                    "no real detection was produced across the three cameras"
+                ),
+            )
         phase = "safe_stop"
 
         def stop_workflow() -> Any:
@@ -482,6 +663,18 @@ def main() -> int:
             "checkpoint_count": checkpoint_count,
             "three_rgb_cas_streams": True,
             "online_observation_validated": True,
+            "three_camera_yolo_verified": yolo_successful_probe_count >= 1,
+            "yolo_probe_count": yolo_probe_count,
+            "yolo_successful_probe_count": yolo_successful_probe_count,
+            "yolo_failure_count": yolo_failure_count,
+            "yolo_detection_count": yolo_detection_count,
+            "yolo_detection_requirement_met": yolo_detection_requirement_met,
+            "yolo_identity": yolo_health,
+            "yolo_evidence_path": (
+                str(yolo_evidence_path)
+                if yolo_probe_count or yolo_failure_count
+                else None
+            ),
             "safe_stop_confirmed": True,
             "trace_path": str(trace_path),
             "cas_root": str(cas_root),
@@ -512,6 +705,10 @@ def main() -> int:
             ),
             "phase": phase,
             "action_count": action_count,
+            "yolo_probe_count": yolo_probe_count,
+            "yolo_successful_probe_count": yolo_successful_probe_count,
+            "yolo_failure_count": yolo_failure_count,
+            "yolo_detection_count": yolo_detection_count,
             "error_type": type(exc).__name__,
             "error": str(exc),
             "traceback": traceback.format_exc(),

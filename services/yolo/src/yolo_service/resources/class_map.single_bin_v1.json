@@ -1,0 +1,11 @@
+{
+  "schema_version": "1.0",
+  "class_map_id": "single_bin_parts_v1",
+  "classes": [
+    {"id": 0, "name": "part_upright"},
+    {"id": 1, "name": "part_inverted"},
+    {"id": 2, "name": "part_fallen"},
+    {"id": 3, "name": "bin_box"},
+    {"id": 4, "name": "bin_slot"}
+  ]
+}
