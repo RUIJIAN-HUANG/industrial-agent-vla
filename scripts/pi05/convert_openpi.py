@@ -13,7 +13,7 @@ import json
 import logging
 import shutil
 import sys
-import tempfile
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
@@ -340,11 +340,11 @@ def convert_canonical_to_lerobot(
             f"output directory already exists; refusing to overwrite: {final_output_dir}"
         )
     final_output_dir.parent.mkdir(parents=True, exist_ok=True)
-    staging_dir = Path(
-        tempfile.mkdtemp(
-            prefix=f".{final_output_dir.name}.staging-",
-            dir=final_output_dir.parent,
-        )
+    # 只生成不存在的路径，不预创建目录：pinned lerobot 的
+    # LeRobotDatasetMetadata.create 内部执行 root.mkdir(exist_ok=False)，
+    # 预创建会导致 FileExistsError。
+    staging_dir = (
+        final_output_dir.parent / f".{final_output_dir.name}.staging-{uuid.uuid4().hex}"
     )
     create = dataset_factory or _create_dataset
     try:
