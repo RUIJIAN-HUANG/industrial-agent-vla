@@ -1,0 +1,25 @@
+services:
+  yolo:
+    build:
+      context: ../..
+      dockerfile: services/yolo/Dockerfile
+    ports:
+      - "8103:8103"
+    environment:
+      YOLO_USE_MOCK: "0"
+      YOLO_CHECKPOINT_PATH: /models/yolo/model.pt
+      YOLO_CHECKPOINT_SHA: ${YOLO_CHECKPOINT_SHA:?required}
+      YOLO_CLASS_MAP_SHA: ${YOLO_CLASS_MAP_SHA:?required}
+      YOLO_DEVICE: ${YOLO_DEVICE:-0}
+      INDUSTRIAL_AGENT_CAS_ROOT: /var/lib/industrial-agent/cas
+    volumes:
+      - ${YOLO_MODEL_FILE:?required}:/models/yolo/model.pt:ro
+      - ${INDUSTRIAL_AGENT_CAS_DIR:?required}:/var/lib/industrial-agent/cas:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped

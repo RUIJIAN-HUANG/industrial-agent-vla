@@ -2,7 +2,8 @@
 
 负责人：F
 
-当前状态：合同与客户端骨架已实现；生产模型运行时和权重不在仓库中。
+当前状态：HTTP 服务、Ultralytics 运行时适配器和 Isaac 三相机探针已接入；
+生产权重仍由部署方通过只读挂载提供，不进入仓库。
 
 本目录是第四个 Agent 的独立部署边界，也是同步调用、失败非门控的评分
 sidecar。服务每次只检测一张不可变相机帧，不调用 π0.5 或 OpenVLA-OFT，
@@ -88,3 +89,66 @@ transport，使 HTTP 依赖留在 Supervisor 核心之外。
 同帧关联和故障注入测试。
 
 不要向本目录提交模型权重、数据集、缓存、凭据或本机绝对路径。
+
+## 本地运行
+
+从仓库根目录创建隔离环境并安装服务：
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[test]" -e "services/yolo[test]"
+$env:YOLO_USE_MOCK = "1"
+.\.venv\Scripts\yolo-service.exe
+```
+
+默认监听 `127.0.0.1:8103`。开发阶段的 mock 模式会返回合法的空检测包，
+用于验证 `/health`、`/v1/detect`、`/v1/cancel`、CAS 和合同关联。
+
+生产模式需要额外安装模型依赖并提供固定的模型身份：
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e "services/yolo[model]"
+$env:YOLO_USE_MOCK = "0"
+$env:YOLO_CHECKPOINT_PATH = "D:\models\yolo\best.pt"
+$env:YOLO_CHECKPOINT_SHA = "sha256:<64位十六进制摘要>"
+$env:YOLO_CLASS_MAP_SHA = "sha256:0aeb976f6c4bd0c914e84ec1c31c0f820e4c864aa521e4d2dd896d2068429723"
+$env:YOLO_DEVICE = "0"
+.\.venv\Scripts\yolo-service.exe --print-identity
+.\.venv\Scripts\yolo-service.exe
+```
+
+启动时服务会重新计算 `best.pt` 和内置类别表的 SHA256；摘要不匹配或 checkpoint
+类别顺序不是 `part_upright, part_inverted, part_fallen, bin_box, bin_slot` 时拒绝启动。
+模型权重只保存在外部模型目录或挂载卷中，不提交到 Git。
+
+## 容器运行
+
+复制 `.env.example`，填写权重与共享 CAS 的绝对路径以及权重 SHA256，然后运行：
+
+```powershell
+docker compose --env-file services/yolo/.env -f services/yolo/compose.yaml up --build
+```
+
+compose 将 checkpoint 和 CAS 以只读方式挂载，并为 YOLO 预留 NVIDIA GPU。
+CPU 部署可把 `YOLO_DEVICE` 设为 `cpu`，同时按本机 Compose 能力调整 GPU reservation。
+
+## 接入 Isaac 三相机
+
+先启动真实模式 YOLO 服务，再从 Isaac Sim 的 Python 环境运行键盘遥操作冒烟：
+
+```bash
+"$ISAAC_SIM_ROOT/python.sh" simulation/run_keyboard_teleop_smoke.py \
+  --input-mode gui \
+  --arm-id Arm_A \
+  --yolo-base-url http://127.0.0.1:8103 \
+  --require-yolo-detection
+```
+
+脚本在进入交互前捕获同一个在线 `Observation` 的 `CAM_A_TOP`、`CAM_HANDOFF`、
+`CAM_B_TOP` 三张 1280×720 RGB 帧，通过共享 CAS 顺序调用 YOLO，并将已校验的
+关联结果追加到会话目录的 `yolo_camera_probes.jsonl`。默认拒绝 mock 服务；只有做
+纯软件链路测试时才使用 `--allow-mock-yolo`。`checkpoint` 命令会再次采集三相机帧
+并运行探针。
+
+完整 Supervisor 部署还需要把 `yolo-service --print-identity` 输出的三个摘要同步到
+该部署使用的 Agent 配置。不要把摘要占位符当作生产配置。

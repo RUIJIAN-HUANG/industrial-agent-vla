@@ -53,6 +53,6 @@ ignore = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "services/openvla_oft/tests"]
+testpaths = ["tests", "services/openvla_oft/tests", "services/yolo/tests"]
 pythonpath = ["src"]
 addopts = "-ra --strict-config --strict-markers"

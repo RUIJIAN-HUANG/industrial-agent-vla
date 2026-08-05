@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "industrial-yolo-service"
+version = "0.2.0"
+description = "Standalone YOLO perception service."
+requires-python = ">=3.10"
+dependencies = [
+    "industrial-agent-vla==0.1.0",
+    "numpy>=1.24,<3",
+    "Pillow>=10,<13",
+]
+
+[project.optional-dependencies]
+test = [
+    "jsonschema>=4.23,<5",
+    "pytest>=8,<9",
+    "ruff>=0.6,<1",
+]
+model = [
+    "ultralytics==8.4.104",
+]
+
+[project.scripts]
+yolo-service = "yolo_service.app:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"yolo_service.resources" = ["*.json"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
