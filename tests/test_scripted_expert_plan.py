@@ -6,10 +6,15 @@ import numpy as np
 
 from simulation.scripted_expert_plan import (
     P01ExpertTuning,
+    bin_slot_local_centers,
     bounded_world_delta,
     conservative_step_limit,
     first_bin_slot_local_center,
     frozen_success_vote,
+    minimum_xy_radius_along_segment,
+    motion_sample_violation,
+    orthogonal_transfer_waypoints,
+    select_safest_slot_index,
 )
 
 
@@ -41,6 +46,92 @@ class ScriptedExpertPlanTests(unittest.TestCase):
             part_height_m=0.044,
         )
         np.testing.assert_allclose(center, [-0.056, -0.027, -0.007])
+
+    def test_all_six_slot_centers_preserve_frozen_geometry(self) -> None:
+        centers = bin_slot_local_centers(
+            size_m=[0.18, 0.12, 0.07],
+            wall_thickness_m=0.006,
+            bottom_thickness_m=0.006,
+            part_height_m=0.044,
+        )
+        self.assertEqual(len(centers), 6)
+        self.assertEqual(
+            {(round(float(p[0]), 3), round(float(p[1]), 3)) for p in centers},
+            {
+                (-0.056, -0.027),
+                (0.0, -0.027),
+                (0.056, -0.027),
+                (-0.056, 0.027),
+                (0.0, 0.027),
+                (0.056, 0.027),
+            },
+        )
+
+    def test_safest_slot_avoids_cramped_inner_arm_region(self) -> None:
+        candidates = [
+            [-0.406, -0.177, 0.933],
+            [-0.350, -0.177, 0.933],
+            [-0.294, -0.177, 0.933],
+            [-0.406, -0.123, 0.933],
+            [-0.350, -0.123, 0.933],
+            [-0.294, -0.123, 0.933],
+        ]
+        index = select_safest_slot_index(
+            candidates,
+            arm_base_world_m=[-0.55, -0.3, 0.75],
+            soft_work_radius_m=0.65,
+            work_radius_margin_m=0.03,
+        )
+        self.assertEqual(index, 5)
+
+    def test_transfer_route_uses_safer_orthogonal_corner(self) -> None:
+        start = [-0.9, 0.2, 0.923]
+        destination = [-0.294, -0.123, 0.933]
+        base = [-0.55, -0.3, 0.75]
+        waypoints = orthogonal_transfer_waypoints(
+            start,
+            destination,
+            arm_base_world_m=base,
+            transit_clearance_m=0.04,
+        )
+        np.testing.assert_allclose(waypoints[0], [-0.294, 0.2, 0.973])
+        np.testing.assert_allclose(waypoints[1], [-0.294, -0.123, 0.973])
+        np.testing.assert_allclose(waypoints[2], destination)
+        self.assertGreater(
+            minimum_xy_radius_along_segment(start, waypoints[0], arm_base_world_m=base),
+            0.30,
+        )
+
+    def test_motion_sample_guard_rejects_jump_and_divergence(self) -> None:
+        self.assertIsNone(
+            motion_sample_violation(
+                [0.0, 0.0, 0.0],
+                [0.01, 0.0, 0.0],
+                [0.1, 0.0, 0.0],
+                max_actual_step_m=0.06,
+                divergence_tolerance_m=0.004,
+            )
+        )
+        self.assertIn(
+            "jumped",
+            motion_sample_violation(
+                [0.0, 0.0, 0.0],
+                [0.07, 0.0, 0.0],
+                [0.1, 0.0, 0.0],
+                max_actual_step_m=0.06,
+                divergence_tolerance_m=0.004,
+            ),
+        )
+        self.assertIn(
+            "away",
+            motion_sample_violation(
+                [0.0, 0.0, 0.0],
+                [-0.01, 0.0, 0.0],
+                [0.1, 0.0, 0.0],
+                max_actual_step_m=0.06,
+                divergence_tolerance_m=0.004,
+            ),
+        )
 
     def test_success_requires_two_of_exactly_three_fresh_frames(self) -> None:
         self.assertTrue(frozen_success_vote([True, False, True]))

@@ -120,6 +120,7 @@ def main() -> int:
     phase = "launch_simulation_app"
     bridge = None
     rgb_pipeline = None
+    controller = None
     simulation_app = isaac_compat.launch_simulation_app(headless=args.headless)
     try:
         phase = "verify_isaac_version"
@@ -144,10 +145,13 @@ def main() -> int:
         from industrial_agent.image_cas import ImageCas, ImageCasConfig
         from offline_gt import OfflineGtProbe
         from scripted_expert_plan import (
+            bin_slot_local_centers,
             bounded_world_delta,
             conservative_step_limit,
-            first_bin_slot_local_center,
             frozen_success_vote,
+            motion_sample_violation,
+            orthogonal_transfer_waypoints,
+            select_safest_slot_index,
         )
         from simulation.isaac_rgb_pipeline import IsaacRgbObservationPipeline
         from simulation.rgb_cas_bridge import IsaacRgbCasPublisher
@@ -208,7 +212,7 @@ def main() -> int:
             episode_id=episode_id,
             task_id="B-SCRIPTED-EXPERT-P01-SMOKE-NOT-TRAINING",
             instruction=(
-                "TEST only: Arm_A places P01 into the first Bin_01 slot; "
+                "TEST only: Arm_A places P01 into a guarded Bin_01 slot; "
                 "offline_gt is excluded from all Canonical fields"
             ),
             scene_seed=0,
@@ -290,6 +294,7 @@ def main() -> int:
                 float(np.linalg.norm(target_world - initial_position)),
                 tuning.max_cartesian_step_m,
             )
+            consecutive_divergent_steps = 0
             for _ in range(limit):
                 current_position, _ = controller.end_effector_pose("Arm_A")
                 error = target_world - current_position
@@ -310,6 +315,27 @@ def main() -> int:
                     base_delta=base_delta,
                     gripper_open=gripper_open,
                 )
+                after_position, _ = controller.end_effector_pose("Arm_A")
+                violation = motion_sample_violation(
+                    current_position,
+                    after_position,
+                    target_world,
+                    max_actual_step_m=tuning.max_actual_step_m,
+                    divergence_tolerance_m=tuning.divergence_tolerance_m,
+                )
+                if violation is None:
+                    consecutive_divergent_steps = 0
+                elif not violation.startswith("TCP moved away"):
+                    controller.safe_stop(f"{subtask_id}: {violation}")
+                    raise RuntimeError(f"{subtask_id} safety stop: {violation}")
+                else:
+                    consecutive_divergent_steps += 1
+                    if (
+                        consecutive_divergent_steps
+                        >= tuning.max_consecutive_divergent_steps
+                    ):
+                        controller.safe_stop(f"{subtask_id}: {violation}")
+                        raise RuntimeError(f"{subtask_id} safety stop: {violation}")
             final_position, _ = controller.end_effector_pose("Arm_A")
             remaining_error_m = float(np.linalg.norm(target_world - final_position))
             raise RuntimeError(
@@ -333,20 +359,56 @@ def main() -> int:
             [0.0, 0.0, tuning.approach_clearance_m], dtype=float
         )
         part_config = next(part for part in config["parts"] if part["id"] == "P01")
-        slot_local = first_bin_slot_local_center(
+        slot_locals = bin_slot_local_centers(
             size_m=bin_config["size_m"],
             wall_thickness_m=float(bin_config["wall_thickness_m"]),
             bottom_thickness_m=float(bin_config["bottom_thickness_m"]),
             part_height_m=float(part_config["geometry"]["height_m"]),
         )
-        slot_part_center = np.asarray(
-            gt.local_point_to_world("/World/Bins/Bin_01", slot_local), dtype=float
+        slot_part_centers = tuple(
+            np.asarray(
+                gt.local_point_to_world("/World/Bins/Bin_01", slot_local),
+                dtype=float,
+            )
+            for slot_local in slot_locals
         )
-        place_tcp = slot_part_center + np.asarray(
-            [0.0, 0.0, tuning.tcp_grasp_offset_z_m], dtype=float
+        slot_tcp_candidates = tuple(
+            center + np.asarray([0.0, 0.0, tuning.tcp_grasp_offset_z_m], dtype=float)
+            for center in slot_part_centers
         )
+        arm_config = next(robot for robot in config["robots"] if robot["id"] == "Arm_A")
+        arm_base_world = np.asarray(arm_config["base_pose"]["position_m"], dtype=float)
+        slot_index = select_safest_slot_index(
+            slot_tcp_candidates,
+            arm_base_world_m=arm_base_world,
+            soft_work_radius_m=float(arm_config["soft_work_radius_m"]),
+            work_radius_margin_m=tuning.slot_work_radius_margin_m,
+        )
+        slot_local = slot_locals[slot_index]
+        place_tcp = slot_tcp_candidates[slot_index]
         place_approach = place_tcp + np.asarray(
             [0.0, 0.0, tuning.approach_clearance_m], dtype=float
+        )
+        transfer_waypoints = orthogonal_transfer_waypoints(
+            grasp_approach,
+            place_approach,
+            arm_base_world_m=arm_base_world,
+            transit_clearance_m=tuning.transit_clearance_m,
+        )
+        _write_json(
+            offline_gt_root / "p01_motion_plan.json",
+            {
+                "isolation": "offline_gt_only",
+                "canonical_included": False,
+                "slot_index": slot_index,
+                "slot_local_m": slot_local.tolist(),
+                "arm_base_world_m": arm_base_world.tolist(),
+                "grasp_approach_world_m": grasp_approach.tolist(),
+                "place_approach_world_m": place_approach.tolist(),
+                "transfer_waypoints_world_m": [
+                    waypoint.tolist() for waypoint in transfer_waypoints
+                ],
+            },
         )
 
         move_tcp_world(
@@ -365,11 +427,12 @@ def main() -> int:
             target_world=grasp_approach,
             gripper_open=False,
         )
-        move_tcp_world(
-            subtask_id="p01-transfer",
-            target_world=place_approach,
-            gripper_open=False,
-        )
+        for waypoint_index, waypoint in enumerate(transfer_waypoints, start=1):
+            move_tcp_world(
+                subtask_id=f"p01-transfer-{waypoint_index}",
+                target_world=waypoint,
+                gripper_open=False,
+            )
         move_tcp_world(
             subtask_id="p01-place",
             target_world=place_tcp,
@@ -469,6 +532,11 @@ def main() -> int:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if task_succeeded else 2
     except BaseException as exc:
+        if controller is not None:
+            try:
+                controller.safe_stop(f"P01 smoke failed during {phase}: {exc}")
+            except BaseException:
+                pass
         if bridge is not None:
             try:
                 bridge.abort()
