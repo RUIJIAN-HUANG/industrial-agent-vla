@@ -25,6 +25,14 @@ class P01ExpertTuning:
     grasp_probe_lift_m: float = 0.04
     minimum_grasp_follow_ratio: float = 0.60
     maximum_grasp_follow_error_m: float = 0.015
+    grasp_offset_candidates_m: tuple[float, ...] = (
+        0.105,
+        0.090,
+        0.075,
+        0.060,
+        0.045,
+        0.030,
+    )
     transit_clearance_m: float = 0.04
     slot_work_radius_margin_m: float = 0.03
     max_actual_step_m: float = 0.06
@@ -60,26 +68,11 @@ class P01ExpertTuning:
             raise ValueError("minimum_grasp_follow_ratio must be in [0.5, 0.9]")
         if not 0.005 <= self.maximum_grasp_follow_error_m <= 0.02:
             raise ValueError("maximum_grasp_follow_error_m must be in [0.005, 0.02]")
-
-
-def measured_tcp_to_grasp_center_offset(
-    tcp_world_m: Sequence[float],
-    grasp_center_world_m: Sequence[float],
-) -> np.ndarray:
-    """Return a guarded TCP-minus-physical-grasp-center calibration vector."""
-
-    tcp = np.asarray(tcp_world_m, dtype=float)
-    center = np.asarray(grasp_center_world_m, dtype=float)
-    if tcp.shape != (3,) or center.shape != (3,):
-        raise ValueError("TCP and grasp center must be 3-D")
-    offset = tcp - center
-    if not np.all(np.isfinite(offset)):
-        raise ValueError("measured grasp offset must be finite")
-    if float(np.linalg.norm(offset[:2])) > 0.05:
-        raise ValueError("measured grasp center is more than 5 cm laterally from TCP")
-    if not -0.03 <= float(offset[2]) <= 0.18:
-        raise ValueError("measured vertical grasp offset is outside [-0.03, 0.18] m")
-    return offset
+        candidates = self.grasp_offset_candidates_m
+        if not candidates or any(not 0.03 <= value <= 0.12 for value in candidates):
+            raise ValueError("grasp offsets must be in [0.03, 0.12] m")
+        if any(left <= right for left, right in zip(candidates, candidates[1:])):
+            raise ValueError("grasp offsets must be strictly high-to-low")
 
 
 def grasp_follow_report(

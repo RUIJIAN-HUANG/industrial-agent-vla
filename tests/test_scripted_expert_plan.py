@@ -12,7 +12,6 @@ from simulation.scripted_expert_plan import (
     first_bin_slot_local_center,
     frozen_success_vote,
     grasp_follow_report,
-    measured_tcp_to_grasp_center_offset,
     minimum_xy_radius_along_segment,
     motion_sample_violation,
     orthogonal_transfer_waypoints,
@@ -24,12 +23,16 @@ class ScriptedExpertPlanTests(unittest.TestCase):
     def test_default_tuning_is_valid(self) -> None:
         P01ExpertTuning().validate()
 
-    def test_measured_grasp_offset_is_tcp_minus_finger_center(self) -> None:
-        offset = measured_tcp_to_grasp_center_offset(
-            [-0.5, 0.2, 1.0],
-            [-0.5, 0.2, 0.91],
+    def test_grasp_search_is_bounded_and_high_to_low(self) -> None:
+        candidates = P01ExpertTuning().grasp_offset_candidates_m
+        self.assertEqual(candidates, (0.105, 0.090, 0.075, 0.060, 0.045, 0.030))
+        self.assertTrue(
+            all(left > right for left, right in zip(candidates, candidates[1:]))
         )
-        np.testing.assert_allclose(offset, [0.0, 0.0, 0.09])
+
+    def test_grasp_search_rejects_unsafe_candidate_order(self) -> None:
+        with self.assertRaisesRegex(ValueError, "strictly high-to-low"):
+            P01ExpertTuning(grasp_offset_candidates_m=(0.06, 0.075)).validate()
 
     def test_probe_lift_rejects_empty_grasp(self) -> None:
         report = grasp_follow_report(
