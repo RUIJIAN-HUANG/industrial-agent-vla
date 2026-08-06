@@ -23,16 +23,14 @@ class ScriptedExpertPlanTests(unittest.TestCase):
     def test_default_tuning_is_valid(self) -> None:
         P01ExpertTuning().validate()
 
-    def test_grasp_search_is_bounded_and_high_to_low(self) -> None:
-        candidates = P01ExpertTuning().grasp_offset_candidates_m
-        self.assertEqual(candidates, (0.105, 0.090, 0.075, 0.060, 0.045, 0.030))
-        self.assertTrue(
-            all(left > right for left, right in zip(candidates, candidates[1:]))
-        )
+    def test_grasp_uses_one_explicit_geometric_offset(self) -> None:
+        tuning = P01ExpertTuning()
+        self.assertEqual(tuning.grasp_tcp_center_offset_m, 0.060)
+        self.assertEqual(tuning.max_rotation_steps, 24)
 
-    def test_grasp_search_rejects_unsafe_candidate_order(self) -> None:
-        with self.assertRaisesRegex(ValueError, "strictly high-to-low"):
-            P01ExpertTuning(grasp_offset_candidates_m=(0.06, 0.075)).validate()
+    def test_grasp_rejects_unsafe_offset(self) -> None:
+        with self.assertRaisesRegex(ValueError, "grasp_tcp_center_offset_m"):
+            P01ExpertTuning(grasp_tcp_center_offset_m=0.01).validate()
 
     def test_probe_lift_rejects_empty_grasp(self) -> None:
         report = grasp_follow_report(

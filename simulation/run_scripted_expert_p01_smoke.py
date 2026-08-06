@@ -260,15 +260,23 @@ def main() -> int:
             subtask_id: str,
             base_delta: np.ndarray,
             gripper_open: bool,
+            base_rotation_delta: np.ndarray | None = None,
         ) -> None:
             nonlocal action_index
+            rotation = (
+                np.zeros(3, dtype=float)
+                if base_rotation_delta is None
+                else np.asarray(base_rotation_delta, dtype=float)
+            )
+            if rotation.shape != (3,) or not np.all(np.isfinite(rotation)):
+                raise ValueError("base_rotation_delta must be a finite 3-D vector")
             values = [
                 float(base_delta[0]),
                 float(base_delta[1]),
                 float(base_delta[2]),
-                0.0,
-                0.0,
-                0.0,
+                float(rotation[0]),
+                float(rotation[1]),
+                float(rotation[2]),
                 1.0 if gripper_open else 0.0,
             ]
             action = ActionStep.from_sequence(values, duration_ms=100)
@@ -341,6 +349,45 @@ def main() -> int:
                 f"Arm_A did not reach {subtask_id} within {limit} steps; initial_world_m={initial_position.tolist()}; target_world_m={target_world.tolist()}; final_world_m={final_position.tolist()}; remaining_error_m={remaining_error_m:.6f}"
             )
 
+        def align_tcp_top_down(*, subtask_id: str) -> dict[str, Any]:
+            """Align the gripper Z axis downward before entering the grasp zone."""
+
+            target_world_rotation = np.asarray(
+                [[1.0, 0.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, -1.0]],
+                dtype=float,
+            )
+            initial_error = controller.world_orientation_error_in_base(
+                "Arm_A", target_world_rotation
+            )
+            for step_index in range(tuning.max_rotation_steps):
+                error = controller.world_orientation_error_in_base(
+                    "Arm_A", target_world_rotation
+                )
+                error_norm = float(np.linalg.norm(error))
+                if error_norm <= tuning.rotation_tolerance_rad:
+                    return {
+                        "target_world_rotation": target_world_rotation.tolist(),
+                        "initial_error_rad": float(np.linalg.norm(initial_error)),
+                        "final_error_rad": error_norm,
+                        "steps": step_index,
+                    }
+                rotation_delta = error
+                if error_norm > tuning.max_rotation_step_rad:
+                    rotation_delta = error * (tuning.max_rotation_step_rad / error_norm)
+                execute(
+                    subtask_id=subtask_id,
+                    base_delta=np.zeros(3, dtype=float),
+                    base_rotation_delta=rotation_delta,
+                    gripper_open=True,
+                )
+            final_error = controller.world_orientation_error_in_base(
+                "Arm_A", target_world_rotation
+            )
+            raise RuntimeError(
+                f"Arm_A did not reach top-down grasp orientation; "
+                f"remaining_error_rad={float(np.linalg.norm(final_error)):.6f}"
+            )
+
         def hold(*, subtask_id: str, gripper_open: bool, steps: int) -> None:
             for _ in range(steps):
                 execute(
@@ -364,9 +411,7 @@ def main() -> int:
             )
             for slot_local in slot_locals
         )
-        nominal_offset_m = tuning.grasp_offset_candidates_m[
-            len(tuning.grasp_offset_candidates_m) // 2
-        ]
+        nominal_offset_m = tuning.grasp_tcp_center_offset_m
         slot_tcp_candidates = tuple(
             center + np.asarray([0.0, 0.0, nominal_offset_m], dtype=float)
             for center in slot_part_centers
@@ -380,117 +425,110 @@ def main() -> int:
             work_radius_margin_m=tuning.slot_work_radius_margin_m,
         )
         slot_local = slot_locals[slot_index]
-        grasp_attempts: list[dict[str, Any]] = []
-        chosen_grasp_offset_m: float | None = None
-        carried_tcp_to_part_center: np.ndarray | None = None
-        grasp_approach: np.ndarray | None = None
         verification_path = offline_gt_root / "p01_grasp_verification.json"
-        for attempt_index, grasp_offset_m in enumerate(
-            tuning.grasp_offset_candidates_m, start=1
-        ):
-            live_part_center = np.asarray(
-                gt.world_position("/World/Parts/P01"), dtype=float
-            )
-            grasp_tcp = live_part_center + np.asarray(
-                [0.0, 0.0, grasp_offset_m], dtype=float
-            )
-            attempt_approach = grasp_tcp + np.asarray(
-                [0.0, 0.0, tuning.approach_clearance_m], dtype=float
-            )
-            move_tcp_world(
-                subtask_id=f"p01-grasp-{attempt_index}-approach",
-                target_world=attempt_approach,
-                gripper_open=True,
-            )
-            move_tcp_world(
-                subtask_id=f"p01-grasp-{attempt_index}-descend",
-                target_world=grasp_tcp,
-                gripper_open=True,
-            )
-            hold(
-                subtask_id=f"p01-grasp-{attempt_index}-close",
-                gripper_open=False,
-                steps=tuning.close_steps,
-            )
-            probe_tcp_before, _ = controller.end_effector_pose("Arm_A")
-            probe_part_before = np.asarray(
-                gt.world_position("/World/Parts/P01"), dtype=float
-            )
-            probe_target = probe_tcp_before + np.asarray(
-                [0.0, 0.0, tuning.grasp_probe_lift_m], dtype=float
-            )
-            move_tcp_world(
-                subtask_id=f"p01-grasp-{attempt_index}-probe-lift",
-                target_world=probe_target,
-                gripper_open=False,
-            )
-            probe_tcp_after, _ = controller.end_effector_pose("Arm_A")
-            probe_part_after = np.asarray(
-                gt.world_position("/World/Parts/P01"), dtype=float
-            )
-            grasp_report = grasp_follow_report(
-                tcp_before_world_m=probe_tcp_before,
-                tcp_after_world_m=probe_tcp_after,
-                part_before_world_m=probe_part_before,
-                part_after_world_m=probe_part_after,
-                minimum_follow_ratio=tuning.minimum_grasp_follow_ratio,
-                maximum_follow_error_m=tuning.maximum_grasp_follow_error_m,
-            )
-            grasp_report.update(
-                {
-                    "attempt_index": attempt_index,
-                    "tcp_center_offset_z_m": float(grasp_offset_m),
-                    "tcp_target_world_m": grasp_tcp.tolist(),
-                    "tcp_before_world_m": probe_tcp_before.tolist(),
-                    "tcp_after_world_m": probe_tcp_after.tolist(),
-                    "part_before_world_m": probe_part_before.tolist(),
-                    "part_after_world_m": probe_part_after.tolist(),
-                }
-            )
-            grasp_attempts.append(grasp_report)
-            _write_json(
-                verification_path,
-                {
-                    "isolation": "offline_gt_only",
-                    "canonical_included": False,
-                    "strategy": "bounded_high_to_low_probe_lift_search",
-                    "candidate_offsets_m": list(tuning.grasp_offset_candidates_m),
-                    "passed": bool(grasp_report["pass"]),
-                    "attempts": grasp_attempts,
-                },
-            )
-            if grasp_report["pass"]:
-                chosen_grasp_offset_m = float(grasp_offset_m)
-                carried_tcp_to_part_center = probe_tcp_after - probe_part_after
-                remaining_clearance_m = max(
-                    0.02,
-                    tuning.approach_clearance_m - tuning.grasp_probe_lift_m,
-                )
-                grasp_approach = probe_tcp_after + np.asarray(
-                    [0.0, 0.0, remaining_clearance_m], dtype=float
-                )
-                move_tcp_world(
-                    subtask_id="p01-lift-after-verified-grasp",
-                    target_world=grasp_approach,
-                    gripper_open=False,
-                )
-                break
-            hold(
-                subtask_id=f"p01-grasp-{attempt_index}-release-failed-probe",
-                gripper_open=True,
-                steps=tuning.release_steps,
+        live_part_center = np.asarray(
+            gt.world_position("/World/Parts/P01"), dtype=float
+        )
+        grasp_tcp = live_part_center + np.asarray(
+            [0.0, 0.0, nominal_offset_m], dtype=float
+        )
+        grasp_approach = grasp_tcp + np.asarray(
+            [0.0, 0.0, tuning.approach_clearance_m], dtype=float
+        )
+        move_tcp_world(
+            subtask_id="p01-grasp-approach-position",
+            target_world=grasp_approach,
+            gripper_open=True,
+        )
+        orientation_report = align_tcp_top_down(subtask_id="p01-grasp-align-top-down")
+        move_tcp_world(
+            subtask_id="p01-grasp-recenter-after-orientation",
+            target_world=grasp_approach,
+            gripper_open=True,
+        )
+        move_tcp_world(
+            subtask_id="p01-grasp-single-descend",
+            target_world=grasp_tcp,
+            gripper_open=True,
+        )
+        hold(
+            subtask_id="p01-grasp-single-close",
+            gripper_open=False,
+            steps=tuning.close_steps,
+        )
+        finger_positions_m = controller.gripper_joint_positions("Arm_A")
+        finger_obstruction_detected = bool(
+            np.max(finger_positions_m) >= tuning.minimum_closed_finger_position_m
+        )
+        probe_tcp_before, _ = controller.end_effector_pose("Arm_A")
+        probe_part_before = np.asarray(
+            gt.world_position("/World/Parts/P01"), dtype=float
+        )
+        probe_target = probe_tcp_before + np.asarray(
+            [0.0, 0.0, tuning.grasp_probe_lift_m], dtype=float
+        )
+        move_tcp_world(
+            subtask_id="p01-grasp-single-probe-lift",
+            target_world=probe_target,
+            gripper_open=False,
+        )
+        probe_tcp_after, _ = controller.end_effector_pose("Arm_A")
+        probe_part_after = np.asarray(
+            gt.world_position("/World/Parts/P01"), dtype=float
+        )
+        grasp_report = grasp_follow_report(
+            tcp_before_world_m=probe_tcp_before,
+            tcp_after_world_m=probe_tcp_after,
+            part_before_world_m=probe_part_before,
+            part_after_world_m=probe_part_after,
+            minimum_follow_ratio=tuning.minimum_grasp_follow_ratio,
+            maximum_follow_error_m=tuning.maximum_grasp_follow_error_m,
+        )
+        grasp_report.update(
+            {
+                "tcp_center_offset_z_m": float(nominal_offset_m),
+                "tcp_target_world_m": grasp_tcp.tolist(),
+                "tcp_before_world_m": probe_tcp_before.tolist(),
+                "tcp_after_world_m": probe_tcp_after.tolist(),
+                "part_before_world_m": probe_part_before.tolist(),
+                "part_after_world_m": probe_part_after.tolist(),
+                "finger_joint_positions_m": finger_positions_m.tolist(),
+                "finger_obstruction_detected": finger_obstruction_detected,
+                "orientation": orientation_report,
+            }
+        )
+        grasp_passed = bool(grasp_report["pass"]) and finger_obstruction_detected
+        _write_json(
+            verification_path,
+            {
+                "isolation": "offline_gt_only",
+                "canonical_included": False,
+                "strategy": "single_top_down_finger_and_lift_verified_grasp",
+                "passed": grasp_passed,
+                "attempt": grasp_report,
+            },
+        )
+        if not grasp_passed:
+            controller.safe_stop("single verified P01 grasp failed")
+            raise RuntimeError(
+                "GRASP_FAILED: single top-down grasp failed finger/lift "
+                "verification; see offline_gt/p01_grasp_verification.json"
             )
 
-        if (
-            chosen_grasp_offset_m is None
-            or carried_tcp_to_part_center is None
-            or grasp_approach is None
-        ):
-            controller.safe_stop("bounded P01 grasp search exhausted")
-            raise RuntimeError(
-                "GRASP_FAILED: bounded high-to-low search exhausted; "
-                "see offline_gt/p01_grasp_verification.json"
-            )
+        chosen_grasp_offset_m = float(nominal_offset_m)
+        carried_tcp_to_part_center = probe_tcp_after - probe_part_after
+        remaining_clearance_m = max(
+            0.02,
+            tuning.approach_clearance_m - tuning.grasp_probe_lift_m,
+        )
+        grasp_approach = probe_tcp_after + np.asarray(
+            [0.0, 0.0, remaining_clearance_m], dtype=float
+        )
+        move_tcp_world(
+            subtask_id="p01-lift-after-verified-grasp",
+            target_world=grasp_approach,
+            gripper_open=False,
+        )
 
         place_tcp = slot_part_centers[slot_index] + carried_tcp_to_part_center
         place_approach = place_tcp + np.asarray(
@@ -510,7 +548,7 @@ def main() -> int:
                 "slot_index": slot_index,
                 "slot_local_m": slot_local.tolist(),
                 "arm_base_world_m": arm_base_world.tolist(),
-                "grasp_strategy": "bounded_high_to_low_probe_lift_search",
+                "grasp_strategy": "single_top_down_finger_and_lift_verified_grasp",
                 "chosen_grasp_offset_z_m": chosen_grasp_offset_m,
                 "verified_tcp_to_part_center_m": carried_tcp_to_part_center.tolist(),
                 "grasp_approach_world_m": grasp_approach.tolist(),

@@ -15,10 +15,10 @@ from simulation.isaac_franka_controller import (
     IsaacSimFrankaController,
     _gripper_opening_m,
     _position_targets_match,
+    _quaternion_to_rotvec,
     _rotate_vector,
     _rotation_matrix_to_quaternion,
 )
-from simulation.run_isaac_adapter_smoke import _quaternion_to_rotvec
 
 
 class IsaacFrankaControllerMathTests(unittest.TestCase):
@@ -246,6 +246,27 @@ class GripperMappingTests(unittest.TestCase):
             self.assertEqual(_gripper_opening_m(closed), 0.0)
         for opened in (0.5, 1.0):
             self.assertEqual(_gripper_opening_m(opened), 0.04)
+
+    def test_live_finger_positions_are_read_by_joint_name(self):
+        class Arm:
+            dof_names = [
+                "panda_joint1",
+                "panda_finger_joint2",
+                "panda_joint2",
+                "panda_finger_joint1",
+            ]
+
+            @staticmethod
+            def get_joint_positions():
+                return np.asarray([0.2, 0.012, -0.3, 0.011])
+
+        controller = object.__new__(IsaacSimFrankaController)
+        controller._arms = {"Arm_A": Arm()}
+        controller._owner_thread_id = __import__("threading").get_ident()
+        np.testing.assert_allclose(
+            controller.gripper_joint_positions("Arm_A"),
+            [0.011, 0.012],
+        )
 
 
 class _FakeArticulationAction:

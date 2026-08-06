@@ -8,7 +8,7 @@ writes them to the selected ``SingleArticulation``.
 from __future__ import annotations
 
 from collections.abc import Callable
-from math import cos, isclose, sin, sqrt
+from math import atan2, cos, isclose, sin, sqrt
 from threading import Event, Lock, get_ident
 from typing import Any, Mapping
 
@@ -54,6 +54,25 @@ def _rotvec_quaternion(rotvec: np.ndarray) -> np.ndarray:
         return np.asarray([1.0, 0.0, 0.0, 0.0], dtype=float)
     axis = rotvec / angle
     return np.concatenate((np.asarray([cos(angle / 2.0)]), axis * sin(angle / 2.0)))
+
+
+def _quaternion_to_rotvec(quaternion: np.ndarray) -> np.ndarray:
+    """Convert a wxyz quaternion to the shortest axis-angle vector."""
+
+    quaternion = np.asarray(quaternion, dtype=float)
+    if quaternion.shape != (4,) or not np.all(np.isfinite(quaternion)):
+        raise ValueError("quaternion must contain four finite values")
+    norm = float(np.linalg.norm(quaternion))
+    if norm <= 0.0:
+        raise ValueError("quaternion cannot have zero norm")
+    quaternion = quaternion / norm
+    if quaternion[0] < 0.0:
+        quaternion = -quaternion
+    vector_norm = float(np.linalg.norm(quaternion[1:]))
+    if vector_norm < 1e-12:
+        return np.zeros(3, dtype=float)
+    angle = 2.0 * atan2(vector_norm, float(quaternion[0]))
+    return quaternion[1:] * (angle / vector_norm)
 
 
 def _rotate_vector(quaternion: np.ndarray, vector: np.ndarray) -> np.ndarray:
@@ -332,6 +351,49 @@ class IsaacSimFrankaController:
                 f"Isaac returned an invalid base-frame TCP orientation for {arm_id}"
             )
         return base_frame_position, base_frame_orientation / norm
+
+    def world_orientation_error_in_base(
+        self,
+        arm_id: str,
+        target_world_rotation: np.ndarray,
+    ) -> np.ndarray:
+        """Return the base-frame rotvec that aligns TCP with a world target."""
+
+        _, current_world_rotation = self.end_effector_pose(arm_id)
+        target_world = _rotation_matrix_to_quaternion(target_world_rotation)
+        current_world = _rotation_matrix_to_quaternion(current_world_rotation)
+        delta_world = _quat_multiply(target_world, _quat_inverse(current_world))
+        _, base_orientation = self._arms[arm_id].get_world_pose()
+        base_orientation = np.asarray(base_orientation, dtype=float)
+        delta_base = _quat_multiply(
+            _quat_multiply(_quat_inverse(base_orientation), delta_world),
+            base_orientation,
+        )
+        return _quaternion_to_rotvec(delta_base)
+
+    def gripper_joint_positions(self, arm_id: str) -> np.ndarray:
+        """Read both live finger positions in metres from the articulation."""
+
+        self._require_owner_thread()
+        if arm_id not in self._arms:
+            raise RuntimeError(f"unknown Isaac Franka arm: {arm_id!r}")
+        arm = self._arms[arm_id]
+        names = self._joint_names(arm)
+        try:
+            indices = [names.index(name) for name in _FINGER_JOINTS]
+        except ValueError as exc:
+            raise RuntimeError(
+                f"{arm_id} Franka finger joints are missing from {names!r}"
+            ) from exc
+        positions = np.asarray(arm.get_joint_positions(), dtype=float)
+        if positions.ndim != 1 or positions.size <= max(indices):
+            raise RuntimeError(f"Isaac returned invalid joint positions for {arm_id}")
+        fingers = positions[indices]
+        if not np.all(np.isfinite(fingers)):
+            raise RuntimeError(
+                f"Isaac returned non-finite finger positions for {arm_id}"
+            )
+        return fingers.copy()
 
     def execute_action(self, action: ActionStep, *, arm_id: str) -> None:
         self._require_owner_thread()

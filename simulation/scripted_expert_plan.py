@@ -25,14 +25,11 @@ class P01ExpertTuning:
     grasp_probe_lift_m: float = 0.04
     minimum_grasp_follow_ratio: float = 0.60
     maximum_grasp_follow_error_m: float = 0.015
-    grasp_offset_candidates_m: tuple[float, ...] = (
-        0.105,
-        0.090,
-        0.075,
-        0.060,
-        0.045,
-        0.030,
-    )
+    grasp_tcp_center_offset_m: float = 0.060
+    max_rotation_step_rad: float = 0.20
+    rotation_tolerance_rad: float = 0.035
+    max_rotation_steps: int = 24
+    minimum_closed_finger_position_m: float = 0.001
     transit_clearance_m: float = 0.04
     slot_work_radius_margin_m: float = 0.03
     max_actual_step_m: float = 0.06
@@ -68,11 +65,16 @@ class P01ExpertTuning:
             raise ValueError("minimum_grasp_follow_ratio must be in [0.5, 0.9]")
         if not 0.005 <= self.maximum_grasp_follow_error_m <= 0.02:
             raise ValueError("maximum_grasp_follow_error_m must be in [0.005, 0.02]")
-        candidates = self.grasp_offset_candidates_m
-        if not candidates or any(not 0.03 <= value <= 0.12 for value in candidates):
-            raise ValueError("grasp offsets must be in [0.03, 0.12] m")
-        if any(left <= right for left, right in zip(candidates, candidates[1:])):
-            raise ValueError("grasp offsets must be strictly high-to-low")
+        if not 0.03 <= self.grasp_tcp_center_offset_m <= 0.12:
+            raise ValueError("grasp_tcp_center_offset_m must be in [0.03, 0.12]")
+        if not 0.05 <= self.max_rotation_step_rad <= 0.30:
+            raise ValueError("max_rotation_step_rad must be in [0.05, 0.30]")
+        if not 0.01 <= self.rotation_tolerance_rad <= 0.05:
+            raise ValueError("rotation_tolerance_rad must be in [0.01, 0.05]")
+        if self.max_rotation_steps < 1:
+            raise ValueError("max_rotation_steps must be positive")
+        if not 0.0 <= self.minimum_closed_finger_position_m <= 0.02:
+            raise ValueError("minimum_closed_finger_position_m must be in [0.0, 0.02]")
 
 
 def grasp_follow_report(
