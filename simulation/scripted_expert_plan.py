@@ -77,6 +77,56 @@ class P01ExpertTuning:
             raise ValueError("minimum_closed_finger_position_m must be in [0.0, 0.02]")
 
 
+def top_down_tilt_error_rad(current_world_rotation: Sequence[Sequence[float]]) -> float:
+    """Return tool-Z tilt from world down, deliberately ignoring tool yaw.
+
+    P01 is an upright cylinder, so rotation about the vertical approach axis is
+    not part of the grasp objective.  Measuring full SO(3) error would impose an
+    arbitrary wrist yaw and can make an otherwise reachable grasp fail.
+    """
+
+    current = np.asarray(current_world_rotation, dtype=float)
+    if current.shape != (3, 3) or not np.all(np.isfinite(current)):
+        raise ValueError("current_world_rotation must be a finite 3-by-3 matrix")
+    tool_z = current[:, 2]
+    norm = float(np.linalg.norm(tool_z))
+    if norm <= 1e-12:
+        raise ValueError("tool Z axis must be non-zero")
+    cosine = float(np.clip(np.dot(tool_z / norm, [0.0, 0.0, -1.0]), -1.0, 1.0))
+    return float(np.arccos(cosine))
+
+
+def yaw_preserving_top_down_rotation(
+    current_world_rotation: Sequence[Sequence[float]],
+) -> np.ndarray:
+    """Build the nearest top-down target while preserving current wrist yaw.
+
+    The returned right-handed rotation has tool Z aligned with world ``-Z``.
+    Its tool X heading is the horizontal projection of the current tool X, so
+    the planner corrects tilt without asking the redundant Panda wrist to turn
+    toward a fixed, task-irrelevant yaw.
+    """
+
+    current = np.asarray(current_world_rotation, dtype=float)
+    if current.shape != (3, 3) or not np.all(np.isfinite(current)):
+        raise ValueError("current_world_rotation must be a finite 3-by-3 matrix")
+    world_down = np.asarray([0.0, 0.0, -1.0], dtype=float)
+    tool_x = current[:, 0].copy()
+    tool_x[2] = 0.0
+    if float(np.linalg.norm(tool_x)) <= 1e-9:
+        projected_y = current[:, 1].copy()
+        projected_y[2] = 0.0
+        if float(np.linalg.norm(projected_y)) <= 1e-9:
+            tool_x = np.asarray([1.0, 0.0, 0.0], dtype=float)
+        else:
+            projected_y /= np.linalg.norm(projected_y)
+            tool_x = np.cross(projected_y, world_down)
+    tool_x /= np.linalg.norm(tool_x)
+    tool_y = np.cross(world_down, tool_x)
+    tool_y /= np.linalg.norm(tool_y)
+    return np.column_stack((tool_x, tool_y, world_down))
+
+
 def grasp_follow_report(
     *,
     tcp_before_world_m: Sequence[float],

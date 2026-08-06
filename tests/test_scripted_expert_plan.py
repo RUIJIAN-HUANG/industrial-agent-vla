@@ -16,6 +16,8 @@ from simulation.scripted_expert_plan import (
     motion_sample_violation,
     orthogonal_transfer_waypoints,
     select_safest_slot_index,
+    top_down_tilt_error_rad,
+    yaw_preserving_top_down_rotation,
 )
 
 
@@ -31,6 +33,45 @@ class ScriptedExpertPlanTests(unittest.TestCase):
     def test_grasp_rejects_unsafe_offset(self) -> None:
         with self.assertRaisesRegex(ValueError, "grasp_tcp_center_offset_m"):
             P01ExpertTuning(grasp_tcp_center_offset_m=0.01).validate()
+
+    def test_top_down_tilt_ignores_cylinder_irrelevant_yaw(self) -> None:
+        for yaw_rad in (0.0, 0.4, -1.7, 3.0):
+            cosine = np.cos(yaw_rad)
+            sine = np.sin(yaw_rad)
+            rotation = np.asarray(
+                [
+                    [cosine, sine, 0.0],
+                    [sine, -cosine, 0.0],
+                    [0.0, 0.0, -1.0],
+                ]
+            )
+            self.assertAlmostEqual(top_down_tilt_error_rad(rotation), 0.0)
+
+    def test_top_down_target_is_rigid_yaw_preserving_and_points_down(self) -> None:
+        yaw_rad = 0.63
+        tilt_rad = 0.28
+        yaw = np.asarray(
+            [
+                [np.cos(yaw_rad), -np.sin(yaw_rad), 0.0],
+                [np.sin(yaw_rad), np.cos(yaw_rad), 0.0],
+                [0.0, 0.0, 1.0],
+            ]
+        )
+        tilt = np.asarray(
+            [
+                [1.0, 0.0, 0.0],
+                [0.0, np.cos(tilt_rad), -np.sin(tilt_rad)],
+                [0.0, np.sin(tilt_rad), np.cos(tilt_rad)],
+            ]
+        )
+        current = yaw @ tilt
+        target = yaw_preserving_top_down_rotation(current)
+        np.testing.assert_allclose(target.T @ target, np.eye(3), atol=1e-12)
+        self.assertAlmostEqual(float(np.linalg.det(target)), 1.0)
+        np.testing.assert_allclose(target[:, 2], [0.0, 0.0, -1.0])
+        current_x_heading = current[:2, 0] / np.linalg.norm(current[:2, 0])
+        np.testing.assert_allclose(target[:2, 0], current_x_heading)
+        self.assertAlmostEqual(top_down_tilt_error_rad(target), 0.0)
 
     def test_probe_lift_rejects_empty_grasp(self) -> None:
         report = grasp_follow_report(

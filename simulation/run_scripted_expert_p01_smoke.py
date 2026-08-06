@@ -151,6 +151,8 @@ def main() -> int:
             motion_sample_violation,
             orthogonal_transfer_waypoints,
             select_safest_slot_index,
+            top_down_tilt_error_rad,
+            yaw_preserving_top_down_rotation,
         )
         from simulation.isaac_rgb_pipeline import IsaacRgbObservationPipeline
         from simulation.rgb_cas_bridge import IsaacRgbCasPublisher
@@ -350,27 +352,28 @@ def main() -> int:
             )
 
         def align_tcp_top_down(*, subtask_id: str) -> dict[str, Any]:
-            """Align the gripper Z axis downward before entering the grasp zone."""
+            """Align tool Z downward without constraining cylinder-irrelevant yaw."""
 
-            target_world_rotation = np.asarray(
-                [[1.0, 0.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, -1.0]],
-                dtype=float,
-            )
-            initial_error = controller.world_orientation_error_in_base(
-                "Arm_A", target_world_rotation
-            )
+            _, initial_rotation = controller.end_effector_pose("Arm_A")
+            initial_tilt_error = top_down_tilt_error_rad(initial_rotation)
             for step_index in range(tuning.max_rotation_steps):
+                _, current_rotation = controller.end_effector_pose("Arm_A")
+                tilt_error = top_down_tilt_error_rad(current_rotation)
+                target_world_rotation = yaw_preserving_top_down_rotation(
+                    current_rotation
+                )
+                if tilt_error <= tuning.rotation_tolerance_rad:
+                    return {
+                        "objective": "tool_z_to_world_minus_z_yaw_free",
+                        "target_world_rotation": target_world_rotation.tolist(),
+                        "initial_tilt_error_rad": initial_tilt_error,
+                        "final_tilt_error_rad": tilt_error,
+                        "steps": step_index,
+                    }
                 error = controller.world_orientation_error_in_base(
                     "Arm_A", target_world_rotation
                 )
                 error_norm = float(np.linalg.norm(error))
-                if error_norm <= tuning.rotation_tolerance_rad:
-                    return {
-                        "target_world_rotation": target_world_rotation.tolist(),
-                        "initial_error_rad": float(np.linalg.norm(initial_error)),
-                        "final_error_rad": error_norm,
-                        "steps": step_index,
-                    }
                 rotation_delta = error
                 if error_norm > tuning.max_rotation_step_rad:
                     rotation_delta = error * (tuning.max_rotation_step_rad / error_norm)
@@ -380,12 +383,11 @@ def main() -> int:
                     base_rotation_delta=rotation_delta,
                     gripper_open=True,
                 )
-            final_error = controller.world_orientation_error_in_base(
-                "Arm_A", target_world_rotation
-            )
+            _, final_rotation = controller.end_effector_pose("Arm_A")
+            final_tilt_error = top_down_tilt_error_rad(final_rotation)
             raise RuntimeError(
-                f"Arm_A did not reach top-down grasp orientation; "
-                f"remaining_error_rad={float(np.linalg.norm(final_error)):.6f}"
+                "Arm_A did not align tool Z with world -Z; "
+                f"remaining_tilt_error_rad={final_tilt_error:.6f}"
             )
 
         def hold(*, subtask_id: str, gripper_open: bool, steps: int) -> None:
