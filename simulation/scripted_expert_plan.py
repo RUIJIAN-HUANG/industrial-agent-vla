@@ -25,18 +25,19 @@ class P01ExpertTuning:
     grasp_probe_lift_m: float = 0.04
     minimum_grasp_follow_ratio: float = 0.60
     maximum_grasp_follow_error_m: float = 0.015
-    grasp_tcp_center_offset_m: float = 0.060
+    physical_pinch_alignment_tolerance_m: float = 0.006
+    maximum_finger_center_separation_m: float = 0.15
+    minimum_finger_contact_ratio: float = 0.60
     max_rotation_step_rad: float = 0.20
     rotation_tolerance_rad: float = 0.035
     max_rotation_steps: int = 24
-    minimum_closed_finger_position_m: float = 0.001
     transit_clearance_m: float = 0.04
     slot_work_radius_margin_m: float = 0.03
     max_actual_step_m: float = 0.06
     divergence_tolerance_m: float = 0.004
     max_consecutive_divergent_steps: int = 2
-    close_steps: int = 3
-    release_steps: int = 3
+    close_steps: int = 12
+    release_steps: int = 8
 
     def validate(self) -> None:
         if not 0.05 <= self.approach_clearance_m <= 0.20:
@@ -65,16 +66,87 @@ class P01ExpertTuning:
             raise ValueError("minimum_grasp_follow_ratio must be in [0.5, 0.9]")
         if not 0.005 <= self.maximum_grasp_follow_error_m <= 0.02:
             raise ValueError("maximum_grasp_follow_error_m must be in [0.005, 0.02]")
-        if not 0.03 <= self.grasp_tcp_center_offset_m <= 0.12:
-            raise ValueError("grasp_tcp_center_offset_m must be in [0.03, 0.12]")
+        if not 0.001 <= self.physical_pinch_alignment_tolerance_m <= 0.01:
+            raise ValueError(
+                "physical_pinch_alignment_tolerance_m must be in [0.001, 0.01]"
+            )
+        if not 0.05 <= self.maximum_finger_center_separation_m <= 0.20:
+            raise ValueError(
+                "maximum_finger_center_separation_m must be in [0.05, 0.20]"
+            )
+        if not 0.5 <= self.minimum_finger_contact_ratio <= 0.9:
+            raise ValueError("minimum_finger_contact_ratio must be in [0.5, 0.9]")
         if not 0.05 <= self.max_rotation_step_rad <= 0.30:
             raise ValueError("max_rotation_step_rad must be in [0.05, 0.30]")
         if not 0.01 <= self.rotation_tolerance_rad <= 0.05:
             raise ValueError("rotation_tolerance_rad must be in [0.01, 0.05]")
         if self.max_rotation_steps < 1:
             raise ValueError("max_rotation_steps must be positive")
-        if not 0.0 <= self.minimum_closed_finger_position_m <= 0.02:
-            raise ValueError("minimum_closed_finger_position_m must be in [0.0, 0.02]")
+
+
+def calibrated_control_target_world(
+    *,
+    control_frame_world_m: Sequence[float],
+    physical_pinch_world_m: Sequence[float],
+    desired_pinch_world_m: Sequence[float],
+) -> np.ndarray:
+    """Translate a physical pinch target into the controller-frame target.
+
+    The Franka controller moves its configured control frame, which is not
+    guaranteed to coincide with the midpoint between the two physical finger
+    links.  Measuring both at runtime removes the fragile fixed TCP offset.
+    """
+
+    control = np.asarray(control_frame_world_m, dtype=float)
+    physical = np.asarray(physical_pinch_world_m, dtype=float)
+    desired = np.asarray(desired_pinch_world_m, dtype=float)
+    if any(value.shape != (3,) for value in (control, physical, desired)):
+        raise ValueError("control, physical pinch and desired positions must be 3-D")
+    if not all(np.all(np.isfinite(value)) for value in (control, physical, desired)):
+        raise ValueError("control, physical pinch and desired positions must be finite")
+    return control + desired - physical
+
+
+def minimum_symmetric_finger_contact_m(
+    *, part_radius_m: float, minimum_contact_ratio: float
+) -> float:
+    """Return the per-finger opening expected when both fingers touch a part."""
+
+    radius = float(part_radius_m)
+    ratio = float(minimum_contact_ratio)
+    if radius <= 0.0:
+        raise ValueError("part_radius_m must be positive")
+    if not 0.5 <= ratio <= 0.9:
+        raise ValueError("minimum_contact_ratio must be in [0.5, 0.9]")
+    return radius * ratio
+
+
+def symmetric_finger_contact_report(
+    finger_positions_m: Sequence[float], *, minimum_contact_m: float
+) -> dict[str, object]:
+    """Reject empty or one-sided closure before accepting a lift probe."""
+
+    positions = np.asarray(finger_positions_m, dtype=float)
+    threshold = float(minimum_contact_m)
+    if positions.shape != (2,) or not np.all(np.isfinite(positions)):
+        raise ValueError("finger_positions_m must contain two finite values")
+    if np.any(positions < 0.0):
+        raise ValueError("finger positions must be non-negative")
+    if not 0.0 < threshold <= 0.04:
+        raise ValueError("minimum_contact_m must be in (0.0, 0.04]")
+    contacts = positions >= threshold
+    passed = bool(np.all(contacts))
+    return {
+        "pass": passed,
+        "reason": (
+            "both fingers retained symmetric contact"
+            if passed
+            else "empty or one-sided gripper closure"
+        ),
+        "finger_positions_m": positions.tolist(),
+        "minimum_contact_m": threshold,
+        "contact_by_finger": contacts.tolist(),
+    }
 
 
 def top_down_tilt_error_rad(current_world_rotation: Sequence[Sequence[float]]) -> float:

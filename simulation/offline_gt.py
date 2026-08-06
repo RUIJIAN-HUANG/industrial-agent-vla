@@ -17,26 +17,93 @@ class OfflineGtProbe:
     def __init__(self, stage: Any) -> None:
         try:
             from pxr import Usd, UsdGeom
+            from isaacsim.core.utils.prims import (
+                get_all_matching_child_prims,
+                get_prim_at_path,
+            )
         except ImportError as exc:
-            raise RuntimeError("offline_gt requires Isaac Sim USD bindings") from exc
-        if not callable(getattr(stage, "GetPrimAtPath", None)):
-            raise TypeError("stage must provide the USD GetPrimAtPath API")
+            raise RuntimeError(
+                "offline_gt requires Isaac Sim USD bindings and prim utilities"
+            ) from exc
+        if stage is None:
+            raise TypeError("stage must not be None")
         self._stage = stage
         self._Usd = Usd
         self._UsdGeom = UsdGeom
+        self._get_prim_at_path = get_prim_at_path
+        self._get_all_matching_child_prims = get_all_matching_child_prims
 
     def _prim(self, path: str) -> Any:
-        prim = next(
-            (
-                candidate
-                for candidate in self._stage.Traverse()
-                if str(candidate.GetPath()) == path
-            ),
-            None,
-        )
+        # Use Isaac Sim's public prim utility instead of calling UsdStage
+        # methods directly.  Some 5.1 Python/Boost builds expose a Stage whose
+        # GetPrimAtPath/Traverse overloads reject otherwise valid arguments.
+        prim = self._get_prim_at_path(path)
         if not prim or not prim.IsValid():
             raise RuntimeError(f"offline_gt prim is missing: {path}")
         return prim
+
+    def _world_aligned_range(self, path: str) -> Any:
+        cache = self._UsdGeom.BBoxCache(
+            self._Usd.TimeCode.Default(),
+            [self._UsdGeom.Tokens.default_, self._UsdGeom.Tokens.render],
+            useExtentsHint=False,
+            ignoreVisibility=True,
+        )
+        return cache.ComputeWorldBound(self._prim(path)).ComputeAlignedRange()
+
+    def franka_pinch_geometry(
+        self,
+        *,
+        arm_path: str,
+        maximum_finger_center_separation_m: float,
+    ) -> dict[str, Any]:
+        """Measure the physical midpoint between the two finger-link bounds."""
+
+        maximum = float(maximum_finger_center_separation_m)
+        if not 0.05 <= maximum <= 0.20:
+            raise ValueError("maximum finger-center separation must be in [0.05, 0.20]")
+        suffixes = ("/panda_leftfinger", "/panda_rightfinger")
+        paths: list[str] = []
+        centers: list[list[float]] = []
+        descendants = tuple(self._get_all_matching_child_prims(arm_path))
+        for suffix in suffixes:
+            matches = [
+                prim
+                for prim in descendants
+                if str(prim.GetPath()).startswith(f"{arm_path}/")
+                and str(prim.GetPath()).endswith(suffix)
+            ]
+            if len(matches) != 1:
+                raise RuntimeError(
+                    f"expected one {suffix} below {arm_path}, found {len(matches)}"
+                )
+            path = str(matches[0].GetPath())
+            world_range = self._world_aligned_range(path)
+            minimum = world_range.GetMin()
+            maximum_bound = world_range.GetMax()
+            center = [
+                (float(minimum[axis]) + float(maximum_bound[axis])) / 2.0
+                for axis in range(3)
+            ]
+            paths.append(path)
+            centers.append(center)
+        separation = sum(
+            (centers[0][axis] - centers[1][axis]) ** 2 for axis in range(3)
+        ) ** 0.5
+        if not 0.0 < separation <= maximum:
+            raise RuntimeError(
+                f"measured finger-center separation {separation:.6f} m is invalid"
+            )
+        midpoint = [
+            (centers[0][axis] + centers[1][axis]) / 2.0 for axis in range(3)
+        ]
+        return {
+            "arm_path": arm_path,
+            "finger_paths": paths,
+            "finger_centers_world_m": centers,
+            "physical_pinch_center_world_m": midpoint,
+            "finger_center_separation_m": separation,
+        }
 
     def _world_matrix(self, path: str) -> Any:
         cache = self._UsdGeom.XformCache(self._Usd.TimeCode.Default())
@@ -81,15 +148,7 @@ class OfflineGtProbe:
         wall = float(bin_config["wall_thickness_m"])
         bottom = float(bin_config["bottom_thickness_m"])
 
-        cache = self._UsdGeom.BBoxCache(
-            self._Usd.TimeCode.Default(),
-            [self._UsdGeom.Tokens.default_, self._UsdGeom.Tokens.render],
-            useExtentsHint=False,
-            ignoreVisibility=True,
-        )
-        world_range = cache.ComputeWorldBound(
-            self._prim(part_path)
-        ).ComputeAlignedRange()
+        world_range = self._world_aligned_range(part_path)
         world_min = world_range.GetMin()
         world_max = world_range.GetMax()
         bin_inverse = self._world_matrix(bin_path).GetInverse()

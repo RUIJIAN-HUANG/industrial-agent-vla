@@ -8,14 +8,17 @@ from simulation.scripted_expert_plan import (
     P01ExpertTuning,
     bin_slot_local_centers,
     bounded_world_delta,
+    calibrated_control_target_world,
     conservative_step_limit,
     first_bin_slot_local_center,
     frozen_success_vote,
     grasp_follow_report,
+    minimum_symmetric_finger_contact_m,
     minimum_xy_radius_along_segment,
     motion_sample_violation,
     orthogonal_transfer_waypoints,
     select_safest_slot_index,
+    symmetric_finger_contact_report,
     top_down_tilt_error_rad,
     yaw_preserving_top_down_rotation,
 )
@@ -25,14 +28,35 @@ class ScriptedExpertPlanTests(unittest.TestCase):
     def test_default_tuning_is_valid(self) -> None:
         P01ExpertTuning().validate()
 
-    def test_grasp_uses_one_explicit_geometric_offset(self) -> None:
+    def test_grasp_uses_runtime_physical_pinch_calibration(self) -> None:
         tuning = P01ExpertTuning()
-        self.assertEqual(tuning.grasp_tcp_center_offset_m, 0.060)
+        self.assertEqual(tuning.physical_pinch_alignment_tolerance_m, 0.006)
+        self.assertEqual(tuning.close_steps, 12)
         self.assertEqual(tuning.max_rotation_steps, 24)
 
-    def test_grasp_rejects_unsafe_offset(self) -> None:
-        with self.assertRaisesRegex(ValueError, "grasp_tcp_center_offset_m"):
-            P01ExpertTuning(grasp_tcp_center_offset_m=0.01).validate()
+    def test_runtime_calibration_translates_physical_target_to_control_target(self) -> None:
+        target = calibrated_control_target_world(
+            control_frame_world_m=[0.1, 0.2, 0.9],
+            physical_pinch_world_m=[0.1, 0.2, 0.84],
+            desired_pinch_world_m=[-0.9, 0.2, 0.77],
+        )
+        np.testing.assert_allclose(target, [-0.9, 0.2, 0.83])
+
+    def test_grasp_requires_symmetric_two_finger_contact(self) -> None:
+        threshold = minimum_symmetric_finger_contact_m(
+            part_radius_m=0.022, minimum_contact_ratio=0.60
+        )
+        self.assertAlmostEqual(threshold, 0.0132)
+        self.assertTrue(
+            symmetric_finger_contact_report(
+                [0.018, 0.017], minimum_contact_m=threshold
+            )["pass"]
+        )
+        self.assertFalse(
+            symmetric_finger_contact_report(
+                [0.018, 0.003], minimum_contact_m=threshold
+            )["pass"]
+        )
 
     def test_top_down_tilt_ignores_cylinder_irrelevant_yaw(self) -> None:
         for yaw_rad in (0.0, 0.4, -1.7, 3.0):

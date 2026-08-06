@@ -145,12 +145,15 @@ def main() -> int:
         from scripted_expert_plan import (
             bin_slot_local_centers,
             bounded_world_delta,
+            calibrated_control_target_world,
             conservative_step_limit,
             frozen_success_vote,
             grasp_follow_report,
+            minimum_symmetric_finger_contact_m,
             motion_sample_violation,
             orthogonal_transfer_waypoints,
             select_safest_slot_index,
+            symmetric_finger_contact_report,
             top_down_tilt_error_rad,
             yaw_preserving_top_down_rotation,
         )
@@ -398,6 +401,59 @@ def main() -> int:
                     gripper_open=gripper_open,
                 )
 
+        arm_path = "/World/Robots/Arm_A"
+        part_path = "/World/Parts/P01"
+
+        def calibrated_target_for_physical_pinch(
+            desired_pinch_world_m: np.ndarray,
+        ) -> tuple[np.ndarray, dict[str, Any]]:
+            control_world_m, _ = controller.end_effector_pose("Arm_A")
+            pinch_report = gt.franka_pinch_geometry(
+                arm_path=arm_path,
+                maximum_finger_center_separation_m=(
+                    tuning.maximum_finger_center_separation_m
+                ),
+            )
+            physical_pinch_world_m = np.asarray(
+                pinch_report["physical_pinch_center_world_m"], dtype=float
+            )
+            target_world_m = calibrated_control_target_world(
+                control_frame_world_m=control_world_m,
+                physical_pinch_world_m=physical_pinch_world_m,
+                desired_pinch_world_m=desired_pinch_world_m,
+            )
+            report = dict(pinch_report)
+            report.update(
+                {
+                    "control_frame_world_m": control_world_m.tolist(),
+                    "desired_physical_pinch_world_m": desired_pinch_world_m.tolist(),
+                    "calibrated_control_target_world_m": target_world_m.tolist(),
+                }
+            )
+            return target_world_m, report
+
+        def physical_pinch_residual(
+            desired_pinch_world_m: np.ndarray,
+        ) -> tuple[float, dict[str, Any]]:
+            pinch_report = gt.franka_pinch_geometry(
+                arm_path=arm_path,
+                maximum_finger_center_separation_m=(
+                    tuning.maximum_finger_center_separation_m
+                ),
+            )
+            measured = np.asarray(
+                pinch_report["physical_pinch_center_world_m"], dtype=float
+            )
+            residual_m = float(np.linalg.norm(desired_pinch_world_m - measured))
+            report = dict(pinch_report)
+            report.update(
+                {
+                    "desired_physical_pinch_world_m": desired_pinch_world_m.tolist(),
+                    "physical_pinch_residual_m": residual_m,
+                }
+            )
+            return residual_m, report
+
         phase = "execute_p01_pick_place"
         part_config = next(part for part in config["parts"] if part["id"] == "P01")
         slot_locals = bin_slot_local_centers(
@@ -413,9 +469,8 @@ def main() -> int:
             )
             for slot_local in slot_locals
         )
-        nominal_offset_m = tuning.grasp_tcp_center_offset_m
         slot_tcp_candidates = tuple(
-            center + np.asarray([0.0, 0.0, nominal_offset_m], dtype=float)
+            center + np.asarray([0.0, 0.0, tuning.approach_clearance_m], dtype=float)
             for center in slot_part_centers
         )
         arm_config = next(robot for robot in config["robots"] if robot["id"] == "Arm_A")
@@ -428,44 +483,94 @@ def main() -> int:
         )
         slot_local = slot_locals[slot_index]
         verification_path = offline_gt_root / "p01_grasp_verification.json"
+        calibration_path = offline_gt_root / "p01_pinch_calibration.json"
         live_part_center = np.asarray(
-            gt.world_position("/World/Parts/P01"), dtype=float
+            gt.world_position(part_path), dtype=float
         )
-        grasp_tcp = live_part_center + np.asarray(
-            [0.0, 0.0, nominal_offset_m], dtype=float
-        )
-        grasp_approach = grasp_tcp + np.asarray(
+        desired_approach_pinch = live_part_center + np.asarray(
             [0.0, 0.0, tuning.approach_clearance_m], dtype=float
+        )
+        approach_target, approach_calibration = calibrated_target_for_physical_pinch(
+            desired_approach_pinch
         )
         move_tcp_world(
             subtask_id="p01-grasp-approach-position",
-            target_world=grasp_approach,
+            target_world=approach_target,
             gripper_open=True,
         )
         orientation_report = align_tcp_top_down(subtask_id="p01-grasp-align-top-down")
+        live_part_center = np.asarray(gt.world_position(part_path), dtype=float)
+        desired_approach_pinch = live_part_center + np.asarray(
+            [0.0, 0.0, tuning.approach_clearance_m], dtype=float
+        )
+        recentered_target, recentered_calibration = (
+            calibrated_target_for_physical_pinch(desired_approach_pinch)
+        )
         move_tcp_world(
             subtask_id="p01-grasp-recenter-after-orientation",
-            target_world=grasp_approach,
+            target_world=recentered_target,
             gripper_open=True,
+        )
+        live_part_center = np.asarray(gt.world_position(part_path), dtype=float)
+        desired_grasp_pinch = live_part_center.copy()
+        grasp_target, descend_calibration = calibrated_target_for_physical_pinch(
+            desired_grasp_pinch
         )
         move_tcp_world(
             subtask_id="p01-grasp-single-descend",
-            target_world=grasp_tcp,
+            target_world=grasp_target,
             gripper_open=True,
         )
+        alignment_residual_m, aligned_pinch_report = physical_pinch_residual(
+            desired_grasp_pinch
+        )
+        correction_calibration: dict[str, Any] | None = None
+        if alignment_residual_m > tuning.physical_pinch_alignment_tolerance_m:
+            correction_target, correction_calibration = (
+                calibrated_target_for_physical_pinch(desired_grasp_pinch)
+            )
+            move_tcp_world(
+                subtask_id="p01-grasp-physical-pinch-correction",
+                target_world=correction_target,
+                gripper_open=True,
+            )
+            alignment_residual_m, aligned_pinch_report = physical_pinch_residual(
+                desired_grasp_pinch
+            )
+        calibration_report = {
+            "isolation": "offline_gt_only",
+            "canonical_included": False,
+            "method": "runtime_physical_finger_midpoint_to_control_frame_calibration",
+            "approach": approach_calibration,
+            "after_top_down_orientation": recentered_calibration,
+            "descend": descend_calibration,
+            "correction": correction_calibration,
+            "final_alignment": aligned_pinch_report,
+            "alignment_tolerance_m": tuning.physical_pinch_alignment_tolerance_m,
+        }
+        _write_json(calibration_path, calibration_report)
+        if alignment_residual_m > tuning.physical_pinch_alignment_tolerance_m:
+            controller.safe_stop("physical pinch center did not align with P01")
+            raise RuntimeError(
+                "GRASP_ALIGNMENT_FAILED: measured physical pinch center missed P01; "
+                "see offline_gt/p01_pinch_calibration.json"
+            )
         hold(
             subtask_id="p01-grasp-single-close",
             gripper_open=False,
             steps=tuning.close_steps,
         )
         finger_positions_m = controller.gripper_joint_positions("Arm_A")
-        finger_obstruction_detected = bool(
-            np.max(finger_positions_m) >= tuning.minimum_closed_finger_position_m
+        minimum_contact_m = minimum_symmetric_finger_contact_m(
+            part_radius_m=float(part_config["geometry"]["radius_m"]),
+            minimum_contact_ratio=tuning.minimum_finger_contact_ratio,
+        )
+        finger_contact_report = symmetric_finger_contact_report(
+            finger_positions_m,
+            minimum_contact_m=minimum_contact_m,
         )
         probe_tcp_before, _ = controller.end_effector_pose("Arm_A")
-        probe_part_before = np.asarray(
-            gt.world_position("/World/Parts/P01"), dtype=float
-        )
+        probe_part_before = np.asarray(gt.world_position(part_path), dtype=float)
         probe_target = probe_tcp_before + np.asarray(
             [0.0, 0.0, tuning.grasp_probe_lift_m], dtype=float
         )
@@ -475,9 +580,7 @@ def main() -> int:
             gripper_open=False,
         )
         probe_tcp_after, _ = controller.end_effector_pose("Arm_A")
-        probe_part_after = np.asarray(
-            gt.world_position("/World/Parts/P01"), dtype=float
-        )
+        probe_part_after = np.asarray(gt.world_position(part_path), dtype=float)
         grasp_report = grasp_follow_report(
             tcp_before_world_m=probe_tcp_before,
             tcp_after_world_m=probe_tcp_after,
@@ -488,26 +591,30 @@ def main() -> int:
         )
         grasp_report.update(
             {
-                "tcp_center_offset_z_m": float(nominal_offset_m),
-                "tcp_target_world_m": grasp_tcp.tolist(),
+                "desired_physical_pinch_world_m": desired_grasp_pinch.tolist(),
+                "calibrated_control_target_world_m": grasp_target.tolist(),
+                "physical_pinch_alignment_residual_m": alignment_residual_m,
                 "tcp_before_world_m": probe_tcp_before.tolist(),
                 "tcp_after_world_m": probe_tcp_after.tolist(),
                 "part_before_world_m": probe_part_before.tolist(),
                 "part_after_world_m": probe_part_after.tolist(),
                 "finger_joint_positions_m": finger_positions_m.tolist(),
-                "finger_obstruction_detected": finger_obstruction_detected,
+                "finger_contact": finger_contact_report,
                 "orientation": orientation_report,
             }
         )
-        grasp_passed = bool(grasp_report["pass"]) and finger_obstruction_detected
+        grasp_passed = bool(grasp_report["pass"]) and bool(
+            finger_contact_report["pass"]
+        )
         _write_json(
             verification_path,
             {
                 "isolation": "offline_gt_only",
                 "canonical_included": False,
-                "strategy": "single_top_down_finger_and_lift_verified_grasp",
+                "strategy": "runtime_calibrated_physical_pinch_finger_and_lift_verified_grasp",
                 "passed": grasp_passed,
                 "attempt": grasp_report,
+                "pinch_calibration_path": str(calibration_path),
             },
         )
         if not grasp_passed:
@@ -517,7 +624,6 @@ def main() -> int:
                 "verification; see offline_gt/p01_grasp_verification.json"
             )
 
-        chosen_grasp_offset_m = float(nominal_offset_m)
         carried_tcp_to_part_center = probe_tcp_after - probe_part_after
         remaining_clearance_m = max(
             0.02,
@@ -550,8 +656,8 @@ def main() -> int:
                 "slot_index": slot_index,
                 "slot_local_m": slot_local.tolist(),
                 "arm_base_world_m": arm_base_world.tolist(),
-                "grasp_strategy": "single_top_down_finger_and_lift_verified_grasp",
-                "chosen_grasp_offset_z_m": chosen_grasp_offset_m,
+                "grasp_strategy": "runtime_calibrated_physical_pinch_finger_and_lift_verified_grasp",
+                "pinch_calibration_path": str(calibration_path),
                 "verified_tcp_to_part_center_m": carried_tcp_to_part_center.tolist(),
                 "grasp_approach_world_m": grasp_approach.tolist(),
                 "place_tcp_world_m": place_tcp.tolist(),
