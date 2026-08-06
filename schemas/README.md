@@ -14,6 +14,7 @@
 | `executor-infer.schema.json` | A/D/E | 推理请求/响应信封 |
 | `executor-cancel.schema.json` | A/D/E | 幂等取消 |
 | `action-chunk.schema.json` | A/B/D/E | 统一 N×7 动作 |
+| `canonical-episode.schema.json` | B/C/D/E/F | 离线 HDF5 Episode 结构、三路 RGB、双臂状态、动作与 Padding mask |
 | `verify.schema.json` | A/F | 在线后置条件核验 |
 | `event.schema.json` | A/F | 结构化事件证据 |
 

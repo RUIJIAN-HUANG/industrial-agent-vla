@@ -60,6 +60,10 @@ FORBIDDEN_SUFFIXES = {
     ".tflite",
 }
 
+ALLOWED_BINARY_FIXTURES = {
+    Path("tests/fixtures/golden_episode_v1/episode.h5"),
+}
+
 FORBIDDEN_EXACT_NAMES = {
     ".env",
     ".pypirc",
@@ -129,7 +133,10 @@ def find_policy_violations() -> list[str]:
             )
             continue
 
-        if relative.suffix.lower() in FORBIDDEN_SUFFIXES:
+        if (
+            relative.suffix.lower() in FORBIDDEN_SUFFIXES
+            and relative not in ALLOWED_BINARY_FIXTURES
+        ):
             violations.append(
                 f"forbidden binary/artifact extension is tracked: {relative}"
             )

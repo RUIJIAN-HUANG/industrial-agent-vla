@@ -95,8 +95,8 @@ Supervisor 启动任务时读取的是人工预先配置的运行档案，例如
 
 #### C：先保证每条数据“可追、可回放、可转换”
 
-1. 实现 Canonical Episode 目录和 `meta.json + steps.jsonl`。
-2. 同步记录 RGB、关节状态、末端位姿、夹爪、动作、FSM 和事件。
+1. 按 `schemas/canonical-episode.schema.json` 生成 `episode.h5 + structure.json`。
+2. 独立记录三路 RGB（30Hz）、双臂 `state_7d`（60Hz）和动作（10Hz）。
 3. 在 Episode 开始前分配 Seed 与 Split，禁止采完后按帧随机切分。
 4. 实现录制中断清理、完整性检查、回放和 SHA-256 Manifest。
 5. 将仿真 GT 写入隔离的 `offline_gt/`；在线目录不得暴露 GT。
@@ -153,7 +153,7 @@ Supervisor 启动任务时读取的是人工预先配置的运行档案，例如
 | π0.5 / Arm_A 成功轨迹 | 20 | 验证完整采集与 LeRobot 链 |
 | OpenVLA / Arm_B 成功轨迹 | 10 | 验证完整采集与 RLDS 链 |
 | YOLO 图像 | 200 | 验证自动标注、训练、推理和 COCO 评测链 |
-| 故意失败样例 | 每臂 3 条 | 验证 `dataset_failure_label` 和隔离规则，不直接当模仿目标 |
+| 故意失败样例 | 每臂 3 条 | 在外部 QA Registry 记录 `dataset_failure_label` 并验证隔离规则，不直接当模仿目标 |
 | 恢复样例 | 每臂 3 条 | 验证从故障后新观测开始记录正确恢复 |
 
 数量不足不是最大风险；字段错误、动作方向错误或数据泄漏才是。
@@ -252,67 +252,44 @@ industrial_dataset_root/
 
 ```text
 <episode_id>/
-├── meta.json
-├── steps.jsonl
-├── events.jsonl
-├── rgb/
-│   ├── CAM_A_TOP/
-│   ├── CAM_HANDOFF/
-│   └── CAM_B_TOP/
-├── terminal_state.json
-└── checksums.sha256
+├── episode.h5       # 三路 RGB、双臂 state_7d、动作与 valid_mask
+└── structure.json   # 元数据、各数据集 shape/dtype/count 与 episode.h5 SHA-256
 ```
 
 冻结 MVP 只采集以上三台物理 RGB 相机，不创建 `wrist_rgb/`。VLA 接口为兼容统一
-Schema 保留 `wrist_image` 键，但本版本每一步都写 JSON `null`。
+Schema 保留 `wrist_image` 键，但本版本在 Episode 元数据中固定写 JSON `null`。
 
 不要把三个相机都强制复制给两个 VLA。Canonical 可以统一保存，转换器只选
 对应模型需要的视角，减少显存和训练噪声。
 
-### 6.2 `meta.json` 必填字段
+当前实现的唯一结构真源是 `schemas/canonical-episode.schema.json`；旧的
+`meta.json + steps.jsonl` 方案已废止。关节数组、FSM 事件或额外诊断字段如需加入，
+必须升级 Canonical Schema 版本，不能临时塞入 HDF5。
+
+### 6.2 `structure.json` 核心字段
 
 | 字段 | 示例/类型 | 负责人 | 说明 |
 |---|---|---|---|
 | `schema_version` | `"1.0"` | A/C | 变更必须升级版本 |
 | `episode_id` | `"train-a-000123"` | C | 全局唯一 |
-| `scenario_group_id` | `"scene-10123"` | C | 原始与恢复 Episode 归为同组 |
-| `split` | `train/val/test` | C/F | 采集前确定 |
 | `scene_seed` | 整数 | C | Reset、资产和布局根 Seed |
-| `asset_variant` | 字符串 | C | 资产/材质版本 |
 | `task_id` | `"pack_handoff_v1"` | A | 固定运行档案 ID |
 | `instruction` | 原始中文字符串 | A/C | 不预解析成物体坐标 |
-| `robot_role` | `arm_a_pi05/arm_b_openvla` | C | 不允许混臂 |
-| `scene_config_sha256` | 64 位哈希 | B/C | 指向冻结场景 |
-| `controller_version` | Git SHA | B | 动作执行器版本 |
-| `recorder_version` | Git SHA | C | Recorder 版本 |
-| `camera_ids` | 字符串数组 | B/C | 本 Episode 实际启用相机 |
-| `control_hz/render_hz` | 数值 | B | 当前冻结为 60/30 |
-| `started_at/ended_at` | ISO-8601 | C | 采集时间 |
-| `outcome` | `success/failure/recovery_success` | F | 终局标签 |
-| `dataset_failure_label` | 字符串或 `null` | C/F | 仅用于数据集诊断和分层统计，使用第 9.2 节冻结字典 |
-| `parent_episode_id` | 字符串或 `null` | C | 恢复数据关联来源 |
-| `eligible_for_imitation` | 布尔 | C/F | 失败前缀必须为 false |
+| `git_sha` | 40 位 Git SHA | C | Recorder 代码版本 |
+| `scene_config_sha256` | `sha256:<64hex>` | B/C | 指向冻结场景配置 |
+| `frequency_contract` | 120/60/30/10 | B/C | 物理/控制/渲染/模型频率 |
+| `padding_policy` | 策略 + 可选长度 | A/C | 默认不 Padding；任何 Padding 必须有 mask |
+| `outcome/failure_code` | 终局 + 可空错误码 | C/F | 非成功 Episode 必须有错误码 |
+| `wrist_image` | `null` | C | 冻结场景没有腕相机 |
+| `offline_gt_included` | `false` | C/F | Canonical/在线数据不含 GT |
 
-### 6.3 `steps.jsonl` 每步必填字段
+### 6.3 HDF5 三条独立时间流
 
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `step_index` | int | 从 0 连续递增 |
-| `timestamp_ns` | int | 单调时钟 |
-| `observation_id` | string | 新观察必须有新 ID |
-| `rgb` | object | Camera ID → 相对图像路径 |
-| `joint_position` | float[] | 只含当前机械臂，顺序冻结 |
-| `joint_velocity` | float[] | 与关节顺序一致 |
-| `tcp_pose` | float[7] | `[x,y,z,qx,qy,qz,qw]`，robot base frame |
-| `gripper_state` | float | 归一化状态及实际宽度至少保留一种 |
-| `robot` | object | 必含布尔字段 `robot.arm_a.retreated` 与 `robot.arm_b.retreated` |
-| `action_7d` | float[7] | `[dx,dy,dz,dax,day,daz,gripper]`；后三维为 robot_base 轴角旋转向量 |
-| `action_duration_s` | float | 动作块时间 |
-| `agent_state` | string | 必须是代码 `AgentState`：如 `OBSERVING`、`EXECUTING`、`VERIFYING` |
-| `operation_phase` | string | 业务标注：如 `ARM_A_PACKING`、`ARM_B_TRANSPORT`；不是 FSM 枚举 |
-| `handoff_token` | string | `A_ONLY/HANDOFF_VERIFY/B_ONLY/NONE` |
-| `safety_flags` | string[] | 限幅、碰撞、超时等 |
-| `valid_for_training` | bool | 当前 Step 是否作为行为目标 |
+| 流 | 频率 | 核心字段 | 强制规则 |
+|---|---:|---|---|
+| `cameras/<camera_id>` | 30Hz | RGB、CAS URI、图像 SHA、时间戳、physics tick | 恰好三台相机，1280×720 RGB，三路同 tick/时间戳 |
+| `robot_state/<arm_id>` | 60Hz | `state_7d`、时间戳、physics tick | 恰好 Arm_A/Arm_B；`[x,y,z,ax,ay,az,gripper]`，后三维是 rotation-vector |
+| `actions` | 10Hz | `action_7d`、臂、执行器、chunk、`valid_mask` | Arm_A→π0.5、Arm_B→OpenVLA；Padding 行不得执行或计入训练损失 |
 
 动作合同固定为：
 
@@ -351,7 +328,7 @@ gripper           = normalized [-1, 1]
 | 类型 | 可训练内容 | 不可训练内容 |
 |---|---|---|
 | 成功 | 从观察到正确放置的专家动作 | 无 |
-| 失败 | 保存观测、状态和 `dataset_failure_label` 供诊断 | 导致漏抓、掉落、碰撞的错误动作 |
+| 失败 | 保存观测、状态，并在外部 QA Registry 记录 `dataset_failure_label` 供诊断 | 导致漏抓、掉落、碰撞的错误动作 |
 | 恢复 | 从故障后的新观测开始执行正确恢复 | 故障发生前的错误前缀 |
 
 ### 7.2 OpenVLA / Arm_B
@@ -452,6 +429,9 @@ YOLO 图像建议：
 
 ### 9.1 终局定义
 
+下表是外部 QA Registry 的数据分类，不替代 Canonical `outcome`。Episode 内的
+`outcome` 只能使用 `SUCCEEDED/FAILED/SAFE_STOPPED/SAFE_STOP_FAILED`。
+
 | 标签 | 条件 |
 |---|---|
 | `success` | 当前 Agent 的固定任务完成，终局空间关系、机器人遥测和安全条件均通过 |
@@ -460,6 +440,9 @@ YOLO 图像建议：
 | `invalid` | 文件缺失、时间戳错乱、动作 NaN、Reset 穿模或录制中断 |
 
 ### 9.2 `dataset_failure_label` 最小集合
+
+这些标签属于 `reports/qa/` 下按 `episode_id` 索引的外部 QA Registry，
+不是 Canonical Episode v1.0 的 HDF5 或 `structure.json` 字段。
 
 ```text
 EMPTY_GRASP
@@ -481,9 +464,9 @@ OBSERVATION_INVALID
 
 1. 通过固定 Seed 注入一个安全、可复现的故障；
 2. 保存故障终点并生成新的 `observation_id`；
-3. 新建 Recovery Episode，并填写 `parent_episode_id`；
+3. 新建 Recovery Episode，并在外部 QA Registry 填写 `parent_episode_id`；
 4. 专家从故障状态执行正确恢复；
-5. 原始失败动作只用于诊断，`valid_for_training=false`；
+5. 原始失败动作只用于诊断；转换器必须依据 Canonical `valid_mask` 排除无效行；
 6. 恢复 Episode 必须与 Parent Episode 属于同一个 Split；
 7. 危险碰撞、越区或强制急停只进入安全测试，不进入模仿训练。
 
@@ -540,7 +523,7 @@ B 必须在每个 Reset 后先跑可达性与碰撞预检；失败 Seed 进入
 以以下组合为不可拆分单元：
 
 ```text
-scenario_group_id
+QA Registry 中的 scenario_group_id
 + scene_seed
 + asset_variant
 + camera_seed
@@ -593,7 +576,7 @@ Canonical Episode
 - `robot_role` 只能是 `arm_b_openvla`；
 - 指令、图像、状态与动作时间对齐；
 - OpenVLA 使用自己的预处理配置和归一化统计；
-- 随机抽 10 个 Step，能反查 Canonical `episode_id/step_index`；
+- 随机抽 10 个 Step，能反查 Canonical `episode_id/sequence_id`；
 - Loader 可从头到尾遍历，无在线下载。
 
 ### 12.3 YOLO/COCO 放行检查
@@ -815,7 +798,7 @@ Supervisor + π0.5 + OpenVLA + YOLO
 - [ ] 两个 VLA 没有交换固定职责
 - [ ] HANDOFF token 顺序没有改变
 - [ ] 今日 PR 有测试和复现命令
-- [ ] 未完成项有 Owner、`dataset_failure_label` 和明日第一动作
+- [ ] 未完成项有 Owner、外部 QA Registry 记录和明日第一动作
 ```
 
 只要这份清单每天执行，团队就不会因为“又出现一种新方案”而失去主线。

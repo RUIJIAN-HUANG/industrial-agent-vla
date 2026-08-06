@@ -295,6 +295,7 @@ checkpoints/
 *.mcap
 *.h5
 *.hdf5
+!tests/fixtures/golden_episode_v1/episode.h5
 *.npz
 *.npy
 simulation/cache/
