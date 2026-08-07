@@ -30,6 +30,7 @@ class P01ExpertTuning:
     rotation_tolerance_rad: float = 0.035
     max_rotation_steps: int = 24
     transit_clearance_m: float = 0.04
+    radial_staging_offset_m: float = 0.12
     place_approach_clearance_m: float = 0.06
     release_above_bin_m: float = 0.002
     release_xy_tolerance_m: float = 0.001
@@ -56,6 +57,8 @@ class P01ExpertTuning:
             raise ValueError("position_tolerance_m must be in [0.0005, 0.005]")
         if not 0.02 <= self.transit_clearance_m <= 0.08:
             raise ValueError("transit_clearance_m must be in [0.02, 0.08]")
+        if not 0.08 <= self.radial_staging_offset_m <= 0.18:
+            raise ValueError("radial_staging_offset_m must be in [0.08, 0.18]")
         if not 0.03 <= self.place_approach_clearance_m <= 0.10:
             raise ValueError("place_approach_clearance_m must be in [0.03, 0.10]")
         if not 0.001 <= self.release_above_bin_m <= 0.01:
@@ -450,8 +453,9 @@ def orthogonal_transfer_waypoints(
     *,
     arm_base_world_m: Sequence[float],
     transit_clearance_m: float,
+    radial_staging_offset_m: float,
 ) -> tuple[np.ndarray, ...]:
-    """Plan a raised L-shaped transfer on the side farther from the base."""
+    """Plan a raised transfer that enters the destination radially from outside."""
 
     start = np.asarray(start_world_m, dtype=float)
     destination = np.asarray(destination_world_m, dtype=float)
@@ -463,6 +467,9 @@ def orthogonal_transfer_waypoints(
     clearance = float(transit_clearance_m)
     if clearance <= 0.0:
         raise ValueError("transit_clearance_m must be positive")
+    staging_offset = float(radial_staging_offset_m)
+    if staging_offset <= 0.0:
+        raise ValueError("radial_staging_offset_m must be positive")
     transit_z = max(float(start[2]), float(destination[2])) + clearance
     corners = (
         np.asarray([destination[0], start[1], transit_z], dtype=float),
@@ -479,10 +486,22 @@ def orthogonal_transfer_waypoints(
     over_destination = np.asarray(
         [destination[0], destination[1], transit_z], dtype=float
     )
-    # Stop above the destination.  A separate guarded vertical phase owns the
-    # final descent; combining it with the fast transfer allowed redundant-arm
-    # IK branch jumps close to the compartment.
-    return corner, over_destination
+    radial_xy = destination[:2] - base[:2]
+    radial_norm = float(np.linalg.norm(radial_xy))
+    if radial_norm <= 1e-9:
+        raise ValueError("destination cannot share the arm-base XY position")
+    radial_staging = np.asarray(
+        [
+            destination[0] + radial_xy[0] / radial_norm * staging_offset,
+            destination[1] + radial_xy[1] / radial_norm * staging_offset,
+            transit_z,
+        ],
+        dtype=float,
+    )
+    # The outer staging point keeps the lateral transfer away from the Panda's
+    # inner redundant-IK branch boundary.  The guarded final leg then approaches
+    # the destination along the base-to-target radial direction.
+    return corner, radial_staging, over_destination
 
 
 def top_release_local_center(

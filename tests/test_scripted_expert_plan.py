@@ -35,6 +35,7 @@ class ScriptedExpertPlanTests(unittest.TestCase):
         self.assertEqual(tuning.max_consecutive_stalled_steps, 4)
         self.assertEqual(tuning.close_steps, 12)
         self.assertEqual(tuning.max_rotation_steps, 24)
+        self.assertEqual(tuning.radial_staging_offset_m, 0.12)
         self.assertEqual(tuning.guarded_place_step_m, 0.005)
         self.assertEqual(tuning.release_above_bin_m, 0.002)
         self.assertEqual(tuning.release_xy_tolerance_m, 0.001)
@@ -188,10 +189,16 @@ class ScriptedExpertPlanTests(unittest.TestCase):
             destination,
             arm_base_world_m=base,
             transit_clearance_m=0.04,
+            radial_staging_offset_m=0.12,
         )
         np.testing.assert_allclose(waypoints[0], [-0.294, 0.2, 0.973])
-        np.testing.assert_allclose(waypoints[1], [-0.294, -0.123, 0.973])
-        self.assertEqual(len(waypoints), 2)
+        radial = (np.asarray(destination[:2]) - np.asarray(base[:2]))
+        radial /= np.linalg.norm(radial)
+        np.testing.assert_allclose(
+            waypoints[1][:2], np.asarray(destination[:2]) + radial * 0.12
+        )
+        np.testing.assert_allclose(waypoints[2], [-0.294, -0.123, 0.973])
+        self.assertEqual(len(waypoints), 3)
         self.assertGreater(
             minimum_xy_radius_along_segment(start, waypoints[0], arm_base_world_m=base),
             0.30,

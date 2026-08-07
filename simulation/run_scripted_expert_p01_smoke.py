@@ -698,6 +698,7 @@ def main() -> int:
             place_approach,
             arm_base_world_m=arm_base_world,
             transit_clearance_m=tuning.transit_clearance_m,
+            radial_staging_offset_m=tuning.radial_staging_offset_m,
         )
         _write_json(
             offline_gt_root / "p01_motion_plan.json",
@@ -714,6 +715,8 @@ def main() -> int:
                 "narrow_contact_offset_m": 0.0005,
                 "part_max_linear_velocity_m_s": 0.25,
                 "part_max_angular_velocity_deg_s": 90.0,
+                "transfer_strategy": "outer_radial_staging_then_guarded_entry",
+                "radial_staging_offset_m": tuning.radial_staging_offset_m,
                 "pinch_calibration_path": str(calibration_path),
                 "verified_tcp_to_part_center_m": carried_tcp_to_part_center.tolist(),
                 "grasp_approach_world_m": grasp_approach.tolist(),
@@ -728,10 +731,18 @@ def main() -> int:
             },
         )
         for waypoint_index, waypoint in enumerate(transfer_waypoints, start=1):
+            transfer_options: dict[str, Any] = {}
+            if waypoint_index == len(transfer_waypoints):
+                transfer_options = {
+                    "max_step_m": tuning.guarded_place_step_m,
+                    "max_actual_step_m": tuning.guarded_max_actual_step_m,
+                    "max_consecutive_divergent_steps": 1,
+                }
             move_tcp_world(
                 subtask_id=f"p01-transfer-{waypoint_index}",
                 target_world=waypoint,
                 gripper_open=False,
+                **transfer_options,
             )
         hold(
             subtask_id="p01-transfer-settle",
