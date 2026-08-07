@@ -31,7 +31,10 @@ class P01ExpertTuning:
     max_rotation_steps: int = 24
     transit_clearance_m: float = 0.04
     place_approach_clearance_m: float = 0.06
-    release_above_bin_m: float = 0.01
+    release_above_bin_m: float = 0.002
+    release_xy_tolerance_m: float = 0.001
+    release_position_tolerance_m: float = 0.001
+    release_stable_checks: int = 3
     guarded_place_step_m: float = 0.005
     guarded_max_actual_step_m: float = 0.03
     transfer_settle_steps: int = 4
@@ -55,8 +58,16 @@ class P01ExpertTuning:
             raise ValueError("transit_clearance_m must be in [0.02, 0.08]")
         if not 0.03 <= self.place_approach_clearance_m <= 0.10:
             raise ValueError("place_approach_clearance_m must be in [0.03, 0.10]")
-        if not 0.005 <= self.release_above_bin_m <= 0.03:
-            raise ValueError("release_above_bin_m must be in [0.005, 0.03]")
+        if not 0.001 <= self.release_above_bin_m <= 0.01:
+            raise ValueError("release_above_bin_m must be in [0.001, 0.01]")
+        if not 0.0005 <= self.release_xy_tolerance_m <= 0.002:
+            raise ValueError("release_xy_tolerance_m must be in [0.0005, 0.002]")
+        if not 0.0005 <= self.release_position_tolerance_m <= 0.002:
+            raise ValueError(
+                "release_position_tolerance_m must be in [0.0005, 0.002]"
+            )
+        if self.release_stable_checks < 2:
+            raise ValueError("release_stable_checks must be at least 2")
         if not 0.002 <= self.guarded_place_step_m <= 0.01:
             raise ValueError("guarded_place_step_m must be in [0.002, 0.01]")
         if not self.guarded_place_step_m < self.guarded_max_actual_step_m <= 0.04:
@@ -318,6 +329,54 @@ def bin_slot_local_centers(
         for row in (-1.0, 1.0)
         for column in (-1.0, 0.0, 1.0)
     )
+
+
+def physical_bin_slot_local_center(
+    slot_index: int,
+    *,
+    size_m: Sequence[float],
+    wall_thickness_m: float,
+    divider_thickness_m: float,
+    bottom_thickness_m: float,
+    rows: int,
+    columns: int,
+    part_radius_m: float,
+    part_height_m: float,
+) -> np.ndarray:
+    """Return the geometric center of one usable cell, excluding dividers."""
+
+    size = np.asarray(size_m, dtype=float)
+    if size.shape != (3,) or not np.all(np.isfinite(size)) or np.any(size <= 0.0):
+        raise ValueError("bin size must contain three positive finite values")
+    wall = float(wall_thickness_m)
+    divider = float(divider_thickness_m)
+    bottom = float(bottom_thickness_m)
+    radius = float(part_radius_m)
+    height = float(part_height_m)
+    if rows < 1 or columns < 1 or not 0 <= int(slot_index) < rows * columns:
+        raise ValueError("slot_index is outside the bin grid")
+    if min(wall, divider, bottom, radius, height) <= 0.0:
+        raise ValueError("bin, divider, and part dimensions must be positive")
+    interior_x = size[0] - 2.0 * wall
+    interior_y = size[1] - 2.0 * wall
+
+    def usable_center(span: float, count: int, index: int) -> tuple[float, float]:
+        pitch = span / count
+        lower = -span / 2.0 + index * pitch
+        upper = lower + pitch
+        if index > 0:
+            lower += divider / 2.0
+        if index < count - 1:
+            upper -= divider / 2.0
+        return (lower + upper) / 2.0, upper - lower
+
+    row, column = divmod(int(slot_index), columns)
+    x, usable_x = usable_center(interior_x, columns, column)
+    y, usable_y = usable_center(interior_y, rows, row)
+    if min(usable_x, usable_y) <= 2.0 * radius:
+        raise ValueError("part does not physically fit inside the selected bin cell")
+    z = -size[2] / 2.0 + bottom + height / 2.0
+    return np.asarray([x, y, z], dtype=float)
 
 
 def select_safest_slot_index(

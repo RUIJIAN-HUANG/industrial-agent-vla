@@ -121,9 +121,20 @@ def _set_display(
         geometry.CreateDisplayOpacityAttr([float(opacity)])
 
 
-def _apply_collision(prim: Usd.Prim) -> None:
+def _apply_collision(
+    prim: Usd.Prim,
+    *,
+    contact_offset_m: float | None = None,
+) -> None:
     collision = UsdPhysics.CollisionAPI.Apply(prim)
     collision.CreateCollisionEnabledAttr(True)
+    if contact_offset_m is not None:
+        contact_offset = float(contact_offset_m)
+        if not 0.0 < contact_offset <= 0.005:
+            raise ValueError("contact_offset_m must be in (0, 0.005]")
+        physx_collision = PhysxSchema.PhysxCollisionAPI.Apply(prim)
+        physx_collision.CreateRestOffsetAttr(0.0)
+        physx_collision.CreateContactOffsetAttr(contact_offset)
 
 
 def _cube(
@@ -135,6 +146,7 @@ def _cube(
     rpy_deg: Sequence[float] = (0.0, 0.0, 0.0),
     color: Color = (0.5, 0.5, 0.5),
     collision: bool = False,
+    contact_offset_m: float | None = None,
     opacity: float = 1.0,
 ) -> UsdGeom.Cube:
     cube = UsdGeom.Cube.Define(stage, path)
@@ -145,7 +157,7 @@ def _cube(
     )
     _set_display(cube, color, opacity=opacity)
     if collision:
-        _apply_collision(cube.GetPrim())
+        _apply_collision(cube.GetPrim(), contact_offset_m=contact_offset_m)
     return cube
 
 
@@ -158,6 +170,7 @@ def _cylinder(
     position: Sequence[float] = (0.0, 0.0, 0.0),
     color: Color = (0.8, 0.05, 0.04),
     collision: bool = False,
+    contact_offset_m: float | None = None,
 ) -> UsdGeom.Cylinder:
     cylinder = UsdGeom.Cylinder.Define(stage, path)
     cylinder.CreateAxisAttr(UsdGeom.Tokens.z)
@@ -166,17 +179,27 @@ def _cylinder(
     _set_xform(cylinder.GetPrim(), position=position)
     _set_display(cylinder, color)
     if collision:
-        _apply_collision(cylinder.GetPrim())
+        _apply_collision(cylinder.GetPrim(), contact_offset_m=contact_offset_m)
     return cylinder
 
 
-def _make_rigid_body(root: Usd.Prim, mass_kg: float) -> None:
+def _make_rigid_body(
+    root: Usd.Prim,
+    mass_kg: float,
+    *,
+    max_linear_velocity_m_s: float | None = None,
+    max_angular_velocity_deg_s: float | None = None,
+) -> None:
     rigid_body = UsdPhysics.RigidBodyAPI.Apply(root)
     rigid_body.CreateRigidBodyEnabledAttr(True)
     mass = UsdPhysics.MassAPI.Apply(root)
     mass.CreateMassAttr(float(mass_kg))
     physx_body = PhysxSchema.PhysxRigidBodyAPI.Apply(root)
     physx_body.CreateEnableCCDAttr(True)
+    if max_linear_velocity_m_s is not None:
+        physx_body.CreateMaxLinearVelocityAttr(float(max_linear_velocity_m_s))
+    if max_angular_velocity_deg_s is not None:
+        physx_body.CreateMaxAngularVelocityAttr(float(max_angular_velocity_deg_s))
 
 
 def _create_physics_scene(stage: Usd.Stage, physics: Mapping[str, Any]) -> None:
@@ -341,8 +364,14 @@ def _create_part(stage: Usd.Stage, part: Mapping[str, Any]) -> None:
     height = float(geometry["height_m"])
     mass_kg = float(geometry["mass_kg"])
     color = _color(part.get("color_rgb"), (0.82, 0.04, 0.03))
+    narrow_contact_offset_m = 0.0005
 
-    _make_rigid_body(root, mass_kg)
+    _make_rigid_body(
+        root,
+        mass_kg,
+        max_linear_velocity_m_s=0.25,
+        max_angular_velocity_deg_s=90.0,
+    )
     root.SetCustomDataByKey("scene:state", str(part["state"]))
     root.SetCustomDataByKey("scene:zoneId", str(part["zone_id"]))
 
@@ -354,6 +383,7 @@ def _create_part(stage: Usd.Stage, part: Mapping[str, Any]) -> None:
         position=(0.0, 0.0, -height * 0.05),
         color=color,
         collision=True,
+        contact_offset_m=narrow_contact_offset_m,
     )
     cap_height = height * 0.18
     _cylinder(
@@ -364,6 +394,7 @@ def _create_part(stage: Usd.Stage, part: Mapping[str, Any]) -> None:
         position=(radius * 0.10, 0.0, height / 2.0 - cap_height / 2.0),
         color=(max(color[0] * 0.82, 0.0), color[1], color[2]),
         collision=True,
+        contact_offset_m=narrow_contact_offset_m,
     )
     _cube(
         stage,
@@ -376,6 +407,7 @@ def _create_part(stage: Usd.Stage, part: Mapping[str, Any]) -> None:
         ),
         color=(0.50, 0.01, 0.01),
         collision=True,
+        contact_offset_m=narrow_contact_offset_m,
     )
 
 
@@ -410,6 +442,7 @@ def _create_bin(stage: Usd.Stage, bin_config: Mapping[str, Any]) -> None:
     bottom_center_z = -size_z / 2.0 + bottom / 2.0
     interior_x = size_x - 2.0 * wall
     interior_y = size_y - 2.0 * wall
+    narrow_contact_offset_m = 0.0005
 
     # The root is the only RigidBody. Every child below is an individual
     # collider, which leaves the top physically open for inserted parts.
@@ -420,6 +453,7 @@ def _create_bin(stage: Usd.Stage, bin_config: Mapping[str, Any]) -> None:
         position=(0.0, 0.0, bottom_center_z),
         color=color,
         collision=True,
+        contact_offset_m=narrow_contact_offset_m,
     )
     for name, x in (
         ("Wall_Left", -(size_x - wall) / 2.0),
@@ -432,6 +466,7 @@ def _create_bin(stage: Usd.Stage, bin_config: Mapping[str, Any]) -> None:
             position=(x, 0.0, wall_center_z),
             color=color,
             collision=True,
+            contact_offset_m=narrow_contact_offset_m,
         )
     for name, y in (
         ("Wall_Front", -(size_y - wall) / 2.0),
@@ -444,6 +479,7 @@ def _create_bin(stage: Usd.Stage, bin_config: Mapping[str, Any]) -> None:
             position=(0.0, y, wall_center_z),
             color=color,
             collision=True,
+            contact_offset_m=narrow_contact_offset_m,
         )
 
     column_width = interior_x / columns
@@ -456,6 +492,7 @@ def _create_bin(stage: Usd.Stage, bin_config: Mapping[str, Any]) -> None:
             position=(x, 0.0, wall_center_z),
             color=color,
             collision=True,
+            contact_offset_m=narrow_contact_offset_m,
         )
 
     row_height = interior_y / rows
@@ -468,6 +505,7 @@ def _create_bin(stage: Usd.Stage, bin_config: Mapping[str, Any]) -> None:
             position=(0.0, y, wall_center_z),
             color=color,
             collision=True,
+            contact_offset_m=narrow_contact_offset_m,
         )
 
     handle_config = bin_config.get("handle", {})
