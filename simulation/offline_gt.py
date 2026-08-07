@@ -17,10 +17,7 @@ class OfflineGtProbe:
     def __init__(self, stage: Any) -> None:
         try:
             from pxr import Usd, UsdGeom
-            from isaacsim.core.utils.prims import (
-                get_all_matching_child_prims,
-                get_prim_at_path,
-            )
+            from isaacsim.core.utils.prims import get_prim_at_path
         except ImportError as exc:
             raise RuntimeError(
                 "offline_gt requires Isaac Sim USD bindings and prim utilities"
@@ -31,7 +28,6 @@ class OfflineGtProbe:
         self._Usd = Usd
         self._UsdGeom = UsdGeom
         self._get_prim_at_path = get_prim_at_path
-        self._get_all_matching_child_prims = get_all_matching_child_prims
 
     def _prim(self, path: str) -> Any:
         # Use Isaac Sim's public prim utility instead of calling UsdStage
@@ -50,60 +46,6 @@ class OfflineGtProbe:
             ignoreVisibility=True,
         )
         return cache.ComputeWorldBound(self._prim(path)).ComputeAlignedRange()
-
-    def franka_pinch_geometry(
-        self,
-        *,
-        arm_path: str,
-        maximum_finger_center_separation_m: float,
-    ) -> dict[str, Any]:
-        """Measure the physical midpoint between the two finger-link bounds."""
-
-        maximum = float(maximum_finger_center_separation_m)
-        if not 0.05 <= maximum <= 0.20:
-            raise ValueError("maximum finger-center separation must be in [0.05, 0.20]")
-        suffixes = ("/panda_leftfinger", "/panda_rightfinger")
-        paths: list[str] = []
-        centers: list[list[float]] = []
-        descendants = tuple(self._get_all_matching_child_prims(arm_path))
-        for suffix in suffixes:
-            matches = [
-                prim
-                for prim in descendants
-                if str(prim.GetPath()).startswith(f"{arm_path}/")
-                and str(prim.GetPath()).endswith(suffix)
-            ]
-            if len(matches) != 1:
-                raise RuntimeError(
-                    f"expected one {suffix} below {arm_path}, found {len(matches)}"
-                )
-            path = str(matches[0].GetPath())
-            world_range = self._world_aligned_range(path)
-            minimum = world_range.GetMin()
-            maximum_bound = world_range.GetMax()
-            center = [
-                (float(minimum[axis]) + float(maximum_bound[axis])) / 2.0
-                for axis in range(3)
-            ]
-            paths.append(path)
-            centers.append(center)
-        separation = sum(
-            (centers[0][axis] - centers[1][axis]) ** 2 for axis in range(3)
-        ) ** 0.5
-        if not 0.0 < separation <= maximum:
-            raise RuntimeError(
-                f"measured finger-center separation {separation:.6f} m is invalid"
-            )
-        midpoint = [
-            (centers[0][axis] + centers[1][axis]) / 2.0 for axis in range(3)
-        ]
-        return {
-            "arm_path": arm_path,
-            "finger_paths": paths,
-            "finger_centers_world_m": centers,
-            "physical_pinch_center_world_m": midpoint,
-            "finger_center_separation_m": separation,
-        }
 
     def _world_matrix(self, path: str) -> Any:
         cache = self._UsdGeom.XformCache(self._Usd.TimeCode.Default())

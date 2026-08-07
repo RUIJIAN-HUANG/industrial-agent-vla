@@ -25,8 +25,6 @@ class P01ExpertTuning:
     grasp_probe_lift_m: float = 0.04
     minimum_grasp_follow_ratio: float = 0.60
     maximum_grasp_follow_error_m: float = 0.015
-    physical_pinch_alignment_tolerance_m: float = 0.006
-    maximum_finger_center_separation_m: float = 0.15
     minimum_finger_contact_ratio: float = 0.60
     max_rotation_step_rad: float = 0.20
     rotation_tolerance_rad: float = 0.035
@@ -36,6 +34,8 @@ class P01ExpertTuning:
     max_actual_step_m: float = 0.06
     divergence_tolerance_m: float = 0.004
     max_consecutive_divergent_steps: int = 2
+    minimum_progress_m: float = 0.0001
+    max_consecutive_stalled_steps: int = 4
     close_steps: int = 12
     release_steps: int = 8
 
@@ -66,45 +66,18 @@ class P01ExpertTuning:
             raise ValueError("minimum_grasp_follow_ratio must be in [0.5, 0.9]")
         if not 0.005 <= self.maximum_grasp_follow_error_m <= 0.02:
             raise ValueError("maximum_grasp_follow_error_m must be in [0.005, 0.02]")
-        if not 0.001 <= self.physical_pinch_alignment_tolerance_m <= 0.01:
-            raise ValueError(
-                "physical_pinch_alignment_tolerance_m must be in [0.001, 0.01]"
-            )
-        if not 0.05 <= self.maximum_finger_center_separation_m <= 0.20:
-            raise ValueError(
-                "maximum_finger_center_separation_m must be in [0.05, 0.20]"
-            )
         if not 0.5 <= self.minimum_finger_contact_ratio <= 0.9:
             raise ValueError("minimum_finger_contact_ratio must be in [0.5, 0.9]")
+        if not 0.0 < self.minimum_progress_m <= 0.001:
+            raise ValueError("minimum_progress_m must be in (0, 0.001]")
+        if self.max_consecutive_stalled_steps < 2:
+            raise ValueError("max_consecutive_stalled_steps must be at least 2")
         if not 0.05 <= self.max_rotation_step_rad <= 0.30:
             raise ValueError("max_rotation_step_rad must be in [0.05, 0.30]")
         if not 0.01 <= self.rotation_tolerance_rad <= 0.05:
             raise ValueError("rotation_tolerance_rad must be in [0.01, 0.05]")
         if self.max_rotation_steps < 1:
             raise ValueError("max_rotation_steps must be positive")
-
-
-def calibrated_control_target_world(
-    *,
-    control_frame_world_m: Sequence[float],
-    physical_pinch_world_m: Sequence[float],
-    desired_pinch_world_m: Sequence[float],
-) -> np.ndarray:
-    """Translate a physical pinch target into the controller-frame target.
-
-    The Franka controller moves its configured control frame, which is not
-    guaranteed to coincide with the midpoint between the two physical finger
-    links.  Measuring both at runtime removes the fragile fixed TCP offset.
-    """
-
-    control = np.asarray(control_frame_world_m, dtype=float)
-    physical = np.asarray(physical_pinch_world_m, dtype=float)
-    desired = np.asarray(desired_pinch_world_m, dtype=float)
-    if any(value.shape != (3,) for value in (control, physical, desired)):
-        raise ValueError("control, physical pinch and desired positions must be 3-D")
-    if not all(np.all(np.isfinite(value)) for value in (control, physical, desired)):
-        raise ValueError("control, physical pinch and desired positions must be finite")
-    return control + desired - physical
 
 
 def minimum_symmetric_finger_contact_m(

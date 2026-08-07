@@ -8,7 +8,6 @@ from simulation.scripted_expert_plan import (
     P01ExpertTuning,
     bin_slot_local_centers,
     bounded_world_delta,
-    calibrated_control_target_world,
     conservative_step_limit,
     first_bin_slot_local_center,
     frozen_success_vote,
@@ -28,19 +27,12 @@ class ScriptedExpertPlanTests(unittest.TestCase):
     def test_default_tuning_is_valid(self) -> None:
         P01ExpertTuning().validate()
 
-    def test_grasp_uses_runtime_physical_pinch_calibration(self) -> None:
+    def test_grasp_uses_virtual_tcp_and_stall_guard(self) -> None:
         tuning = P01ExpertTuning()
-        self.assertEqual(tuning.physical_pinch_alignment_tolerance_m, 0.006)
+        self.assertEqual(tuning.position_tolerance_m, 0.005)
+        self.assertEqual(tuning.max_consecutive_stalled_steps, 4)
         self.assertEqual(tuning.close_steps, 12)
         self.assertEqual(tuning.max_rotation_steps, 24)
-
-    def test_runtime_calibration_translates_physical_target_to_control_target(self) -> None:
-        target = calibrated_control_target_world(
-            control_frame_world_m=[0.1, 0.2, 0.9],
-            physical_pinch_world_m=[0.1, 0.2, 0.84],
-            desired_pinch_world_m=[-0.9, 0.2, 0.77],
-        )
-        np.testing.assert_allclose(target, [-0.9, 0.2, 0.83])
 
     def test_grasp_requires_symmetric_two_finger_contact(self) -> None:
         threshold = minimum_symmetric_finger_contact_m(

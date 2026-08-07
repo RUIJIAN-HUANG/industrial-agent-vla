@@ -145,7 +145,6 @@ def main() -> int:
         from scripted_expert_plan import (
             bin_slot_local_centers,
             bounded_world_delta,
-            calibrated_control_target_world,
             conservative_step_limit,
             frozen_success_vote,
             grasp_follow_report,
@@ -202,6 +201,10 @@ def main() -> int:
             world=world,
             arms=arms,
             physics_dt_s=float(physics["physics_dt_s"]),
+            virtual_tcp_fingertip_frame_names=(
+                "panda_leftfingertip",
+                "panda_rightfingertip",
+            ),
         )
         gt = OfflineGtProbe(isaac_compat.get_current_stage())
         image_cas = ImageCas(ImageCasConfig(root=cas_root))
@@ -259,6 +262,8 @@ def main() -> int:
 
         controller.set_tick_observer(observe)
         action_index = 0
+        motion_diagnostics_path = offline_gt_root / "p01_motion_diagnostics.json"
+        motion_diagnostics: dict[str, dict[str, Any]] = {}
 
         def execute(
             *,
@@ -302,15 +307,40 @@ def main() -> int:
             gripper_open: bool,
         ) -> None:
             initial_position, _ = controller.end_effector_pose("Arm_A")
+            samples: list[dict[str, Any]] = []
             limit = conservative_step_limit(
                 float(np.linalg.norm(target_world - initial_position)),
                 tuning.max_cartesian_step_m,
             )
             consecutive_divergent_steps = 0
-            for _ in range(limit):
+            consecutive_stalled_steps = 0
+
+            def persist_motion(status: str, error: str | None = None) -> None:
+                motion_diagnostics[subtask_id] = {
+                    "status": status,
+                    "target_world_m": target_world.tolist(),
+                    "position_tolerance_m": tuning.position_tolerance_m,
+                    "minimum_progress_m": tuning.minimum_progress_m,
+                    "step_limit": limit,
+                    "samples": samples,
+                    "error": error,
+                }
+                _write_json(
+                    motion_diagnostics_path,
+                    {
+                        "isolation": "offline_gt_only",
+                        "canonical_included": False,
+                        "tcp_definition": controller.tcp_definition("Arm_A"),
+                        "motions": motion_diagnostics,
+                    },
+                )
+
+            for step_index in range(limit):
                 current_position, _ = controller.end_effector_pose("Arm_A")
                 error = target_world - current_position
-                if float(np.linalg.norm(error)) <= tuning.position_tolerance_m:
+                current_error_m = float(np.linalg.norm(error))
+                if current_error_m <= tuning.position_tolerance_m:
+                    persist_motion("completed")
                     return
                 world_delta = bounded_world_delta(
                     current_position,
@@ -328,6 +358,7 @@ def main() -> int:
                     gripper_open=gripper_open,
                 )
                 after_position, _ = controller.end_effector_pose("Arm_A")
+                after_error_m = float(np.linalg.norm(target_world - after_position))
                 violation = motion_sample_violation(
                     current_position,
                     after_position,
@@ -335,10 +366,24 @@ def main() -> int:
                     max_actual_step_m=tuning.max_actual_step_m,
                     divergence_tolerance_m=tuning.divergence_tolerance_m,
                 )
+                progress_m = current_error_m - after_error_m
+                samples.append(
+                    {
+                        "step": step_index + 1,
+                        "before_world_m": current_position.tolist(),
+                        "after_world_m": after_position.tolist(),
+                        "before_error_m": current_error_m,
+                        "after_error_m": after_error_m,
+                        "progress_m": progress_m,
+                        "violation": violation,
+                    }
+                )
+                persist_motion("moving")
                 if violation is None:
                     consecutive_divergent_steps = 0
                 elif not violation.startswith("TCP moved away"):
                     controller.safe_stop(f"{subtask_id}: {violation}")
+                    persist_motion("safety_stop", violation)
                     raise RuntimeError(f"{subtask_id} safety stop: {violation}")
                 else:
                     consecutive_divergent_steps += 1
@@ -347,9 +392,35 @@ def main() -> int:
                         >= tuning.max_consecutive_divergent_steps
                     ):
                         controller.safe_stop(f"{subtask_id}: {violation}")
+                        persist_motion("safety_stop", violation)
                         raise RuntimeError(f"{subtask_id} safety stop: {violation}")
+
+                if after_error_m <= tuning.position_tolerance_m:
+                    persist_motion("completed")
+                    return
+
+                if progress_m < tuning.minimum_progress_m:
+                    consecutive_stalled_steps += 1
+                else:
+                    consecutive_stalled_steps = 0
+                if (
+                    after_error_m > tuning.position_tolerance_m
+                    and consecutive_stalled_steps
+                    >= tuning.max_consecutive_stalled_steps
+                ):
+                    message = (
+                        f"virtual TCP stalled at {after_error_m:.6f} m after "
+                        f"{consecutive_stalled_steps} low-progress steps"
+                    )
+                    controller.safe_stop(f"{subtask_id}: {message}")
+                    persist_motion("stalled", message)
+                    raise RuntimeError(f"{subtask_id} safety stop: {message}")
             final_position, _ = controller.end_effector_pose("Arm_A")
             remaining_error_m = float(np.linalg.norm(target_world - final_position))
+            persist_motion(
+                "step_limit",
+                f"remaining_error_m={remaining_error_m:.6f}",
+            )
             raise RuntimeError(
                 f"Arm_A did not reach {subtask_id} within {limit} steps; initial_world_m={initial_position.tolist()}; target_world_m={target_world.tolist()}; final_world_m={final_position.tolist()}; remaining_error_m={remaining_error_m:.6f}"
             )
@@ -401,58 +472,7 @@ def main() -> int:
                     gripper_open=gripper_open,
                 )
 
-        arm_path = "/World/Robots/Arm_A"
         part_path = "/World/Parts/P01"
-
-        def calibrated_target_for_physical_pinch(
-            desired_pinch_world_m: np.ndarray,
-        ) -> tuple[np.ndarray, dict[str, Any]]:
-            control_world_m, _ = controller.end_effector_pose("Arm_A")
-            pinch_report = gt.franka_pinch_geometry(
-                arm_path=arm_path,
-                maximum_finger_center_separation_m=(
-                    tuning.maximum_finger_center_separation_m
-                ),
-            )
-            physical_pinch_world_m = np.asarray(
-                pinch_report["physical_pinch_center_world_m"], dtype=float
-            )
-            target_world_m = calibrated_control_target_world(
-                control_frame_world_m=control_world_m,
-                physical_pinch_world_m=physical_pinch_world_m,
-                desired_pinch_world_m=desired_pinch_world_m,
-            )
-            report = dict(pinch_report)
-            report.update(
-                {
-                    "control_frame_world_m": control_world_m.tolist(),
-                    "desired_physical_pinch_world_m": desired_pinch_world_m.tolist(),
-                    "calibrated_control_target_world_m": target_world_m.tolist(),
-                }
-            )
-            return target_world_m, report
-
-        def physical_pinch_residual(
-            desired_pinch_world_m: np.ndarray,
-        ) -> tuple[float, dict[str, Any]]:
-            pinch_report = gt.franka_pinch_geometry(
-                arm_path=arm_path,
-                maximum_finger_center_separation_m=(
-                    tuning.maximum_finger_center_separation_m
-                ),
-            )
-            measured = np.asarray(
-                pinch_report["physical_pinch_center_world_m"], dtype=float
-            )
-            residual_m = float(np.linalg.norm(desired_pinch_world_m - measured))
-            report = dict(pinch_report)
-            report.update(
-                {
-                    "desired_physical_pinch_world_m": desired_pinch_world_m.tolist(),
-                    "physical_pinch_residual_m": residual_m,
-                }
-            )
-            return residual_m, report
 
         phase = "execute_p01_pick_place"
         part_config = next(part for part in config["parts"] if part["id"] == "P01")
@@ -490,12 +510,9 @@ def main() -> int:
         desired_approach_pinch = live_part_center + np.asarray(
             [0.0, 0.0, tuning.approach_clearance_m], dtype=float
         )
-        approach_target, approach_calibration = calibrated_target_for_physical_pinch(
-            desired_approach_pinch
-        )
         move_tcp_world(
             subtask_id="p01-grasp-approach-position",
-            target_world=approach_target,
+            target_world=desired_approach_pinch,
             gripper_open=True,
         )
         orientation_report = align_tcp_top_down(subtask_id="p01-grasp-align-top-down")
@@ -503,56 +520,44 @@ def main() -> int:
         desired_approach_pinch = live_part_center + np.asarray(
             [0.0, 0.0, tuning.approach_clearance_m], dtype=float
         )
-        recentered_target, recentered_calibration = (
-            calibrated_target_for_physical_pinch(desired_approach_pinch)
-        )
         move_tcp_world(
             subtask_id="p01-grasp-recenter-after-orientation",
-            target_world=recentered_target,
+            target_world=desired_approach_pinch,
             gripper_open=True,
         )
         live_part_center = np.asarray(gt.world_position(part_path), dtype=float)
         desired_grasp_pinch = live_part_center.copy()
-        grasp_target, descend_calibration = calibrated_target_for_physical_pinch(
-            desired_grasp_pinch
-        )
-        move_tcp_world(
-            subtask_id="p01-grasp-single-descend",
-            target_world=grasp_target,
-            gripper_open=True,
-        )
-        alignment_residual_m, aligned_pinch_report = physical_pinch_residual(
-            desired_grasp_pinch
-        )
-        correction_calibration: dict[str, Any] | None = None
-        if alignment_residual_m > tuning.physical_pinch_alignment_tolerance_m:
-            correction_target, correction_calibration = (
-                calibrated_target_for_physical_pinch(desired_grasp_pinch)
-            )
-            move_tcp_world(
-                subtask_id="p01-grasp-physical-pinch-correction",
-                target_world=correction_target,
-                gripper_open=True,
-            )
-            alignment_residual_m, aligned_pinch_report = physical_pinch_residual(
-                desired_grasp_pinch
-            )
         calibration_report = {
             "isolation": "offline_gt_only",
             "canonical_included": False,
-            "method": "runtime_physical_finger_midpoint_to_control_frame_calibration",
-            "approach": approach_calibration,
-            "after_top_down_orientation": recentered_calibration,
-            "descend": descend_calibration,
-            "correction": correction_calibration,
-            "final_alignment": aligned_pinch_report,
-            "alignment_tolerance_m": tuning.physical_pinch_alignment_tolerance_m,
+            "method": "lula_two_fingertip_virtual_tcp",
+            "tcp_definition": controller.tcp_definition("Arm_A"),
+            "desired_grasp_center_world_m": desired_grasp_pinch.tolist(),
+            "alignment_tolerance_m": tuning.position_tolerance_m,
+            "status": "descending",
         }
         _write_json(calibration_path, calibration_report)
-        if alignment_residual_m > tuning.physical_pinch_alignment_tolerance_m:
-            controller.safe_stop("physical pinch center did not align with P01")
+        move_tcp_world(
+            subtask_id="p01-grasp-single-descend",
+            target_world=desired_grasp_pinch,
+            gripper_open=True,
+        )
+        aligned_pinch_world_m, _ = controller.end_effector_pose("Arm_A")
+        alignment_residual_m = float(
+            np.linalg.norm(desired_grasp_pinch - aligned_pinch_world_m)
+        )
+        calibration_report.update(
+            {
+                "status": "aligned",
+                "measured_grasp_center_world_m": aligned_pinch_world_m.tolist(),
+                "alignment_residual_m": alignment_residual_m,
+            }
+        )
+        _write_json(calibration_path, calibration_report)
+        if alignment_residual_m > tuning.position_tolerance_m:
+            controller.safe_stop("virtual grasp center did not align with P01")
             raise RuntimeError(
-                "GRASP_ALIGNMENT_FAILED: measured physical pinch center missed P01; "
+                "GRASP_ALIGNMENT_FAILED: virtual grasp center missed P01; "
                 "see offline_gt/p01_pinch_calibration.json"
             )
         hold(
@@ -591,9 +596,8 @@ def main() -> int:
         )
         grasp_report.update(
             {
-                "desired_physical_pinch_world_m": desired_grasp_pinch.tolist(),
-                "calibrated_control_target_world_m": grasp_target.tolist(),
-                "physical_pinch_alignment_residual_m": alignment_residual_m,
+                "desired_virtual_tcp_world_m": desired_grasp_pinch.tolist(),
+                "virtual_tcp_alignment_residual_m": alignment_residual_m,
                 "tcp_before_world_m": probe_tcp_before.tolist(),
                 "tcp_after_world_m": probe_tcp_after.tolist(),
                 "part_before_world_m": probe_part_before.tolist(),
@@ -611,7 +615,7 @@ def main() -> int:
             {
                 "isolation": "offline_gt_only",
                 "canonical_included": False,
-                "strategy": "runtime_calibrated_physical_pinch_finger_and_lift_verified_grasp",
+                "strategy": "lula_virtual_tcp_finger_and_lift_verified_grasp",
                 "passed": grasp_passed,
                 "attempt": grasp_report,
                 "pinch_calibration_path": str(calibration_path),
@@ -656,7 +660,7 @@ def main() -> int:
                 "slot_index": slot_index,
                 "slot_local_m": slot_local.tolist(),
                 "arm_base_world_m": arm_base_world.tolist(),
-                "grasp_strategy": "runtime_calibrated_physical_pinch_finger_and_lift_verified_grasp",
+                "grasp_strategy": "lula_virtual_tcp_finger_and_lift_verified_grasp",
                 "pinch_calibration_path": str(calibration_path),
                 "verified_tcp_to_part_center_m": carried_tcp_to_part_center.tolist(),
                 "grasp_approach_world_m": grasp_approach.tolist(),

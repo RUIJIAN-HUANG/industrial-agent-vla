@@ -13,11 +13,14 @@ from industrial_agent.contracts import ActionStep
 from industrial_agent.sync_contract import FROZEN_MULTI_RATE
 from simulation.isaac_franka_controller import (
     IsaacSimFrankaController,
+    _control_world_position_for_tcp,
     _gripper_opening_m,
+    _midpoint_tcp_offset_local,
     _position_targets_match,
     _quaternion_to_rotvec,
     _rotate_vector,
     _rotation_matrix_to_quaternion,
+    _virtual_tcp_world_position,
 )
 
 
@@ -42,6 +45,40 @@ class IsaacFrankaControllerMathTests(unittest.TestCase):
         rotation_z_90 = np.asarray([sqrt(0.5), 0.0, 0.0, sqrt(0.5)])
         vector = _rotate_vector(rotation_z_90, np.asarray([1.0, 0.0, 0.0]))
         np.testing.assert_allclose(vector, [0.0, 1.0, 0.0], atol=1e-12)
+
+    def test_virtual_tcp_offset_is_calibrated_in_control_local_frame(self):
+        rotation_z_90 = np.asarray(
+            [
+                [0.0, -1.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ]
+        )
+        offset = _midpoint_tcp_offset_local(
+            control_position_world_m=np.asarray([1.0, 2.0, 3.0]),
+            control_rotation_world=rotation_z_90,
+            left_tip_world_m=np.asarray([0.98, 2.1, 3.0]),
+            right_tip_world_m=np.asarray([1.02, 2.1, 3.0]),
+        )
+        np.testing.assert_allclose(offset, [0.1, 0.0, 0.0], atol=1e-12)
+        np.testing.assert_allclose(
+            _virtual_tcp_world_position(
+                np.asarray([1.0, 2.0, 3.0]),
+                rotation_z_90,
+                offset,
+            ),
+            [1.0, 2.1, 3.0],
+            atol=1e-12,
+        )
+
+    def test_virtual_tcp_target_is_converted_back_to_lula_control_frame(self):
+        rotation_z_90 = np.asarray([sqrt(0.5), 0.0, 0.0, sqrt(0.5)])
+        target = _control_world_position_for_tcp(
+            np.asarray([1.0, 2.0, 3.0]),
+            rotation_z_90,
+            np.asarray([0.1, 0.0, 0.0]),
+        )
+        np.testing.assert_allclose(target, [1.0, 1.9, 3.0], atol=1e-12)
 
 
 class MultiRateExecutionTests(unittest.TestCase):
