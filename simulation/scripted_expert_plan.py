@@ -30,15 +30,6 @@ class P01ExpertTuning:
     rotation_tolerance_rad: float = 0.035
     max_rotation_steps: int = 24
     transit_clearance_m: float = 0.04
-    radial_staging_offset_m: float = 0.12
-    place_approach_clearance_m: float = 0.06
-    release_above_bin_m: float = 0.002
-    release_xy_tolerance_m: float = 0.001
-    release_position_tolerance_m: float = 0.001
-    release_stable_checks: int = 3
-    guarded_place_step_m: float = 0.005
-    guarded_max_actual_step_m: float = 0.03
-    transfer_settle_steps: int = 4
     slot_work_radius_margin_m: float = 0.03
     max_actual_step_m: float = 0.06
     divergence_tolerance_m: float = 0.004
@@ -46,7 +37,7 @@ class P01ExpertTuning:
     minimum_progress_m: float = 0.0001
     max_consecutive_stalled_steps: int = 4
     close_steps: int = 12
-    release_steps: int = 16
+    release_steps: int = 8
 
     def validate(self) -> None:
         if not 0.05 <= self.approach_clearance_m <= 0.20:
@@ -57,26 +48,6 @@ class P01ExpertTuning:
             raise ValueError("position_tolerance_m must be in [0.0005, 0.005]")
         if not 0.02 <= self.transit_clearance_m <= 0.08:
             raise ValueError("transit_clearance_m must be in [0.02, 0.08]")
-        if not 0.08 <= self.radial_staging_offset_m <= 0.18:
-            raise ValueError("radial_staging_offset_m must be in [0.08, 0.18]")
-        if not 0.03 <= self.place_approach_clearance_m <= 0.10:
-            raise ValueError("place_approach_clearance_m must be in [0.03, 0.10]")
-        if not 0.001 <= self.release_above_bin_m <= 0.01:
-            raise ValueError("release_above_bin_m must be in [0.001, 0.01]")
-        if not 0.0005 <= self.release_xy_tolerance_m <= 0.002:
-            raise ValueError("release_xy_tolerance_m must be in [0.0005, 0.002]")
-        if not 0.0005 <= self.release_position_tolerance_m <= 0.002:
-            raise ValueError(
-                "release_position_tolerance_m must be in [0.0005, 0.002]"
-            )
-        if self.release_stable_checks < 2:
-            raise ValueError("release_stable_checks must be at least 2")
-        if not 0.002 <= self.guarded_place_step_m <= 0.01:
-            raise ValueError("guarded_place_step_m must be in [0.002, 0.01]")
-        if not self.guarded_place_step_m < self.guarded_max_actual_step_m <= 0.04:
-            raise ValueError(
-                "guarded_max_actual_step_m must exceed guarded_place_step_m and be <= 0.04"
-            )
         if not 0.01 <= self.slot_work_radius_margin_m <= 0.08:
             raise ValueError("slot_work_radius_margin_m must be in [0.01, 0.08]")
         if not self.max_cartesian_step_m < self.max_actual_step_m <= 0.08:
@@ -87,8 +58,8 @@ class P01ExpertTuning:
             raise ValueError("divergence_tolerance_m must be in [0.001, 0.01]")
         if self.max_consecutive_divergent_steps < 1:
             raise ValueError("max_consecutive_divergent_steps must be positive")
-        if min(self.close_steps, self.release_steps, self.transfer_settle_steps) < 1:
-            raise ValueError("close, release, and transfer settle steps must be positive")
+        if self.close_steps < 1 or self.release_steps < 1:
+            raise ValueError("close_steps and release_steps must be positive")
         if not 0.02 <= self.grasp_probe_lift_m <= 0.06:
             raise ValueError("grasp_probe_lift_m must be in [0.02, 0.06]")
         if not 0.5 <= self.minimum_grasp_follow_ratio <= 0.9:
@@ -334,54 +305,6 @@ def bin_slot_local_centers(
     )
 
 
-def physical_bin_slot_local_center(
-    slot_index: int,
-    *,
-    size_m: Sequence[float],
-    wall_thickness_m: float,
-    divider_thickness_m: float,
-    bottom_thickness_m: float,
-    rows: int,
-    columns: int,
-    part_radius_m: float,
-    part_height_m: float,
-) -> np.ndarray:
-    """Return the geometric center of one usable cell, excluding dividers."""
-
-    size = np.asarray(size_m, dtype=float)
-    if size.shape != (3,) or not np.all(np.isfinite(size)) or np.any(size <= 0.0):
-        raise ValueError("bin size must contain three positive finite values")
-    wall = float(wall_thickness_m)
-    divider = float(divider_thickness_m)
-    bottom = float(bottom_thickness_m)
-    radius = float(part_radius_m)
-    height = float(part_height_m)
-    if rows < 1 or columns < 1 or not 0 <= int(slot_index) < rows * columns:
-        raise ValueError("slot_index is outside the bin grid")
-    if min(wall, divider, bottom, radius, height) <= 0.0:
-        raise ValueError("bin, divider, and part dimensions must be positive")
-    interior_x = size[0] - 2.0 * wall
-    interior_y = size[1] - 2.0 * wall
-
-    def usable_center(span: float, count: int, index: int) -> tuple[float, float]:
-        pitch = span / count
-        lower = -span / 2.0 + index * pitch
-        upper = lower + pitch
-        if index > 0:
-            lower += divider / 2.0
-        if index < count - 1:
-            upper -= divider / 2.0
-        return (lower + upper) / 2.0, upper - lower
-
-    row, column = divmod(int(slot_index), columns)
-    x, usable_x = usable_center(interior_x, columns, column)
-    y, usable_y = usable_center(interior_y, rows, row)
-    if min(usable_x, usable_y) <= 2.0 * radius:
-        raise ValueError("part does not physically fit inside the selected bin cell")
-    z = -size[2] / 2.0 + bottom + height / 2.0
-    return np.asarray([x, y, z], dtype=float)
-
-
 def select_safest_slot_index(
     slot_tcp_world_m: Sequence[Sequence[float]],
     *,
@@ -453,9 +376,8 @@ def orthogonal_transfer_waypoints(
     *,
     arm_base_world_m: Sequence[float],
     transit_clearance_m: float,
-    radial_staging_offset_m: float,
 ) -> tuple[np.ndarray, ...]:
-    """Plan a raised transfer that enters the destination radially from outside."""
+    """Plan a raised L-shaped transfer on the side farther from the base."""
 
     start = np.asarray(start_world_m, dtype=float)
     destination = np.asarray(destination_world_m, dtype=float)
@@ -467,9 +389,6 @@ def orthogonal_transfer_waypoints(
     clearance = float(transit_clearance_m)
     if clearance <= 0.0:
         raise ValueError("transit_clearance_m must be positive")
-    staging_offset = float(radial_staging_offset_m)
-    if staging_offset <= 0.0:
-        raise ValueError("radial_staging_offset_m must be positive")
     transit_z = max(float(start[2]), float(destination[2])) + clearance
     corners = (
         np.asarray([destination[0], start[1], transit_z], dtype=float),
@@ -486,46 +405,7 @@ def orthogonal_transfer_waypoints(
     over_destination = np.asarray(
         [destination[0], destination[1], transit_z], dtype=float
     )
-    radial_xy = destination[:2] - base[:2]
-    radial_norm = float(np.linalg.norm(radial_xy))
-    if radial_norm <= 1e-9:
-        raise ValueError("destination cannot share the arm-base XY position")
-    radial_staging = np.asarray(
-        [
-            destination[0] + radial_xy[0] / radial_norm * staging_offset,
-            destination[1] + radial_xy[1] / radial_norm * staging_offset,
-            transit_z,
-        ],
-        dtype=float,
-    )
-    # The outer staging point keeps the lateral transfer away from the Panda's
-    # inner redundant-IK branch boundary.  The guarded final leg then approaches
-    # the destination along the base-to-target radial direction.
-    return corner, radial_staging, over_destination
-
-
-def top_release_local_center(
-    slot_local_m: Sequence[float],
-    *,
-    bin_size_m: Sequence[float],
-    part_height_m: float,
-    release_clearance_m: float,
-) -> np.ndarray:
-    """Place a part center just above the bin rim for a gravity-assisted release."""
-
-    slot = np.asarray(slot_local_m, dtype=float)
-    size = np.asarray(bin_size_m, dtype=float)
-    height = float(part_height_m)
-    clearance = float(release_clearance_m)
-    if slot.shape != (3,) or size.shape != (3,):
-        raise ValueError("slot_local_m and bin_size_m must be 3-D")
-    if not np.all(np.isfinite(slot)) or not np.all(np.isfinite(size)):
-        raise ValueError("slot_local_m and bin_size_m must be finite")
-    if np.any(size <= 0.0) or height <= 0.0 or clearance < 0.0:
-        raise ValueError("bin size and part height must be positive; clearance non-negative")
-    release = slot.copy()
-    release[2] = size[2] / 2.0 + height / 2.0 + clearance
-    return release
+    return corner, over_destination, destination.copy()
 
 
 def motion_sample_violation(

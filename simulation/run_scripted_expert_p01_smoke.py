@@ -143,6 +143,7 @@ def main() -> int:
         from industrial_agent.image_cas import ImageCas, ImageCasConfig
         from offline_gt import OfflineGtProbe
         from scripted_expert_plan import (
+            bin_slot_local_centers,
             bounded_world_delta,
             conservative_step_limit,
             frozen_success_vote,
@@ -150,10 +151,8 @@ def main() -> int:
             minimum_symmetric_finger_contact_m,
             motion_sample_violation,
             orthogonal_transfer_waypoints,
-            physical_bin_slot_local_center,
             select_safest_slot_index,
             symmetric_finger_contact_report,
-            top_release_local_center,
             top_down_tilt_error_rad,
             yaw_preserving_top_down_rotation,
         )
@@ -306,34 +305,12 @@ def main() -> int:
             subtask_id: str,
             target_world: np.ndarray,
             gripper_open: bool,
-            max_step_m: float | None = None,
-            max_actual_step_m: float | None = None,
-            max_consecutive_divergent_steps: int | None = None,
-            position_tolerance_m: float | None = None,
         ) -> None:
             initial_position, _ = controller.end_effector_pose("Arm_A")
             samples: list[dict[str, Any]] = []
-            selected_max_step_m = (
-                tuning.max_cartesian_step_m if max_step_m is None else float(max_step_m)
-            )
-            selected_max_actual_step_m = (
-                tuning.max_actual_step_m
-                if max_actual_step_m is None
-                else float(max_actual_step_m)
-            )
-            selected_max_divergent_steps = (
-                tuning.max_consecutive_divergent_steps
-                if max_consecutive_divergent_steps is None
-                else int(max_consecutive_divergent_steps)
-            )
-            selected_position_tolerance_m = (
-                tuning.position_tolerance_m
-                if position_tolerance_m is None
-                else float(position_tolerance_m)
-            )
             limit = conservative_step_limit(
                 float(np.linalg.norm(target_world - initial_position)),
-                selected_max_step_m,
+                tuning.max_cartesian_step_m,
             )
             consecutive_divergent_steps = 0
             consecutive_stalled_steps = 0
@@ -342,10 +319,7 @@ def main() -> int:
                 motion_diagnostics[subtask_id] = {
                     "status": status,
                     "target_world_m": target_world.tolist(),
-                    "position_tolerance_m": selected_position_tolerance_m,
-                    "commanded_max_step_m": selected_max_step_m,
-                    "max_actual_step_m": selected_max_actual_step_m,
-                    "max_consecutive_divergent_steps": selected_max_divergent_steps,
+                    "position_tolerance_m": tuning.position_tolerance_m,
                     "minimum_progress_m": tuning.minimum_progress_m,
                     "step_limit": limit,
                     "samples": samples,
@@ -365,13 +339,13 @@ def main() -> int:
                 current_position, _ = controller.end_effector_pose("Arm_A")
                 error = target_world - current_position
                 current_error_m = float(np.linalg.norm(error))
-                if current_error_m <= selected_position_tolerance_m:
+                if current_error_m <= tuning.position_tolerance_m:
                     persist_motion("completed")
                     return
                 world_delta = bounded_world_delta(
                     current_position,
                     target_world,
-                    max_step_m=selected_max_step_m,
+                    max_step_m=tuning.max_cartesian_step_m,
                 )
                 _, base_orientation = arms["Arm_A"].get_world_pose()
                 base_delta = _rotate_vector(
@@ -389,7 +363,7 @@ def main() -> int:
                     current_position,
                     after_position,
                     target_world,
-                    max_actual_step_m=selected_max_actual_step_m,
+                    max_actual_step_m=tuning.max_actual_step_m,
                     divergence_tolerance_m=tuning.divergence_tolerance_m,
                 )
                 progress_m = current_error_m - after_error_m
@@ -415,13 +389,13 @@ def main() -> int:
                     consecutive_divergent_steps += 1
                     if (
                         consecutive_divergent_steps
-                        >= selected_max_divergent_steps
+                        >= tuning.max_consecutive_divergent_steps
                     ):
                         controller.safe_stop(f"{subtask_id}: {violation}")
                         persist_motion("safety_stop", violation)
                         raise RuntimeError(f"{subtask_id} safety stop: {violation}")
 
-                if after_error_m <= selected_position_tolerance_m:
+                if after_error_m <= tuning.position_tolerance_m:
                     persist_motion("completed")
                     return
 
@@ -430,7 +404,7 @@ def main() -> int:
                 else:
                     consecutive_stalled_steps = 0
                 if (
-                    after_error_m > selected_position_tolerance_m
+                    after_error_m > tuning.position_tolerance_m
                     and consecutive_stalled_steps
                     >= tuning.max_consecutive_stalled_steps
                 ):
@@ -502,22 +476,11 @@ def main() -> int:
 
         phase = "execute_p01_pick_place"
         part_config = next(part for part in config["parts"] if part["id"] == "P01")
-        slot_locals = tuple(
-            physical_bin_slot_local_center(
-                index,
-                size_m=bin_config["size_m"],
-                wall_thickness_m=float(bin_config["wall_thickness_m"]),
-                divider_thickness_m=float(bin_config["divider_thickness_m"]),
-                bottom_thickness_m=float(bin_config["bottom_thickness_m"]),
-                rows=int(bin_config["grid"]["rows"]),
-                columns=int(bin_config["grid"]["columns"]),
-                part_radius_m=float(part_config["geometry"]["radius_m"]),
-                part_height_m=float(part_config["geometry"]["height_m"]),
-            )
-            for index in range(
-                int(bin_config["grid"]["rows"])
-                * int(bin_config["grid"]["columns"])
-            )
+        slot_locals = bin_slot_local_centers(
+            size_m=bin_config["size_m"],
+            wall_thickness_m=float(bin_config["wall_thickness_m"]),
+            bottom_thickness_m=float(bin_config["bottom_thickness_m"]),
+            part_height_m=float(part_config["geometry"]["height_m"]),
         )
         slot_part_centers = tuple(
             np.asarray(
@@ -679,26 +642,15 @@ def main() -> int:
             gripper_open=False,
         )
 
-        release_part_local = top_release_local_center(
-            slot_local,
-            bin_size_m=bin_config["size_m"],
-            part_height_m=float(part_config["geometry"]["height_m"]),
-            release_clearance_m=tuning.release_above_bin_m,
-        )
-        release_part_center = np.asarray(
-            gt.local_point_to_world("/World/Bins/Bin_01", release_part_local),
-            dtype=float,
-        )
-        release_tcp = release_part_center + carried_tcp_to_part_center
-        place_approach = release_tcp + np.asarray(
-            [0.0, 0.0, tuning.place_approach_clearance_m], dtype=float
+        place_tcp = slot_part_centers[slot_index] + carried_tcp_to_part_center
+        place_approach = place_tcp + np.asarray(
+            [0.0, 0.0, tuning.approach_clearance_m], dtype=float
         )
         transfer_waypoints = orthogonal_transfer_waypoints(
             grasp_approach,
             place_approach,
             arm_base_world_m=arm_base_world,
             transit_clearance_m=tuning.transit_clearance_m,
-            radial_staging_offset_m=tuning.radial_staging_offset_m,
         )
         _write_json(
             offline_gt_root / "p01_motion_plan.json",
@@ -709,21 +661,10 @@ def main() -> int:
                 "slot_local_m": slot_local.tolist(),
                 "arm_base_world_m": arm_base_world.tolist(),
                 "grasp_strategy": "lula_virtual_tcp_finger_and_lift_verified_grasp",
-                "place_strategy": (
-                    "physical_cell_center_live_recenter_monitored_release"
-                ),
-                "narrow_contact_offset_m": 0.0005,
-                "part_max_linear_velocity_m_s": 0.25,
-                "part_max_angular_velocity_deg_s": 90.0,
-                "transfer_strategy": "outer_radial_staging_then_guarded_entry",
-                "radial_staging_offset_m": tuning.radial_staging_offset_m,
                 "pinch_calibration_path": str(calibration_path),
                 "verified_tcp_to_part_center_m": carried_tcp_to_part_center.tolist(),
                 "grasp_approach_world_m": grasp_approach.tolist(),
-                "release_part_local_m": release_part_local.tolist(),
-                "release_part_center_world_m": release_part_center.tolist(),
-                "release_tcp_world_m": release_tcp.tolist(),
-                "release_above_bin_m": tuning.release_above_bin_m,
+                "place_tcp_world_m": place_tcp.tolist(),
                 "place_approach_world_m": place_approach.tolist(),
                 "transfer_waypoints_world_m": [
                     waypoint.tolist() for waypoint in transfer_waypoints
@@ -731,175 +672,21 @@ def main() -> int:
             },
         )
         for waypoint_index, waypoint in enumerate(transfer_waypoints, start=1):
-            transfer_options: dict[str, Any] = {}
-            if waypoint_index == len(transfer_waypoints):
-                transfer_options = {
-                    "max_step_m": tuning.guarded_place_step_m,
-                    "max_actual_step_m": tuning.guarded_max_actual_step_m,
-                    "max_consecutive_divergent_steps": 1,
-                }
             move_tcp_world(
                 subtask_id=f"p01-transfer-{waypoint_index}",
                 target_world=waypoint,
                 gripper_open=False,
-                **transfer_options,
             )
-        hold(
-            subtask_id="p01-transfer-settle",
-            gripper_open=False,
-            steps=tuning.transfer_settle_steps,
-        )
         move_tcp_world(
-            subtask_id="p01-place-approach",
-            target_world=place_approach,
+            subtask_id="p01-place",
+            target_world=place_tcp,
             gripper_open=False,
-            max_step_m=tuning.guarded_place_step_m,
-            max_actual_step_m=tuning.guarded_max_actual_step_m,
-            max_consecutive_divergent_steps=1,
         )
-        move_tcp_world(
-            subtask_id="p01-place-release-height",
-            target_world=release_tcp,
-            gripper_open=False,
-            max_step_m=tuning.guarded_place_step_m,
-            max_actual_step_m=tuning.guarded_max_actual_step_m,
-            max_consecutive_divergent_steps=1,
-            position_tolerance_m=tuning.release_position_tolerance_m,
-        )
-
-        release_alignment_path = offline_gt_root / "p01_release_alignment.json"
-        release_alignment_samples: list[dict[str, Any]] = []
-        release_aligned = False
-        for attempt_index in range(1, 5):
-            live_release_part_center = np.asarray(
-                gt.local_point_to_world("/World/Bins/Bin_01", release_part_local),
-                dtype=float,
-            )
-            live_part_center = np.asarray(gt.world_position(part_path), dtype=float)
-            live_tcp, _ = controller.end_effector_pose("Arm_A")
-            live_fingers = controller.gripper_joint_positions("Arm_A")
-            live_contact = symmetric_finger_contact_report(
-                live_fingers,
-                minimum_contact_m=minimum_contact_m,
-            )
-            part_error = live_release_part_center - live_part_center
-            xy_error_m = float(np.linalg.norm(part_error[:2]))
-            z_error_m = abs(float(part_error[2]))
-            release_alignment_samples.append(
-                {
-                    "attempt": attempt_index,
-                    "part_center_world_m": live_part_center.tolist(),
-                    "tcp_world_m": live_tcp.tolist(),
-                    "finger_joint_positions_m": live_fingers.tolist(),
-                    "finger_contact": live_contact,
-                    "target_part_center_world_m": live_release_part_center.tolist(),
-                    "part_error_world_m": part_error.tolist(),
-                    "xy_error_m": xy_error_m,
-                    "z_error_m": z_error_m,
-                }
-            )
-            if not bool(live_contact["pass"]):
-                break
-            if (
-                xy_error_m <= tuning.release_xy_tolerance_m
-                and z_error_m <= tuning.release_position_tolerance_m
-            ):
-                release_aligned = True
-                break
-            move_tcp_world(
-                subtask_id=f"p01-release-live-recenter-{attempt_index}",
-                target_world=live_tcp + part_error,
-                gripper_open=False,
-                max_step_m=0.002,
-                max_actual_step_m=tuning.guarded_max_actual_step_m,
-                max_consecutive_divergent_steps=1,
-                position_tolerance_m=tuning.release_position_tolerance_m,
-            )
-        _write_json(
-            release_alignment_path,
-            {
-                "isolation": "offline_gt_only",
-                "canonical_included": False,
-                "passed": release_aligned,
-                "xy_tolerance_m": tuning.release_xy_tolerance_m,
-                "z_tolerance_m": tuning.release_position_tolerance_m,
-                "samples": release_alignment_samples,
-            },
-        )
-        if not release_aligned:
-            controller.safe_stop("P01 was not securely centered before release")
-            raise RuntimeError(
-                "RELEASE_ALIGNMENT_FAILED: P01 is not centered and retained; "
-                "see offline_gt/p01_release_alignment.json"
-            )
-
-        release_trace_path = offline_gt_root / "p01_release_trace.json"
-        release_trace: list[dict[str, Any]] = []
-        consecutive_contained = 0
-        bin_world_center = np.asarray(
-            gt.world_position("/World/Bins/Bin_01"), dtype=float
-        )
-        bin_half_xy = np.asarray(bin_config["size_m"][:2], dtype=float) / 2.0
-        table_surface_z = float(config["table"]["surface_z_m"])
-        for release_index in range(1, tuning.release_steps + 1):
-            execute(
-                subtask_id="p01-release-monitored",
-                base_delta=np.zeros(3, dtype=float),
-                gripper_open=True,
-            )
-            live_part_center = np.asarray(gt.world_position(part_path), dtype=float)
-            containment = gt.part_fully_inside_bin(
-                part_path=part_path,
-                bin_path="/World/Bins/Bin_01",
-                bin_config=bin_config,
-                numerical_tolerance_m=0.001,
-            )
-            consecutive_contained = (
-                consecutive_contained + 1 if bool(containment["pass"]) else 0
-            )
-            escaped_xy = bool(
-                np.any(
-                    np.abs(live_part_center[:2] - bin_world_center[:2])
-                    > bin_half_xy + 0.05
-                )
-            )
-            escaped_z = bool(live_part_center[2] < table_surface_z - 0.05)
-            release_trace.append(
-                {
-                    "release_step": release_index,
-                    "part_center_world_m": live_part_center.tolist(),
-                    "containment": containment,
-                    "consecutive_contained": consecutive_contained,
-                    "escaped_xy": escaped_xy,
-                    "escaped_z": escaped_z,
-                }
-            )
-            _write_json(
-                release_trace_path,
-                {
-                    "isolation": "offline_gt_only",
-                    "canonical_included": False,
-                    "required_consecutive_contained": tuning.release_stable_checks,
-                    "samples": release_trace,
-                },
-            )
-            if consecutive_contained >= tuning.release_stable_checks:
-                break
-            if escaped_xy or escaped_z:
-                break
-        if consecutive_contained < tuning.release_stable_checks:
-            controller.safe_stop("P01 escaped or failed to settle during release")
-            raise RuntimeError(
-                "RELEASE_SETTLE_FAILED: P01 did not remain inside the bin; "
-                "see offline_gt/p01_release_trace.json"
-            )
+        hold(subtask_id="p01-release", gripper_open=True, steps=tuning.release_steps)
         move_tcp_world(
             subtask_id="p01-retreat",
             target_world=place_approach,
             gripper_open=True,
-            max_step_m=tuning.guarded_place_step_m,
-            max_actual_step_m=tuning.guarded_max_actual_step_m,
-            max_consecutive_divergent_steps=1,
         )
 
         phase = "three_fresh_frame_offline_gt_vote"

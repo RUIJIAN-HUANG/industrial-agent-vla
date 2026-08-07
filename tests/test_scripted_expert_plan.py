@@ -16,10 +16,8 @@ from simulation.scripted_expert_plan import (
     minimum_xy_radius_along_segment,
     motion_sample_violation,
     orthogonal_transfer_waypoints,
-    physical_bin_slot_local_center,
     select_safest_slot_index,
     symmetric_finger_contact_report,
-    top_release_local_center,
     top_down_tilt_error_rad,
     yaw_preserving_top_down_rotation,
 )
@@ -35,11 +33,6 @@ class ScriptedExpertPlanTests(unittest.TestCase):
         self.assertEqual(tuning.max_consecutive_stalled_steps, 4)
         self.assertEqual(tuning.close_steps, 12)
         self.assertEqual(tuning.max_rotation_steps, 24)
-        self.assertEqual(tuning.radial_staging_offset_m, 0.12)
-        self.assertEqual(tuning.guarded_place_step_m, 0.005)
-        self.assertEqual(tuning.release_above_bin_m, 0.002)
-        self.assertEqual(tuning.release_xy_tolerance_m, 0.001)
-        self.assertEqual(tuning.release_steps, 16)
 
     def test_grasp_requires_symmetric_two_finger_contact(self) -> None:
         threshold = minimum_symmetric_finger_contact_m(
@@ -189,45 +182,14 @@ class ScriptedExpertPlanTests(unittest.TestCase):
             destination,
             arm_base_world_m=base,
             transit_clearance_m=0.04,
-            radial_staging_offset_m=0.12,
         )
         np.testing.assert_allclose(waypoints[0], [-0.294, 0.2, 0.973])
-        radial = (np.asarray(destination[:2]) - np.asarray(base[:2]))
-        radial /= np.linalg.norm(radial)
-        np.testing.assert_allclose(
-            waypoints[1][:2], np.asarray(destination[:2]) + radial * 0.12
-        )
-        np.testing.assert_allclose(waypoints[2], [-0.294, -0.123, 0.973])
-        self.assertEqual(len(waypoints), 3)
+        np.testing.assert_allclose(waypoints[1], [-0.294, -0.123, 0.973])
+        np.testing.assert_allclose(waypoints[2], destination)
         self.assertGreater(
             minimum_xy_radius_along_segment(start, waypoints[0], arm_base_world_m=base),
             0.30,
         )
-
-    def test_top_release_keeps_part_bottom_above_bin_rim(self) -> None:
-        release = top_release_local_center(
-            [0.056, 0.027, -0.007],
-            bin_size_m=[0.18, 0.12, 0.07],
-            part_height_m=0.044,
-            release_clearance_m=0.01,
-        )
-        np.testing.assert_allclose(release, [0.056, 0.027, 0.067])
-        part_bottom = release[2] - 0.044 / 2.0
-        self.assertAlmostEqual(part_bottom - 0.07 / 2.0, 0.01)
-
-    def test_physical_slot_center_accounts_for_divider_thickness(self) -> None:
-        center = physical_bin_slot_local_center(
-            5,
-            size_m=[0.18, 0.12, 0.07],
-            wall_thickness_m=0.006,
-            divider_thickness_m=0.004,
-            bottom_thickness_m=0.006,
-            rows=2,
-            columns=3,
-            part_radius_m=0.022,
-            part_height_m=0.044,
-        )
-        np.testing.assert_allclose(center, [0.057, 0.028, -0.007])
 
     def test_motion_sample_guard_rejects_jump_and_divergence(self) -> None:
         self.assertIsNone(
