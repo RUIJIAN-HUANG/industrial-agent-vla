@@ -18,6 +18,7 @@ from simulation.scripted_expert_plan import (
     orthogonal_transfer_waypoints,
     select_safest_slot_index,
     symmetric_finger_contact_report,
+    top_release_local_center,
     top_down_tilt_error_rad,
     yaw_preserving_top_down_rotation,
 )
@@ -33,6 +34,8 @@ class ScriptedExpertPlanTests(unittest.TestCase):
         self.assertEqual(tuning.max_consecutive_stalled_steps, 4)
         self.assertEqual(tuning.close_steps, 12)
         self.assertEqual(tuning.max_rotation_steps, 24)
+        self.assertEqual(tuning.guarded_place_step_m, 0.005)
+        self.assertEqual(tuning.release_steps, 16)
 
     def test_grasp_requires_symmetric_two_finger_contact(self) -> None:
         threshold = minimum_symmetric_finger_contact_m(
@@ -185,11 +188,22 @@ class ScriptedExpertPlanTests(unittest.TestCase):
         )
         np.testing.assert_allclose(waypoints[0], [-0.294, 0.2, 0.973])
         np.testing.assert_allclose(waypoints[1], [-0.294, -0.123, 0.973])
-        np.testing.assert_allclose(waypoints[2], destination)
+        self.assertEqual(len(waypoints), 2)
         self.assertGreater(
             minimum_xy_radius_along_segment(start, waypoints[0], arm_base_world_m=base),
             0.30,
         )
+
+    def test_top_release_keeps_part_bottom_above_bin_rim(self) -> None:
+        release = top_release_local_center(
+            [0.056, 0.027, -0.007],
+            bin_size_m=[0.18, 0.12, 0.07],
+            part_height_m=0.044,
+            release_clearance_m=0.01,
+        )
+        np.testing.assert_allclose(release, [0.056, 0.027, 0.067])
+        part_bottom = release[2] - 0.044 / 2.0
+        self.assertAlmostEqual(part_bottom - 0.07 / 2.0, 0.01)
 
     def test_motion_sample_guard_rejects_jump_and_divergence(self) -> None:
         self.assertIsNone(

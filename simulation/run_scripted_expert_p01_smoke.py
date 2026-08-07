@@ -153,6 +153,7 @@ def main() -> int:
             orthogonal_transfer_waypoints,
             select_safest_slot_index,
             symmetric_finger_contact_report,
+            top_release_local_center,
             top_down_tilt_error_rad,
             yaw_preserving_top_down_rotation,
         )
@@ -305,12 +306,28 @@ def main() -> int:
             subtask_id: str,
             target_world: np.ndarray,
             gripper_open: bool,
+            max_step_m: float | None = None,
+            max_actual_step_m: float | None = None,
+            max_consecutive_divergent_steps: int | None = None,
         ) -> None:
             initial_position, _ = controller.end_effector_pose("Arm_A")
             samples: list[dict[str, Any]] = []
+            selected_max_step_m = (
+                tuning.max_cartesian_step_m if max_step_m is None else float(max_step_m)
+            )
+            selected_max_actual_step_m = (
+                tuning.max_actual_step_m
+                if max_actual_step_m is None
+                else float(max_actual_step_m)
+            )
+            selected_max_divergent_steps = (
+                tuning.max_consecutive_divergent_steps
+                if max_consecutive_divergent_steps is None
+                else int(max_consecutive_divergent_steps)
+            )
             limit = conservative_step_limit(
                 float(np.linalg.norm(target_world - initial_position)),
-                tuning.max_cartesian_step_m,
+                selected_max_step_m,
             )
             consecutive_divergent_steps = 0
             consecutive_stalled_steps = 0
@@ -320,6 +337,9 @@ def main() -> int:
                     "status": status,
                     "target_world_m": target_world.tolist(),
                     "position_tolerance_m": tuning.position_tolerance_m,
+                    "commanded_max_step_m": selected_max_step_m,
+                    "max_actual_step_m": selected_max_actual_step_m,
+                    "max_consecutive_divergent_steps": selected_max_divergent_steps,
                     "minimum_progress_m": tuning.minimum_progress_m,
                     "step_limit": limit,
                     "samples": samples,
@@ -345,7 +365,7 @@ def main() -> int:
                 world_delta = bounded_world_delta(
                     current_position,
                     target_world,
-                    max_step_m=tuning.max_cartesian_step_m,
+                    max_step_m=selected_max_step_m,
                 )
                 _, base_orientation = arms["Arm_A"].get_world_pose()
                 base_delta = _rotate_vector(
@@ -363,7 +383,7 @@ def main() -> int:
                     current_position,
                     after_position,
                     target_world,
-                    max_actual_step_m=tuning.max_actual_step_m,
+                    max_actual_step_m=selected_max_actual_step_m,
                     divergence_tolerance_m=tuning.divergence_tolerance_m,
                 )
                 progress_m = current_error_m - after_error_m
@@ -389,7 +409,7 @@ def main() -> int:
                     consecutive_divergent_steps += 1
                     if (
                         consecutive_divergent_steps
-                        >= tuning.max_consecutive_divergent_steps
+                        >= selected_max_divergent_steps
                     ):
                         controller.safe_stop(f"{subtask_id}: {violation}")
                         persist_motion("safety_stop", violation)
@@ -642,9 +662,19 @@ def main() -> int:
             gripper_open=False,
         )
 
-        place_tcp = slot_part_centers[slot_index] + carried_tcp_to_part_center
-        place_approach = place_tcp + np.asarray(
-            [0.0, 0.0, tuning.approach_clearance_m], dtype=float
+        release_part_local = top_release_local_center(
+            slot_local,
+            bin_size_m=bin_config["size_m"],
+            part_height_m=float(part_config["geometry"]["height_m"]),
+            release_clearance_m=tuning.release_above_bin_m,
+        )
+        release_part_center = np.asarray(
+            gt.local_point_to_world("/World/Bins/Bin_01", release_part_local),
+            dtype=float,
+        )
+        release_tcp = release_part_center + carried_tcp_to_part_center
+        place_approach = release_tcp + np.asarray(
+            [0.0, 0.0, tuning.place_approach_clearance_m], dtype=float
         )
         transfer_waypoints = orthogonal_transfer_waypoints(
             grasp_approach,
@@ -661,10 +691,14 @@ def main() -> int:
                 "slot_local_m": slot_local.tolist(),
                 "arm_base_world_m": arm_base_world.tolist(),
                 "grasp_strategy": "lula_virtual_tcp_finger_and_lift_verified_grasp",
+                "place_strategy": "guarded_top_release_above_bin_rim",
                 "pinch_calibration_path": str(calibration_path),
                 "verified_tcp_to_part_center_m": carried_tcp_to_part_center.tolist(),
                 "grasp_approach_world_m": grasp_approach.tolist(),
-                "place_tcp_world_m": place_tcp.tolist(),
+                "release_part_local_m": release_part_local.tolist(),
+                "release_part_center_world_m": release_part_center.tolist(),
+                "release_tcp_world_m": release_tcp.tolist(),
+                "release_above_bin_m": tuning.release_above_bin_m,
                 "place_approach_world_m": place_approach.tolist(),
                 "transfer_waypoints_world_m": [
                     waypoint.tolist() for waypoint in transfer_waypoints
@@ -677,16 +711,35 @@ def main() -> int:
                 target_world=waypoint,
                 gripper_open=False,
             )
-        move_tcp_world(
-            subtask_id="p01-place",
-            target_world=place_tcp,
+        hold(
+            subtask_id="p01-transfer-settle",
             gripper_open=False,
+            steps=tuning.transfer_settle_steps,
+        )
+        move_tcp_world(
+            subtask_id="p01-place-approach",
+            target_world=place_approach,
+            gripper_open=False,
+            max_step_m=tuning.guarded_place_step_m,
+            max_actual_step_m=tuning.guarded_max_actual_step_m,
+            max_consecutive_divergent_steps=1,
+        )
+        move_tcp_world(
+            subtask_id="p01-place-release-height",
+            target_world=release_tcp,
+            gripper_open=False,
+            max_step_m=tuning.guarded_place_step_m,
+            max_actual_step_m=tuning.guarded_max_actual_step_m,
+            max_consecutive_divergent_steps=1,
         )
         hold(subtask_id="p01-release", gripper_open=True, steps=tuning.release_steps)
         move_tcp_world(
             subtask_id="p01-retreat",
             target_world=place_approach,
             gripper_open=True,
+            max_step_m=tuning.guarded_place_step_m,
+            max_actual_step_m=tuning.guarded_max_actual_step_m,
+            max_consecutive_divergent_steps=1,
         )
 
         phase = "three_fresh_frame_offline_gt_vote"

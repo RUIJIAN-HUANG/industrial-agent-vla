@@ -30,6 +30,11 @@ class P01ExpertTuning:
     rotation_tolerance_rad: float = 0.035
     max_rotation_steps: int = 24
     transit_clearance_m: float = 0.04
+    place_approach_clearance_m: float = 0.06
+    release_above_bin_m: float = 0.01
+    guarded_place_step_m: float = 0.005
+    guarded_max_actual_step_m: float = 0.03
+    transfer_settle_steps: int = 4
     slot_work_radius_margin_m: float = 0.03
     max_actual_step_m: float = 0.06
     divergence_tolerance_m: float = 0.004
@@ -37,7 +42,7 @@ class P01ExpertTuning:
     minimum_progress_m: float = 0.0001
     max_consecutive_stalled_steps: int = 4
     close_steps: int = 12
-    release_steps: int = 8
+    release_steps: int = 16
 
     def validate(self) -> None:
         if not 0.05 <= self.approach_clearance_m <= 0.20:
@@ -48,6 +53,16 @@ class P01ExpertTuning:
             raise ValueError("position_tolerance_m must be in [0.0005, 0.005]")
         if not 0.02 <= self.transit_clearance_m <= 0.08:
             raise ValueError("transit_clearance_m must be in [0.02, 0.08]")
+        if not 0.03 <= self.place_approach_clearance_m <= 0.10:
+            raise ValueError("place_approach_clearance_m must be in [0.03, 0.10]")
+        if not 0.005 <= self.release_above_bin_m <= 0.03:
+            raise ValueError("release_above_bin_m must be in [0.005, 0.03]")
+        if not 0.002 <= self.guarded_place_step_m <= 0.01:
+            raise ValueError("guarded_place_step_m must be in [0.002, 0.01]")
+        if not self.guarded_place_step_m < self.guarded_max_actual_step_m <= 0.04:
+            raise ValueError(
+                "guarded_max_actual_step_m must exceed guarded_place_step_m and be <= 0.04"
+            )
         if not 0.01 <= self.slot_work_radius_margin_m <= 0.08:
             raise ValueError("slot_work_radius_margin_m must be in [0.01, 0.08]")
         if not self.max_cartesian_step_m < self.max_actual_step_m <= 0.08:
@@ -58,8 +73,8 @@ class P01ExpertTuning:
             raise ValueError("divergence_tolerance_m must be in [0.001, 0.01]")
         if self.max_consecutive_divergent_steps < 1:
             raise ValueError("max_consecutive_divergent_steps must be positive")
-        if self.close_steps < 1 or self.release_steps < 1:
-            raise ValueError("close_steps and release_steps must be positive")
+        if min(self.close_steps, self.release_steps, self.transfer_settle_steps) < 1:
+            raise ValueError("close, release, and transfer settle steps must be positive")
         if not 0.02 <= self.grasp_probe_lift_m <= 0.06:
             raise ValueError("grasp_probe_lift_m must be in [0.02, 0.06]")
         if not 0.5 <= self.minimum_grasp_follow_ratio <= 0.9:
@@ -405,7 +420,34 @@ def orthogonal_transfer_waypoints(
     over_destination = np.asarray(
         [destination[0], destination[1], transit_z], dtype=float
     )
-    return corner, over_destination, destination.copy()
+    # Stop above the destination.  A separate guarded vertical phase owns the
+    # final descent; combining it with the fast transfer allowed redundant-arm
+    # IK branch jumps close to the compartment.
+    return corner, over_destination
+
+
+def top_release_local_center(
+    slot_local_m: Sequence[float],
+    *,
+    bin_size_m: Sequence[float],
+    part_height_m: float,
+    release_clearance_m: float,
+) -> np.ndarray:
+    """Place a part center just above the bin rim for a gravity-assisted release."""
+
+    slot = np.asarray(slot_local_m, dtype=float)
+    size = np.asarray(bin_size_m, dtype=float)
+    height = float(part_height_m)
+    clearance = float(release_clearance_m)
+    if slot.shape != (3,) or size.shape != (3,):
+        raise ValueError("slot_local_m and bin_size_m must be 3-D")
+    if not np.all(np.isfinite(slot)) or not np.all(np.isfinite(size)):
+        raise ValueError("slot_local_m and bin_size_m must be finite")
+    if np.any(size <= 0.0) or height <= 0.0 or clearance < 0.0:
+        raise ValueError("bin size and part height must be positive; clearance non-negative")
+    release = slot.copy()
+    release[2] = size[2] / 2.0 + height / 2.0 + clearance
+    return release
 
 
 def motion_sample_violation(
