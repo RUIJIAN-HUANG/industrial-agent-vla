@@ -147,6 +147,28 @@ def _make_real_executor(monkeypatch, tmp_path, *, actions: np.ndarray) -> Pi05Ex
         return Pi05Executor()
 
 
+def _configure_base_assets(monkeypatch, tmp_path) -> tuple[str, str]:
+    """Create a tiny pi05_base checkpoint with its bundled norm_stats.json.
+
+    base 模式不需要 PI05_NORM_STATS_SHA 环境变量（norm stats 自动发现），
+    返回 (checkpoint_sha, bundled_norm_sha) 供断言。
+    """
+    checkpoint = tmp_path / "base_checkpoint"
+    (checkpoint / "params").mkdir(parents=True)
+    (checkpoint / "params" / "part-000").write_bytes(b"base-weights")
+    (checkpoint / "metadata.json").write_text('{"format":"base"}', encoding="utf-8")
+    bundled_norm = checkpoint / "norm_stats.json"
+    bundled_norm.write_text('{"norm_stats":{}}', encoding="utf-8")
+
+    checkpoint_sha = _compute_dir_sha(checkpoint)
+    norm_sha = _sha256_file(bundled_norm)
+    monkeypatch.setenv("PI05_MODE", "real")
+    monkeypatch.setenv("PI05_CONFIG_NAME", "pi05_base")
+    monkeypatch.setenv("PI05_CHECKPOINT_DIR", str(checkpoint))
+    monkeypatch.setenv("PI05_CHECKPOINT_SHA", checkpoint_sha)
+    return checkpoint_sha, norm_sha
+
+
 # ---------------------------------------------------------------------------
 # 用例 1：执行器初始化
 # ---------------------------------------------------------------------------
@@ -251,6 +273,116 @@ def test_real_mode_declared_norm_sha_mismatch_fails_closed(
         with pytest.raises(RuntimeError, match="norm stats SHA 不匹配"):
             Pi05Executor()
     make_client.assert_not_called()
+
+
+def test_real_mode_rejects_unknown_config_name(clean_pi05_env, monkeypatch, tmp_path):
+    """real 模式配置名不在白名单 {pi05_industrial, pi05_base} 时 fail-closed。
+
+    回归：错误消息曾引用不存在的 self._REAL_ALLOWED_CONFIG_NAMES（pi05.py 仅定义
+    模块级 REAL_ALLOWED_CONFIG_NAMES），非法配置名会抛 AttributeError 而非
+    带白名单提示的 RuntimeError，部署排障时无法定位原因。
+    """
+
+    _configure_real_assets(monkeypatch, tmp_path)
+    monkeypatch.setenv("PI05_CONFIG_NAME", "pi05_bas")  # 拼写错误示例
+    with patch.object(pi05_mod, "make_policy_client") as make_client:
+        with pytest.raises(RuntimeError, match="real 模式只允许"):
+            Pi05Executor()
+    make_client.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# pi05_base 部署模式（方案书 E 交付物 base/tuned 同协议对照的 base 半边）
+# ---------------------------------------------------------------------------
+def test_base_mode_init_discovers_bundled_norm_stats(
+    clean_pi05_env, monkeypatch, tmp_path
+):
+    """pi05_base 初始化成功：不要求项目 norm stats env，自动发现 checkpoint 自带统计。"""
+
+    checkpoint_sha, norm_sha = _configure_base_assets(monkeypatch, tmp_path)
+    fake_policy = MagicMock()
+    fake_policy.client_type = "local"
+    fake_policy.checkpoint_dir = str(tmp_path / "base_checkpoint")
+    with patch.object(pi05_mod, "make_policy_client", return_value=fake_policy):
+        ex = Pi05Executor()
+
+    assert ex.mode == "real"
+    assert ex._policy_type == "local"
+    assert ex._checkpoint_sha == checkpoint_sha
+    assert ex._norm_stats_sha == norm_sha
+    assert ex.health_check()["checkpoint_sha"] == checkpoint_sha
+    assert ex.health_check()["norm_stats_sha"] == norm_sha
+
+
+def test_base_mode_missing_bundled_norm_stats_fails_closed(
+    clean_pi05_env, monkeypatch, tmp_path
+):
+    """pi05_base checkpoint 缺少自带 norm_stats.json 时 fail-closed，禁止用项目统计冒充。"""
+
+    checkpoint = tmp_path / "base_checkpoint"
+    (checkpoint / "params").mkdir(parents=True)
+    (checkpoint / "params" / "part-000").write_bytes(b"base-weights")
+    checkpoint_sha = _compute_dir_sha(checkpoint)
+    monkeypatch.setenv("PI05_MODE", "real")
+    monkeypatch.setenv("PI05_CONFIG_NAME", "pi05_base")
+    monkeypatch.setenv("PI05_CHECKPOINT_DIR", str(checkpoint))
+    monkeypatch.setenv("PI05_CHECKPOINT_SHA", checkpoint_sha)
+    with patch.object(pi05_mod, "make_policy_client") as make_client:
+        with pytest.raises(RuntimeError, match="norm_stats.json"):
+            Pi05Executor()
+    make_client.assert_not_called()
+
+
+def test_base_mode_declared_norm_sha_mismatch_fails_closed(
+    clean_pi05_env, monkeypatch, tmp_path
+):
+    """pi05_base 显式声明 PI05_NORM_STATS_SHA 时，必须与实际 bundled 文件一致。"""
+
+    _configure_base_assets(monkeypatch, tmp_path)
+    monkeypatch.setenv("PI05_NORM_STATS_SHA", f"sha256:{'f' * 64}")
+    with patch.object(pi05_mod, "make_policy_client") as make_client:
+        with pytest.raises(RuntimeError, match="norm stats SHA 不匹配"):
+            Pi05Executor()
+    make_client.assert_not_called()
+
+
+def test_base_mode_projects_32d_output_to_canonical_7d(
+    clean_pi05_env, monkeypatch, tmp_path
+):
+    """pi05_base 原生 32D 输出必须投影为 [N,7] 再进入限幅/包装（服务契约固定 7 维）。"""
+
+    _configure_base_assets(monkeypatch, tmp_path)
+    fake_policy = MagicMock()
+    fake_policy.client_type = "local"
+    fake_policy.checkpoint_dir = str(tmp_path / "base_checkpoint")
+    # 前 7 维取安全限幅内的确定性值（平移≤2cm、旋转≤5°、夹爪 0/1），
+    # 使断言只验证投影语义、不被限幅截断；后 25 维为丢弃的 padding。
+    proj = np.array([[0.001, -0.002, 0.003, 0.01, 0.0, -0.01, 1.0]], dtype=np.float32)
+    raw_32d = np.concatenate([proj, np.zeros((1, 25), dtype=np.float32)], axis=1)
+    raw_32d = np.repeat(raw_32d, 3, axis=0)  # [3,32]
+    fake_policy.infer.return_value = {"actions": raw_32d}
+    with patch.object(pi05_mod, "make_policy_client", return_value=fake_policy):
+        ex = Pi05Executor()
+
+    chunk = ex.infer(_make_minimal_obs(step_id=1))
+    assert chunk.actions.shape == (3, ACTION_DIM)
+    np.testing.assert_array_equal(chunk.actions, raw_32d[:, :7])
+    assert chunk.actions.dtype == np.float32
+
+
+def test_base_mode_rejects_wrong_model_head(clean_pi05_env, monkeypatch, tmp_path):
+    """pi05_base 模型头维度异常（非 32D）时拒绝下发，语义与现有形状校验一致。"""
+
+    _configure_base_assets(monkeypatch, tmp_path)
+    fake_policy = MagicMock()
+    fake_policy.client_type = "local"
+    fake_policy.checkpoint_dir = str(tmp_path / "base_checkpoint")
+    fake_policy.infer.return_value = {"actions": np.zeros((3, 31), dtype=np.float32)}
+    with patch.object(pi05_mod, "make_policy_client", return_value=fake_policy):
+        ex = Pi05Executor()
+
+    with pytest.raises(InferenceError, match="投影失败"):
+        ex.infer(_make_minimal_obs(step_id=1))
 
 
 # ---------------------------------------------------------------------------

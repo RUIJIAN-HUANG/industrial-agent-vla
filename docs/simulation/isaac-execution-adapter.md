@@ -125,7 +125,7 @@ environment = IsaacExecutionEnvironment(
     command_ledger_path="artifacts/isaac-adapter/command-journal.jsonl",
     runtime_observe_timeout_s=1.0,  # 短于 post-stop observe 的 2 s deadline
     runtime_action_timeout_s=10.0,  # 短于 Supervisor 15 s action deadline
-    runtime_stop_timeout_s=1.0,   # 必须短于 Supervisor safe_stop deadline
+    runtime_stop_timeout_s=1.0,  # 必须短于 Supervisor safe_stop deadline
 )
 ```
 

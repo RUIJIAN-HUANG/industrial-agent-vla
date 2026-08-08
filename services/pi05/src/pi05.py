@@ -85,6 +85,17 @@ from industrial_agent.executor import (  # type: ignore
 )
 from industrial_agent.sync_contract import MODEL_INFERENCE_HZ
 
+# pi05_base 部署模式：32D→7D 投影函数。定义在 configs/pi05/constants.py
+# （无副作用模块，可被服务层安全导入）；train_config.py 仅 re-export 同一函数，
+# 保证单一事实源。此处 try/except 降级：导入失败时 pi05_base 模式启动即 fail-closed。
+try:
+    from configs.pi05.constants import project_policy_actions
+except (ImportError, ModuleNotFoundError) as _import_err:
+    logger.warning(
+        "configs.pi05.constants 导入失败（%s），pi05_base 模式不可用", _import_err
+    )
+    project_policy_actions = None  # type: ignore[assignment]
+
 # ---------------------------------------------------------------------------
 # 安全限幅常量（方案书 Table 69 Row7 / 附录B；D5 实测前用候选值）
 # ---------------------------------------------------------------------------
@@ -94,6 +105,11 @@ GRIPPER_OPEN = 1.0
 GRIPPER_CLOSE = 0.0
 
 ACTION_DIM = 7  # [dx,dy,dz,dax,day,daz,gripper]
+
+# real 模式允许的配置名白名单：
+#   pi05_industrial = 微调产物（项目 norm stats 双 SHA 门禁）
+#   pi05_base       = openpi 官方基础权重（checkpoint 自带 norm stats）
+REAL_ALLOWED_CONFIG_NAMES: frozenset[str] = frozenset({"pi05_industrial", "pi05_base"})
 
 
 # 推理专用异常（ValueError 子类，契约适配器 catch block 将其视为不可重试）
@@ -296,13 +312,43 @@ class Pi05Executor(BaseExecutor):
         self._norm_stats_sha = _sha256_file(path)
         logger.info("记录 norm_stats SHA: %s (sha=%s)", path, self._norm_stats_sha)
 
-    def _verify_real_configuration_and_assets(self) -> None:
-        """Fail closed unless the frozen fine-tuned policy and assets are exact."""
+    def _discover_bundled_norm_stats(self) -> None:
+        """pi05_base 模式：自动发现 checkpoint 内的官方 norm_stats.json 并记录其 SHA。
 
-        if self.config_name != "pi05_industrial":
+        openpi 官方基础 checkpoint 自带 ``norm_stats.json``（``create_trained_policy``
+        在 ``norm_stats=None`` 时直接使用它）。服务层的 ``norm_stats_sha`` 契约字段
+        报告该文件的实际 SHA，保证"SHA 与实际加载完全一致"；文件缺失时 fail-closed，
+        禁止用项目 norm stats 冒充 base 统计。
+        """
+        if not self.checkpoint_dir:
+            raise RuntimeError("pi05_base 模式缺少 checkpoint 目录")
+        bundled = Path(self.checkpoint_dir) / "norm_stats.json"
+        if not bundled.is_file():
             raise RuntimeError(
-                "real 模式只允许 PI05_CONFIG_NAME=pi05_industrial，"
-                f"当前值为 {self.config_name!r}"
+                f"pi05_base checkpoint 缺少自带 norm_stats.json：{bundled}"
+            )
+        self._norm_stats_sha = _sha256_file(bundled)
+        logger.info(
+            "pi05_base 模式：记录 checkpoint 自带 norm_stats SHA: %s (sha=%s)",
+            bundled,
+            self._norm_stats_sha,
+        )
+
+    def _verify_real_configuration_and_assets(self) -> None:
+        """Fail closed unless the frozen (tuned or base) policy and assets are exact.
+
+        - ``pi05_industrial``（微调产物）：checkpoint + 项目 norm stats 双 SHA 门禁
+          （冻结原逻辑，行为不变）；
+        - ``pi05_base``（openpi 官方基础权重）：只强制 checkpoint 目录/SHA，
+          norm stats 自动发现 checkpoint 内 norm_stats.json（缺失 fail-closed，
+          禁止用项目统计冒充 base 统计）。
+        """
+
+        if self.config_name not in REAL_ALLOWED_CONFIG_NAMES:
+            raise RuntimeError(
+                "real 模式只允许 "
+                + "/".join(sorted(REAL_ALLOWED_CONFIG_NAMES))
+                + f"，当前值为 {self.config_name!r}"
             )
         if self.ws_host or self.ws_port:
             raise RuntimeError(
@@ -314,11 +360,8 @@ class Pi05Executor(BaseExecutor):
                 "real 模式必须显式设置 PI05_CHECKPOINT_DIR，且目标必须是 checkpoint 目录"
             )
         declared_checkpoint_sha = os.environ.get("PI05_CHECKPOINT_SHA", "").strip()
-        declared_norm_sha = os.environ.get("PI05_NORM_STATS_SHA", "").strip()
         if not is_pinned_artifact_digest(declared_checkpoint_sha):
             raise RuntimeError("real 模式必须设置 PI05_CHECKPOINT_SHA=sha256:<64hex>")
-        if not is_pinned_artifact_digest(declared_norm_sha):
-            raise RuntimeError("real 模式必须设置 PI05_NORM_STATS_SHA=sha256:<64hex>")
 
         actual_checkpoint_sha = _compute_dir_sha(self.checkpoint_dir)
         if actual_checkpoint_sha != declared_checkpoint_sha:
@@ -328,12 +371,31 @@ class Pi05Executor(BaseExecutor):
             )
         self._checkpoint_sha = actual_checkpoint_sha
 
-        self._load_norm_stats_sha(required=True)
-        if self._norm_stats_sha != declared_norm_sha:
-            raise RuntimeError(
-                "norm stats SHA 不匹配："
-                f"declared={declared_norm_sha} actual={self._norm_stats_sha}"
-            )
+        if self.config_name == "pi05_industrial":
+            declared_norm_sha = os.environ.get("PI05_NORM_STATS_SHA", "").strip()
+            if not is_pinned_artifact_digest(declared_norm_sha):
+                raise RuntimeError(
+                    "real 模式必须设置 PI05_NORM_STATS_SHA=sha256:<64hex>"
+                )
+            self._load_norm_stats_sha(required=True)
+            if self._norm_stats_sha != declared_norm_sha:
+                raise RuntimeError(
+                    "norm stats SHA 不匹配："
+                    f"declared={declared_norm_sha} actual={self._norm_stats_sha}"
+                )
+        else:
+            if project_policy_actions is None:
+                raise RuntimeError(
+                    "pi05_base 模式需要 project_policy_actions"
+                    "（configs.pi05.constants 导入失败），禁止启动"
+                )
+            self._discover_bundled_norm_stats()
+            declared_norm_sha = os.environ.get("PI05_NORM_STATS_SHA", "").strip()
+            if declared_norm_sha and declared_norm_sha != self._norm_stats_sha:
+                raise RuntimeError(
+                    "norm stats SHA 不匹配："
+                    f"declared={declared_norm_sha} actual={self._norm_stats_sha}"
+                )
 
     # ===================== 预处理 =====================
     def _build_example(self, obs: ObsPacket) -> dict:
@@ -493,6 +555,28 @@ class Pi05Executor(BaseExecutor):
         actions = result["actions"] if isinstance(result, dict) else result
         return np.asarray(actions, dtype=np.float32)
 
+    def _project_base_actions(self, actions: np.ndarray) -> np.ndarray:
+        """pi05_base 原生输出 [N,32] → canonical [N,7]（复用 project_policy_actions）。
+
+        openpi 原生 pi05_base 配置不做 32D→7D 投影（pi05_industrial 的
+        IndustrialOutputs 才做），服务契约固定 7 维，必须在此显式投影。
+        投影失败（模型头维度异常）统一转 InferenceError，与现有形状校验语义一致。
+
+        Args:
+            actions: 模型原始输出 float32 [N,32]。
+
+        Returns:
+            float32 [N,7] — canonical [dx,dy,dz,dax,day,daz,gripper]。
+        """
+        if project_policy_actions is None:
+            raise InferenceError(
+                "project_policy_actions 不可用（configs.pi05.constants 导入失败）"
+            )
+        try:
+            return project_policy_actions(actions)
+        except ValueError as exc:
+            raise InferenceError(f"pi05_base 输出投影失败: {exc}") from exc
+
     def infer(self, obs: ObsPacket) -> CanonicalActionChunk:
         """主入口：观测 → 安全动作块（方案书 §3.3.1 Para185）。"""
         t0 = time.time()
@@ -508,6 +592,9 @@ class Pi05Executor(BaseExecutor):
 
         # ---- 动作块适配（方案书 §3.3.1 Para185）----
         raw = np.asarray(raw, dtype=np.float32)
+        if self.config_name == "pi05_base":
+            # openpi 原生 pi05_base 输出 32D，服务契约固定 7 维，先投影再校验。
+            raw = self._project_base_actions(raw)
         if raw.size == 0 or raw.ndim == 0:
             raise InferenceError("Policy returned empty or invalid actions")
         if raw.ndim != 2 or raw.shape[1] != ACTION_DIM:
