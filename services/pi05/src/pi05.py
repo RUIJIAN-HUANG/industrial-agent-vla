@@ -347,7 +347,7 @@ class Pi05Executor(BaseExecutor):
         if self.config_name not in REAL_ALLOWED_CONFIG_NAMES:
             raise RuntimeError(
                 "real 模式只允许 "
-                + "/".join(sorted(self._REAL_ALLOWED_CONFIG_NAMES))
+                + "/".join(sorted(REAL_ALLOWED_CONFIG_NAMES))
                 + f"，当前值为 {self.config_name!r}"
             )
         if self.ws_host or self.ws_port:

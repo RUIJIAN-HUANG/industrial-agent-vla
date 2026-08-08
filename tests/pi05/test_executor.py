@@ -275,6 +275,22 @@ def test_real_mode_declared_norm_sha_mismatch_fails_closed(
     make_client.assert_not_called()
 
 
+def test_real_mode_rejects_unknown_config_name(clean_pi05_env, monkeypatch, tmp_path):
+    """real 模式配置名不在白名单 {pi05_industrial, pi05_base} 时 fail-closed。
+
+    回归：错误消息曾引用不存在的 self._REAL_ALLOWED_CONFIG_NAMES（pi05.py 仅定义
+    模块级 REAL_ALLOWED_CONFIG_NAMES），非法配置名会抛 AttributeError 而非
+    带白名单提示的 RuntimeError，部署排障时无法定位原因。
+    """
+
+    _configure_real_assets(monkeypatch, tmp_path)
+    monkeypatch.setenv("PI05_CONFIG_NAME", "pi05_bas")  # 拼写错误示例
+    with patch.object(pi05_mod, "make_policy_client") as make_client:
+        with pytest.raises(RuntimeError, match="real 模式只允许"):
+            Pi05Executor()
+    make_client.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # pi05_base 部署模式（方案书 E 交付物 base/tuned 同协议对照的 base 半边）
 # ---------------------------------------------------------------------------
