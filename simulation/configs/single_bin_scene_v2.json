@@ -1,0 +1,129 @@
+{
+  "schema_version": "2.0",
+  "scene_id": "single_bin_manual_industrial_v2",
+  "description": "V2 manual industrial collection: dual Franka, eight generated parts, 2x4 bin, and central carry handle.",
+  "units": {"linear": "meter", "angular": "degree", "up_axis": "Z"},
+  "table": {
+    "id": "TABLE",
+    "pose": {"position_m": [0.0, 0.0, 0.725], "rpy_deg": [0.0, 0.0, 0.0]},
+    "size_m": [2.3, 1.1, 0.05],
+    "surface_z_m": 0.75,
+    "color_rgb": [0.55, 0.57, 0.6]
+  },
+  "robots": [
+    {
+      "id": "Arm_A",
+      "model": "franka_panda",
+      "executor": "pi05",
+      "role": "manual_pack_and_handoff",
+      "base_pose": {"position_m": [-0.55, -0.3, 0.75], "rpy_deg": [0.0, 0.0, 90.0]},
+      "soft_work_radius_m": 0.65,
+      "home": {
+        "arm_joint_positions_rad": [0.01199996, -0.56927347, 0.00000009, -2.81087494, 0.00000669, 3.03692675, 0.741],
+        "finger_joint_positions_m": [0.04, 0.04]
+      }
+    },
+    {
+      "id": "Arm_B",
+      "model": "franka_panda",
+      "executor": "openvla_oft",
+      "role": "manual_bin_transport",
+      "base_pose": {"position_m": [0.5, -0.3, 0.75], "rpy_deg": [0.0, 0.0, 90.0]},
+      "soft_work_radius_m": 0.65,
+      "home": {
+        "arm_joint_positions_rad": [0.01199996, -0.56927347, 0.00000009, -2.81087494, 0.00000669, 3.03692675, 0.741],
+        "finger_joint_positions_m": [0.04, 0.04]
+      }
+    }
+  ],
+  "stations": [
+    {"id": "PACK_STATION", "kind": "bin_initial", "pose": {"position_m": [-0.35, -0.15, 0.785], "rpy_deg": [0.0, 0.0, 0.0]}, "footprint_m": [0.34, 0.26], "color_rgb": [0.16, 0.48, 0.92]},
+    {"id": "HANDOFF_CENTER", "kind": "shared_handoff", "pose": {"position_m": [0.0, 0.0, 0.785], "rpy_deg": [0.0, 0.0, 0.0]}, "footprint_m": [0.36, 0.28], "color_rgb": [0.25, 0.72, 0.3]},
+    {"id": "FINISHED_01", "kind": "finished_bin", "pose": {"position_m": [0.7, 0.1, 0.785], "rpy_deg": [0.0, 0.0, 0.0]}, "footprint_m": [0.36, 0.28], "color_rgb": [0.96, 0.57, 0.16]}
+  ],
+  "zones": [
+    {"id": "A", "pose": {"position_m": [-0.85, 0.2, 0.751], "rpy_deg": [0.0, 0.0, 0.0]}, "footprint_m": [0.22, 0.14], "expected_part_count": 2, "color_rgb": [0.2, 0.55, 0.96]},
+    {"id": "B", "pose": {"position_m": [-0.6, 0.2, 0.751], "rpy_deg": [0.0, 0.0, 0.0]}, "footprint_m": [0.22, 0.14], "expected_part_count": 2, "color_rgb": [0.28, 0.68, 0.96]},
+    {"id": "C", "pose": {"position_m": [-0.85, 0.0, 0.751], "rpy_deg": [0.0, 0.0, 0.0]}, "footprint_m": [0.22, 0.14], "expected_part_count": 2, "color_rgb": [0.25, 0.78, 0.82]},
+    {"id": "D", "pose": {"position_m": [-0.6, 0.0, 0.751], "rpy_deg": [0.0, 0.0, 0.0]}, "footprint_m": [0.22, 0.14], "expected_part_count": 2, "color_rgb": [0.42, 0.78, 0.76]}
+  ],
+  "parts": [
+    {"id": "P01", "part_type": "shaft", "zone_id": "A", "initial_orientation_state": "upright", "pose": {"position_m": [-0.9, 0.2, 0.777], "rpy_deg": [0.0, 0.0, 0.0]}, "geometry": {"radius_m": 0.022, "height_m": 0.054, "flange_radius_m": 0.028, "flange_height_m": 0.009, "mass_kg": 0.065}, "color_rgb": [0.82, 0.08, 0.06]},
+    {"id": "P02", "part_type": "shaft", "zone_id": "A", "initial_orientation_state": "upright", "pose": {"position_m": [-0.8, 0.2, 0.777], "rpy_deg": [0.0, 0.0, 0.0]}, "geometry": {"radius_m": 0.022, "height_m": 0.054, "flange_radius_m": 0.028, "flange_height_m": 0.009, "mass_kg": 0.065}, "color_rgb": [0.92, 0.2, 0.08]},
+    {"id": "P03", "part_type": "shaft", "zone_id": "B", "initial_orientation_state": "inverted", "pose": {"position_m": [-0.65, 0.2, 0.777], "rpy_deg": [180.0, 0.0, 0.0]}, "geometry": {"radius_m": 0.022, "height_m": 0.054, "flange_radius_m": 0.028, "flange_height_m": 0.009, "mass_kg": 0.065}, "color_rgb": [0.72, 0.05, 0.16]},
+    {"id": "P04", "part_type": "shaft", "zone_id": "B", "initial_orientation_state": "inverted", "pose": {"position_m": [-0.55, 0.2, 0.777], "rpy_deg": [180.0, 0.0, 0.0]}, "geometry": {"radius_m": 0.022, "height_m": 0.054, "flange_radius_m": 0.028, "flange_height_m": 0.009, "mass_kg": 0.065}, "color_rgb": [0.68, 0.12, 0.25]},
+    {"id": "N01", "part_type": "nut", "zone_id": "C", "initial_orientation_state": "flat", "pose": {"position_m": [-0.9, 0.0, 0.76], "rpy_deg": [0.0, 0.0, 0.0]}, "geometry": {"across_flats_m": 0.042, "hole_diameter_m": 0.018, "height_m": 0.02, "mass_kg": 0.03}, "color_rgb": [0.12, 0.42, 0.78]},
+    {"id": "N02", "part_type": "nut", "zone_id": "C", "initial_orientation_state": "flat", "pose": {"position_m": [-0.8, 0.0, 0.76], "rpy_deg": [0.0, 0.0, 30.0]}, "geometry": {"across_flats_m": 0.042, "hole_diameter_m": 0.018, "height_m": 0.02, "mass_kg": 0.03}, "color_rgb": [0.12, 0.58, 0.86]},
+    {"id": "W01", "part_type": "wrench", "zone_id": "D", "initial_orientation_state": "flat_y", "pose": {"position_m": [-0.65, 0.0, 0.755], "rpy_deg": [0.0, 0.0, 90.0]}, "geometry": {"length_m": 0.09, "handle_width_m": 0.014, "head_width_m": 0.032, "thickness_m": 0.01, "mass_kg": 0.09}, "color_rgb": [0.86, 0.62, 0.08]},
+    {"id": "W02", "part_type": "wrench", "zone_id": "D", "initial_orientation_state": "flat_y", "pose": {"position_m": [-0.55, 0.0, 0.755], "rpy_deg": [0.0, 0.0, 90.0]}, "geometry": {"length_m": 0.09, "handle_width_m": 0.014, "head_width_m": 0.032, "thickness_m": 0.01, "mass_kg": 0.09}, "color_rgb": [0.96, 0.72, 0.12]}
+  ],
+  "bin": {
+    "id": "Bin_01",
+    "initial_station_id": "PACK_STATION",
+    "pose": {"position_m": [-0.35, -0.15, 0.795], "rpy_deg": [0.0, 0.0, 0.0]},
+    "size_m": [0.3, 0.22, 0.09],
+    "mass_kg": 0.5,
+    "design_loaded_mass_limit_kg": 1.2,
+    "acceptance_loaded_mass_limit_kg": 1.5,
+    "wall_thickness_m": 0.006,
+    "divider_thickness_m": 0.004,
+    "bottom_thickness_m": 0.006,
+    "grid": {"rows": 2, "columns": 4},
+    "slots": [
+      {"id": "S11", "part_id": "P01", "center_local_m": [-0.1125, 0.055, 0.0], "profile": "shaft"},
+      {"id": "S12", "part_id": "P03", "center_local_m": [-0.0375, 0.055, 0.0], "profile": "shaft"},
+      {"id": "S13", "part_id": "N01", "center_local_m": [0.0375, 0.055, 0.0], "profile": "nut"},
+      {"id": "S14", "part_id": "W01", "center_local_m": [0.1125, 0.055, 0.0], "profile": "wrench_y"},
+      {"id": "S21", "part_id": "P02", "center_local_m": [-0.1125, -0.055, 0.0], "profile": "shaft"},
+      {"id": "S22", "part_id": "P04", "center_local_m": [-0.0375, -0.055, 0.0], "profile": "shaft"},
+      {"id": "S23", "part_id": "N02", "center_local_m": [0.0375, -0.055, 0.0], "profile": "nut"},
+      {"id": "S24", "part_id": "W02", "center_local_m": [0.1125, -0.055, 0.0], "profile": "wrench_y"}
+    ],
+    "carry_handle": {
+      "link": "Carry_Handle",
+      "frame_id": "BIN_CARRY_TCP",
+      "cross_direction": "Y",
+      "support_y_m": [-0.04, 0.04],
+      "clear_grasp_length_m": 0.064,
+      "crossbar_size_m": [0.016, 0.08, 0.016],
+      "crossbar_center_local_m": [0.0, 0.0, 0.095],
+      "support_size_m": [0.016, 0.016, 0.1],
+      "position_local_m": [0.0, 0.0, 0.095],
+      "rpy_local_deg": [0.0, 0.0, 0.0],
+      "approach_offset_m": [0.0, 0.0, 0.1],
+      "lift_offset_m": [0.0, 0.0, 0.08]
+    },
+    "color_rgb": [0.18, 0.2, 0.22]
+  },
+  "materials": {
+    "ordinary": {"static_friction": 0.75, "dynamic_friction": 0.55, "restitution": 0.02},
+    "carry_grip": {"static_friction": 0.9, "dynamic_friction": 0.7, "restitution": 0.0}
+  },
+  "cameras": [
+    {"id": "CAM_A_TOP", "prim_path": "/World/Cameras/CAM_A_TOP", "pose": {"position_m": [-0.6, -0.02, 1.9]}, "look_at_m": [-0.55, 0.08, 0.78], "resolution_px": [1280, 720], "horizontal_fov_deg": 82.0, "consumers": ["pi05", "yolo"]},
+    {"id": "CAM_HANDOFF", "prim_path": "/World/Cameras/CAM_HANDOFF", "pose": {"position_m": [0.0, -0.35, 1.6]}, "look_at_m": [0.0, 0.03, 0.82], "resolution_px": [1280, 720], "horizontal_fov_deg": 82.0, "consumers": ["yolo", "verifier"]},
+    {"id": "CAM_B_TOP", "prim_path": "/World/Cameras/CAM_B_TOP", "pose": {"position_m": [0.45, -0.02, 1.9]}, "look_at_m": [0.35, 0.08, 0.78], "resolution_px": [1280, 720], "horizontal_fov_deg": 82.0, "consumers": ["openvla_oft", "yolo"]}
+  ],
+  "safety": {"handoff_zone": {"x_m": [-0.18, 0.18], "y_m": [-0.15, 0.15], "z_m": [0.74, 1.2]}},
+  "workflow": {
+    "token_sequence": ["A_ONLY", "HANDOFF_VERIFY", "B_ONLY", "NONE"],
+    "handoff_ready_event": "handoff.ready",
+    "handoff_owner_by_token": {"A_ONLY": "Arm_A", "HANDOFF_VERIFY": null, "B_ONLY": "Arm_B", "NONE": null}
+  },
+  "collection": {
+    "mode": "manual_keyboard",
+    "effective_sample_hz": 10,
+    "formal_part_order": ["P01", "P02", "P03", "P04", "N01", "N02", "W01", "W02"],
+    "smoke_only": false,
+    "training_allowed": true,
+    "online_gt_allowed": false
+  },
+  "physics": {
+    "gravity_m_s2": [0.0, 0.0, -9.81],
+    "physics_dt_s": 0.008333333333333333,
+    "rendering_dt_s": 0.03333333333333333,
+    "control_frequency_hz": 60,
+    "render_frequency_hz": 30,
+    "model_inference_frequency_hz": 10
+  }
+}
