@@ -12,7 +12,17 @@ from typing import Literal
 
 from industrial_agent.contracts import ActionStep
 
-CommandKind = Literal["action", "reset", "checkpoint", "help", "quit"]
+CommandKind = Literal[
+    "action",
+    "reset",
+    "checkpoint",
+    "part_placed",
+    "handoff_verify",
+    "activate_b",
+    "complete",
+    "help",
+    "quit",
+]
 
 
 @dataclass(frozen=True)
@@ -90,6 +100,20 @@ class KeyboardTeleopMapper:
             return TeleopCommand("reset", key, "reset the scene")
         if key in {"space", "p"}:
             return TeleopCommand("checkpoint", key, "write a smoke checkpoint")
+        if key == "z":
+            return TeleopCommand(
+                "part_placed", key, "confirm next part is stable in its slot"
+            )
+        if key == "v":
+            return TeleopCommand(
+                "handoff_verify", key, "confirm handoff preconditions"
+            )
+        if key == "b":
+            return TeleopCommand("activate_b", key, "activate Arm_B")
+        if key == "c":
+            return TeleopCommand(
+                "complete", key, "confirm finished-station preconditions"
+            )
         if key in {"h", "help", "?"}:
             return TeleopCommand("help", key, "show keyboard help")
         if key in {"x", "esc", "quit", "exit"}:
@@ -101,4 +125,5 @@ class KeyboardTeleopMapper:
             "W/S: +/-X, A/D: +/-Y, Q/E: +/-Z; "
             "I/K: +/-rotX, J/L: +/-rotY, U/O: +/-rotZ; "
             "G: gripper, R: reset, P or SPACE: checkpoint, X: quit"
+            "; V2 workflow: Z next part, V handoff verify, B Arm_B, C complete"
         )

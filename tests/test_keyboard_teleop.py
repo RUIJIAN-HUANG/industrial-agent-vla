@@ -47,6 +47,20 @@ def test_control_and_unknown_keys() -> None:
         mapper.parse("not-a-key")
 
 
+def test_v2_workflow_keys_do_not_create_actions() -> None:
+    mapper = KeyboardTeleopMapper()
+    expected = {
+        "z": "part_placed",
+        "v": "handoff_verify",
+        "b": "activate_b",
+        "c": "complete",
+    }
+    for key, kind in expected.items():
+        command = mapper.parse(key)
+        assert command.kind == kind
+        assert command.action is None
+
+
 def test_smoke_requires_at_least_one_successful_action() -> None:
     with pytest.raises(RuntimeError, match="at least one successful action"):
         _require_action_evidence(0)
