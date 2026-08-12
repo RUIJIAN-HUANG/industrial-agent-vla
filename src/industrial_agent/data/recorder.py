@@ -33,6 +33,8 @@ from .padding import PaddingPolicy, PaddingResult, pad_actions
 
 CANONICAL_EPISODE_VERSION = "1.0"
 FROZEN_SCENE_ID = "single_bin_static_handoff_v1"
+V2_MANUAL_SCENE_ID = "single_bin_manual_industrial_v2"
+ALLOWED_SCENE_IDS = frozenset({FROZEN_SCENE_ID, V2_MANUAL_SCENE_ID})
 CAMERA_IDS = ("CAM_A_TOP", "CAM_HANDOFF", "CAM_B_TOP")
 ARM_IDS = ("Arm_A", "Arm_B")
 EXECUTOR_BY_ARM = {"Arm_A": "pi05", "Arm_B": "openvla_oft"}
@@ -89,8 +91,11 @@ class EpisodeMetadata:
             or self.scene_seed < 0
         ):
             raise ValueError("scene_seed must be a non-negative integer")
-        if self.scene_id != FROZEN_SCENE_ID:
-            raise ValueError(f"scene_id must be the frozen value {FROZEN_SCENE_ID!r}")
+        if self.scene_id not in ALLOWED_SCENE_IDS:
+            allowed = ", ".join(sorted(ALLOWED_SCENE_IDS))
+            raise ValueError(
+                f"scene_id must be one of the audited values: {allowed}"
+            )
         if (
             not isinstance(self.git_sha, str)
             or _GIT_SHA.fullmatch(self.git_sha) is None

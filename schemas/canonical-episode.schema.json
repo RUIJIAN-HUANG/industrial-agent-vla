@@ -139,7 +139,11 @@
           "pattern": "^[A-Za-z0-9._-]{1,128}$"
         },
         "scene_id": {
-          "const": "single_bin_static_handoff_v1"
+          "type": "string",
+          "enum": [
+            "single_bin_static_handoff_v1",
+            "single_bin_manual_industrial_v2"
+          ]
         },
         "task_id": {
           "$ref": "#/$defs/nonBlank"

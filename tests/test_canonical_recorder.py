@@ -240,3 +240,56 @@ def test_each_stream_enforces_its_frozen_physics_tick_grid(tmp_path: Path) -> No
             duration_ms=50,
         )
     recorder.abort()
+
+# V2_SCENE_ID_COMPATIBILITY_TESTS
+def test_episode_metadata_accepts_only_audited_scene_ids() -> None:
+    v1 = _metadata("scene-v1")
+    assert v1.scene_id == "single_bin_static_handoff_v1"
+
+    v2 = EpisodeMetadata(
+        episode_id="scene-v2",
+        task_id="task-001",
+        instruction="在 V2 场景执行人工采集",
+        scene_seed=7,
+        git_sha="a" * 40,
+        scene_config_sha256=f"sha256:{'b' * 64}",
+        scene_id="single_bin_manual_industrial_v2",
+    )
+    assert v2.scene_id == "single_bin_manual_industrial_v2"
+
+    with pytest.raises(ValueError, match="scene_id"):
+        EpisodeMetadata(
+            episode_id="scene-unknown",
+            task_id="task-001",
+            instruction="拒绝未经审计的场景",
+            scene_seed=7,
+            git_sha="a" * 40,
+            scene_config_sha256=f"sha256:{'b' * 64}",
+            scene_id="unknown_scene_v99",
+        )
+
+
+def test_canonical_schema_accepts_v1_v2_and_rejects_unknown_scene() -> None:
+    schema = json.loads(
+        (REPO_ROOT / "schemas" / "canonical-episode.schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    manifest = json.loads(
+        (GOLDEN_EPISODE / "structure.json").read_text(encoding="utf-8")
+    )
+    validator = Draft202012Validator(schema)
+
+    for scene_id in (
+        "single_bin_static_handoff_v1",
+        "single_bin_manual_industrial_v2",
+    ):
+        candidate = json.loads(json.dumps(manifest))
+        candidate["metadata"]["scene_id"] = scene_id
+        validator.validate(candidate)
+
+    unknown = json.loads(json.dumps(manifest))
+    unknown["metadata"]["scene_id"] = "unknown_scene_v99"
+    errors = list(validator.iter_errors(unknown))
+    assert errors
+    assert any(tuple(error.path) == ("metadata", "scene_id") for error in errors)
