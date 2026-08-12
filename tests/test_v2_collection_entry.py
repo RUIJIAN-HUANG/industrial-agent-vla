@@ -33,7 +33,7 @@ def test_cli_builds_visible_practice_preflight(tmp_path: Path) -> None:
 
 def test_cli_rejects_oversized_motion_step(tmp_path: Path) -> None:
     args = _args(tmp_path)
-    args.translation_step_m = 0.02
+    args.translation_step_m = 0.051
     with pytest.raises(ValueError, match="translation-step"):
         preflight_from_args(
             args, git_sha="a" * 40, worktree_clean=True

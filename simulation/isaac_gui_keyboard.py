@@ -25,6 +25,7 @@ GUI_KEY_TO_TELEOP_KEY = {
     "U": "u",
     "O": "o",
     "G": "g",
+    "F": "f",
     "R": "r",
     "P": "p",
     "H": "h",

@@ -61,6 +61,18 @@ def test_v2_workflow_keys_do_not_create_actions() -> None:
         assert command.action is None
 
 
+def test_precision_toggle_switches_between_coarse_and_fine() -> None:
+    mapper = KeyboardTeleopMapper(
+        translation_step_m=0.05,
+        fine_translation_step_m=0.005,
+    )
+    assert mapper.parse("w").action.values[0] == pytest.approx(0.05)
+    assert mapper.parse("f").kind == "toggle_precision"
+    assert mapper.toggle_precision() == "FINE"
+    assert mapper.parse("w").action.values[0] == pytest.approx(0.005)
+    assert mapper.toggle_precision() == "COARSE"
+
+
 def test_smoke_requires_at_least_one_successful_action() -> None:
     with pytest.raises(RuntimeError, match="at least one successful action"):
         _require_action_evidence(0)

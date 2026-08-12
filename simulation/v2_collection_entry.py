@@ -43,7 +43,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--franka-usd")
     parser.add_argument("--max-actions", type=int, default=500)
-    parser.add_argument("--translation-step-m", type=float, default=0.005)
+    parser.add_argument("--translation-step-m", type=float, default=0.05)
+    parser.add_argument("--fine-translation-step-m", type=float, default=0.005)
     parser.add_argument("--rotation-step-deg", type=float, default=2.0)
     parser.add_argument("--headless", action="store_true")
     return parser
@@ -75,8 +76,13 @@ def preflight_from_args(
 ) -> CollectionPreflight:
     if not 1 <= args.max_actions <= 5000:
         raise ValueError("--max-actions must be in [1, 5000]")
-    if not 0.0 < args.translation_step_m <= 0.01:
-        raise ValueError("--translation-step-m must be in (0, 0.01]")
+    if not 0.0 < args.translation_step_m <= 0.05:
+        raise ValueError("--translation-step-m must be in (0, 0.05]")
+    if not 0.0 < args.fine_translation_step_m <= args.translation_step_m:
+        raise ValueError(
+            "--fine-translation-step-m must be positive and no larger than "
+            "--translation-step-m"
+        )
     if not 0.0 < args.rotation_step_deg <= 5.0:
         raise ValueError("--rotation-step-deg must be in (0, 5]")
     return build_collection_preflight(

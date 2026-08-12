@@ -16,6 +16,7 @@ CommandKind = Literal[
     "action",
     "reset",
     "checkpoint",
+    "toggle_precision",
     "part_placed",
     "handoff_verify",
     "activate_b",
@@ -40,19 +41,34 @@ class KeyboardTeleopMapper:
         self,
         *,
         translation_step_m: float = 0.005,
+        fine_translation_step_m: float = 0.005,
         rotation_step_rad: float = radians(2.0),
         duration_ms: int = 100,
         gripper_open: bool = True,
     ) -> None:
-        if translation_step_m <= 0.0 or rotation_step_rad <= 0.0:
+        if (
+            translation_step_m <= 0.0
+            or fine_translation_step_m <= 0.0
+            or fine_translation_step_m > translation_step_m
+            or rotation_step_rad <= 0.0
+        ):
             raise ValueError("teleop steps must be positive")
-        self.translation_step_m = float(translation_step_m)
+        self.coarse_translation_step_m = float(translation_step_m)
+        self.fine_translation_step_m = float(fine_translation_step_m)
+        self.translation_step_m = self.coarse_translation_step_m
         self.rotation_step_rad = float(rotation_step_rad)
         self.duration_ms = int(duration_ms)
         self.gripper_open = bool(gripper_open)
 
     def set_gripper_open(self, is_open: bool) -> None:
         self.gripper_open = bool(is_open)
+
+    def toggle_precision(self) -> str:
+        if self.translation_step_m == self.coarse_translation_step_m:
+            self.translation_step_m = self.fine_translation_step_m
+            return "FINE"
+        self.translation_step_m = self.coarse_translation_step_m
+        return "COARSE"
 
     def _action(
         self,
@@ -100,6 +116,8 @@ class KeyboardTeleopMapper:
             return TeleopCommand("reset", key, "reset the scene")
         if key in {"space", "p"}:
             return TeleopCommand("checkpoint", key, "write a smoke checkpoint")
+        if key == "f":
+            return TeleopCommand("toggle_precision", key, "toggle motion precision")
         if key == "z":
             return TeleopCommand(
                 "part_placed", key, "confirm next part is stable in its slot"
@@ -124,6 +142,6 @@ class KeyboardTeleopMapper:
         return (
             "W/S: +/-X, A/D: +/-Y, Q/E: +/-Z; "
             "I/K: +/-rotX, J/L: +/-rotY, U/O: +/-rotZ; "
-            "G: gripper, R: reset, P or SPACE: checkpoint, X: quit"
+            "G: gripper, F: coarse/fine, R: reset, P or SPACE: checkpoint, X: quit"
             "; V2 workflow: Z next part, V handoff verify, B Arm_B, C complete"
         )

@@ -193,6 +193,7 @@ def main() -> int:
         active_arm = "Arm_A"
         mapper = KeyboardTeleopMapper(
             translation_step_m=args.translation_step_m,
+            fine_translation_step_m=args.fine_translation_step_m,
             rotation_step_rad=radians(args.rotation_step_deg),
             duration_ms=100,
             gripper_open=True,
@@ -207,6 +208,7 @@ def main() -> int:
         with status_window.frame:
             with ui.VStack(spacing=5):
                 ui.Label("W/S X | A/D Y | Q/E Z | I/K J/L U/O rotation | G gripper")
+                ui.Label("F toggles COARSE/FINE translation (50 mm / 5 mm)")
                 ui.Label("Z confirm next part | V verify handoff | B activate Arm_B")
                 ui.Label("C complete full task | P checkpoint | X safe-stop")
                 ui.Label("Tap keys once. Do not hold. Formal actions are recorded.")
@@ -238,6 +240,18 @@ def main() -> int:
                     print(
                         f"CHECKPOINT token={machine.token.value} "
                         f"next={machine.next_part_id} actions={action_count}"
+                    )
+                    continue
+                if command.kind == "toggle_precision":
+                    mode = mapper.toggle_precision()
+                    print(
+                        f"PRECISION={mode} "
+                        f"step_mm={mapper.translation_step_m * 1000:.1f}"
+                    )
+                    status_label.text = (
+                        f"{machine.token.value} | {mode} "
+                        f"{mapper.translation_step_m * 1000:.0f}mm | "
+                        f"arm={active_arm} | actions={action_count}"
                     )
                     continue
                 if command.kind == "part_placed":
