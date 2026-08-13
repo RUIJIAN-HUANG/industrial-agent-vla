@@ -208,7 +208,12 @@ def main() -> int:
         with status_window.frame:
             with ui.VStack(spacing=5):
                 ui.Label("W/S X | A/D Y | Q/E Z | I/K J/L U/O rotation | G gripper")
-                ui.Label("F toggles COARSE/FINE translation (50 mm / 5 mm)")
+                ui.Label(
+                    f"F toggles COARSE/FINE translation "
+                    f"({args.translation_step_m * 1000:.0f} mm / "
+                    f"{args.fine_translation_step_m * 1000:.0f} mm)"
+                )
+                ui.Label("P01 target: S11 = bin back row, left-most slot")
                 ui.Label("Z confirm next part | V verify handoff | B activate Arm_B")
                 ui.Label("C complete full task | P checkpoint | X safe-stop")
                 ui.Label("Tap keys once. Do not hold. Formal actions are recorded.")
@@ -297,6 +302,16 @@ def main() -> int:
                 if action_count >= args.max_actions:
                     raise RuntimeError("max-actions safety limit reached")
                 machine.require_arm_action(active_arm)
+                rejection = controller.action_rejection_reason(
+                    command.action,
+                    arm_id=active_arm,
+                )
+                if rejection is not None:
+                    print(f"ACTION REJECTED: {rejection}; choose another direction")
+                    status_label.text = (
+                        f"REJECTED | {rejection} | actions={action_count}"
+                    )
+                    continue
                 tick = controller.physics_tick_index
                 bridge.record_action(
                     command.action,

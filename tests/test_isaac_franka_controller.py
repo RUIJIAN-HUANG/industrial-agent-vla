@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from math import sqrt
 from types import ModuleType
+from typing import ClassVar
 from threading import Event, Lock, Thread
 from unittest.mock import patch
 import sys
@@ -82,6 +83,51 @@ class IsaacFrankaControllerMathTests(unittest.TestCase):
 
 
 class MultiRateExecutionTests(unittest.TestCase):
+    def test_preflight_rejects_unreachable_action_without_world_step(self):
+        class World:
+            steps = 0
+
+        class Lula:
+            @staticmethod
+            def set_robot_base_pose(position, orientation):
+                del position, orientation
+
+        class Solver:
+            calls = 0
+
+            @staticmethod
+            def compute_end_effector_pose():
+                return np.zeros(3), np.eye(3)
+
+            @classmethod
+            def compute_inverse_kinematics(cls, position, orientation):
+                del position, orientation
+                cls.calls += 1
+                return object(), cls.calls < 5
+
+        class Arm:
+            @staticmethod
+            def get_world_pose():
+                return np.zeros(3), np.asarray([1.0, 0.0, 0.0, 0.0])
+
+        controller = object.__new__(IsaacSimFrankaController)
+        controller._world = World()
+        controller._arms = {"Arm_A": Arm()}
+        controller._solvers = {"Arm_A": Solver()}
+        controller._lula_solvers = {"Arm_A": Lula()}
+        controller._owner_thread_id = __import__("threading").get_ident()
+        controller._stop_requested = Event()
+        controller._multi_rate = FROZEN_MULTI_RATE
+
+        action = ActionStep.from_sequence(
+            [0.03, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+            duration_ms=100,
+        )
+        reason = controller.action_rejection_reason(action, arm_id="Arm_A")
+
+        self.assertIn("IK tick 5/6", reason)
+        self.assertEqual(World.steps, 0)
+
     def test_100ms_model_delta_is_interpolated_at_60hz(self):
         class World:
             def __init__(self):
@@ -114,7 +160,7 @@ class MultiRateExecutionTests(unittest.TestCase):
                 return object(), True
 
         class Arm:
-            dof_names = [
+            dof_names: ClassVar[list[str]] = [
                 "panda_joint1",
                 "panda_joint2",
                 "panda_finger_joint1",
@@ -195,7 +241,7 @@ class MultiRateExecutionTests(unittest.TestCase):
                 return object(), True
 
         class Arm:
-            dof_names = ["panda_finger_joint1", "panda_finger_joint2"]
+            dof_names: ClassVar[list[str]] = ["panda_finger_joint1", "panda_finger_joint2"]
 
             @staticmethod
             def get_world_pose():
@@ -286,7 +332,7 @@ class GripperMappingTests(unittest.TestCase):
 
     def test_live_finger_positions_are_read_by_joint_name(self):
         class Arm:
-            dof_names = [
+            dof_names: ClassVar[list[str]] = [
                 "panda_joint1",
                 "panda_finger_joint2",
                 "panda_joint2",

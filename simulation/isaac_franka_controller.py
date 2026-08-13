@@ -553,6 +553,69 @@ class IsaacSimFrankaController:
             )
         return fingers.copy()
 
+    def action_rejection_reason(self, action: ActionStep, *, arm_id: str) -> str | None:
+        """Return an IK rejection reason without moving the robot."""
+
+        self._require_owner_thread()
+        if self._stop_requested.is_set():
+            return "controller is already safe-stopped"
+        arm = self._arms[arm_id]
+        solver = self._solvers[arm_id]
+        lula_solver = self._lula_solvers[arm_id]
+        translation = np.asarray(action.values[:3], dtype=float)
+        rotation = np.asarray(action.values[3:6], dtype=float)
+        control_ticks = self._multi_rate.control_ticks_for_duration_ms(
+            action.duration_ms
+        )
+        base_position, base_orientation = arm.get_world_pose()
+        base_position = np.asarray(base_position, dtype=float)
+        base_orientation = np.asarray(base_orientation, dtype=float)
+        lula_solver.set_robot_base_pose(base_position, base_orientation)
+        control_position, current_rotation = solver.compute_end_effector_pose()
+        control_position = np.asarray(control_position, dtype=float)
+        current_rotation = np.asarray(current_rotation, dtype=float)
+        tcp_offset_local = getattr(self, "_tcp_offsets_local_m", {}).get(
+            arm_id, np.zeros(3, dtype=float)
+        )
+        current_position = _virtual_tcp_world_position(
+            control_position,
+            current_rotation,
+            tcp_offset_local,
+        )
+        current_orientation = _rotation_matrix_to_quaternion(current_rotation)
+        world_translation = _rotate_vector(base_orientation, translation)
+        inverse_base_orientation = _quat_inverse(base_orientation)
+        for control_index in range(1, control_ticks + 1):
+            fraction = control_index / control_ticks
+            target_tcp_position = current_position + world_translation * fraction
+            delta_base = _rotvec_quaternion(rotation * fraction)
+            delta_world = _quat_multiply(
+                _quat_multiply(base_orientation, delta_base),
+                inverse_base_orientation,
+            )
+            target_orientation = _quat_multiply(
+                delta_world,
+                current_orientation,
+            )
+            target_orientation /= sqrt(
+                float(np.dot(target_orientation, target_orientation))
+            )
+            target_position = _control_world_position_for_tcp(
+                target_tcp_position,
+                target_orientation,
+                tcp_offset_local,
+            )
+            _, success = solver.compute_inverse_kinematics(
+                target_position,
+                target_orientation,
+            )
+            if not success:
+                return (
+                    f"{arm_id} cannot reach this target "
+                    f"(IK tick {control_index}/{control_ticks})"
+                )
+        return None
+
     def execute_action(self, action: ActionStep, *, arm_id: str) -> None:
         self._require_owner_thread()
         if not self._action_lock.acquire(blocking=False):
