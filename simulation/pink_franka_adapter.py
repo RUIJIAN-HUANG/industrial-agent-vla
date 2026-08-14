@@ -14,6 +14,8 @@ from typing import Any, Mapping
 
 import numpy as np
 
+from simulation.pink_urdf_compat import prepare_pink_compatible_urdf
+
 
 _ARM_JOINTS = tuple(f"panda_joint{index}" for index in range(1, 8))
 
@@ -111,7 +113,9 @@ class PinkFrankaAdapter:
                     f"from URDF path {urdf_path!r}"
                 )
 
-            model = pin.buildModelFromUrdf(urdf_path)
+            pink_urdf_path, renamed_fixed_frames = prepare_pink_compatible_urdf(urdf_path)
+
+            model = pin.buildModelFromUrdf(pink_urdf_path)
             frame_names = {frame.name for frame in model.frames}
             if control_frame_name not in frame_names:
                 candidates = sorted(
@@ -150,7 +154,7 @@ class PinkFrankaAdapter:
                 controlled_joints=list(_ARM_JOINTS),
             )
             cfg = PinkIKControllerCfg(
-                urdf_path=urdf_path,
+                urdf_path=pink_urdf_path,
                 mesh_path=str(mesh_package_root),
                 num_hand_joints=0,
                 variable_input_tasks=[frame_task, posture_task],
@@ -174,6 +178,10 @@ class PinkFrankaAdapter:
             self._diagnostics[arm_id] = {
                 "backend": "pink",
                 "urdf_path": urdf_path,
+                "pink_compatible_urdf_path": pink_urdf_path,
+                "renamed_fixed_frames": [
+                    list(item) for item in renamed_fixed_frames
+                ],
                 "control_frame_name": control_frame_name,
                 "controlled_joint_names": list(_ARM_JOINTS),
                 "controlled_joint_indices": list(indices),
