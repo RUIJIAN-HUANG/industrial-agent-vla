@@ -8,7 +8,6 @@ Isaac Lab/Pink must be imported after the SimulationApp has started.
 
 from __future__ import annotations
 
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Mapping
 
@@ -18,6 +17,8 @@ from simulation.pink_urdf_compat import prepare_pink_compatible_urdf
 
 
 _ARM_JOINTS = tuple(f"panda_joint{index}" for index in range(1, 8))
+_ROLLOUT_MAX_ITERATIONS = 32
+_ROLLOUT_JOINT_TOLERANCE_RAD = 1e-5
 
 
 def _wxyz_rotation_matrix(quaternion: np.ndarray) -> np.ndarray:
@@ -87,33 +88,9 @@ class PinkFrankaAdapter:
             if not urdf_path:
                 raise RuntimeError(f"Lula supplied no Franka URDF path for {arm_id}")
 
-            mesh_package_root = None
-            for parent in Path(urdf_path).parents:
-                candidate = (
-                    parent
-                    / "exts"
-                    / "isaacsim.asset.importer.urdf"
-                    / "data"
-                    / "urdf"
-                    / "robots"
-                )
-                required_mesh = (
-                    candidate
-                    / "franka_description"
-                    / "meshes"
-                    / "collision"
-                    / "link0.stl"
-                )
-                if required_mesh.is_file():
-                    mesh_package_root = candidate
-                    break
-            if mesh_package_root is None:
-                raise RuntimeError(
-                    "Pink could not locate the franka_description mesh package "
-                    f"from URDF path {urdf_path!r}"
-                )
-
-            pink_urdf_path, renamed_fixed_frames = prepare_pink_compatible_urdf(urdf_path)
+            pink_urdf_path, renamed_fixed_frames = prepare_pink_compatible_urdf(
+                urdf_path
+            )
 
             model = pin.buildModelFromUrdf(pink_urdf_path)
             frame_names = {frame.name for frame in model.frames}
@@ -155,7 +132,7 @@ class PinkFrankaAdapter:
             )
             cfg = PinkIKControllerCfg(
                 urdf_path=pink_urdf_path,
-                mesh_path=str(mesh_package_root),
+                mesh_path=None,
                 num_hand_joints=0,
                 variable_input_tasks=[frame_task, posture_task],
                 fixed_input_tasks=[DampingTask(cost=0.02)],
@@ -179,9 +156,7 @@ class PinkFrankaAdapter:
                 "backend": "pink",
                 "urdf_path": urdf_path,
                 "pink_compatible_urdf_path": pink_urdf_path,
-                "renamed_fixed_frames": [
-                    list(item) for item in renamed_fixed_frames
-                ],
+                "renamed_fixed_frames": [list(item) for item in renamed_fixed_frames],
                 "control_frame_name": control_frame_name,
                 "controlled_joint_names": list(_ARM_JOINTS),
                 "controlled_joint_indices": list(indices),
@@ -203,22 +178,60 @@ class PinkFrankaAdapter:
         target_orientation_base_wxyz: np.ndarray,
         dt_s: float,
     ) -> np.ndarray:
-        """Compute seven joint targets while preserving the commanded TCP pose."""
+        """Compute an absolute seven-joint target for one keyboard action.
+
+        Isaac Lab's Pink controller intentionally returns one differential
+        configuration update.  The existing collection controller, however,
+        consumes an absolute IK target once per 100 ms canonical action.  Roll
+        Pink forward predictively here so a 30 mm keyboard command is not
+        reduced to a barely visible single QP integration step.  The rollout
+        changes neither the recorded action nor the live articulation state.
+        """
+
+        dt_s = float(dt_s)
+        if not np.isfinite(dt_s) or dt_s <= 0.0:
+            raise ValueError("dt_s must be positive and finite")
+
+        current = np.asarray(current_joint_positions, dtype=float)
+        indices = self._controlled_indices[arm_id]
+        if current.ndim != 1 or not np.all(np.isfinite(current)):
+            raise ValueError("current_joint_positions must be a finite vector")
+        if not indices or max(indices) >= current.size:
+            raise ValueError("current_joint_positions does not cover controlled joints")
 
         target = self._pin.SE3(
             _wxyz_rotation_matrix(target_orientation_base_wxyz),
             np.asarray(target_position_base_m, dtype=float),
         )
         self._frame_tasks[arm_id].set_target(target)
-        result = self._controllers[arm_id].compute(
-            np.asarray(current_joint_positions, dtype=float),
-            float(dt_s),
+
+        predicted = current.copy()
+        initial_controlled = predicted[indices].copy()
+        iterations = 0
+        last_step_rad = float("inf")
+        targets = initial_controlled
+        for iterations in range(1, _ROLLOUT_MAX_ITERATIONS + 1):
+            result = self._controllers[arm_id].compute(predicted, dt_s)
+            if hasattr(result, "detach"):
+                result = result.detach()
+            if hasattr(result, "cpu"):
+                result = result.cpu()
+            targets = np.asarray(result, dtype=float)
+            if targets.shape != (7,) or not np.all(np.isfinite(targets)):
+                raise RuntimeError(f"Pink returned invalid joint targets for {arm_id}")
+
+            last_step_rad = float(np.max(np.abs(targets - predicted[indices])))
+            predicted[indices] = targets
+            if last_step_rad <= _ROLLOUT_JOINT_TOLERANCE_RAD:
+                break
+
+        self._diagnostics[arm_id].update(
+            {
+                "rollout_iterations": iterations,
+                "rollout_last_step_rad": last_step_rad,
+                "rollout_total_joint_delta_rad": float(
+                    np.max(np.abs(targets - initial_controlled))
+                ),
+            }
         )
-        if hasattr(result, "detach"):
-            result = result.detach()
-        if hasattr(result, "cpu"):
-            result = result.cpu()
-        targets = np.asarray(result, dtype=float)
-        if targets.shape != (7,) or not np.all(np.isfinite(targets)):
-            raise RuntimeError(f"Pink returned invalid joint targets for {arm_id}")
-        return targets
+        return targets.copy()
