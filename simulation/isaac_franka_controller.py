@@ -1,8 +1,8 @@
 """Isaac Sim 5.1 Franka backend for ``IsaacExecutionEnvironment``.
 
 Import this module only after ``SimulationApp`` has started.  It converts the
-frozen robot-base 7-D action contract into Lula inverse-kinematics targets and
-writes them to the selected ``SingleArticulation``.
+frozen robot-base 7-D action contract into Lula or Pink inverse-kinematics
+targets and writes them to the selected ``SingleArticulation``.
 """
 
 from __future__ import annotations
@@ -226,7 +226,7 @@ def _gripper_opening_m(command: float) -> float:
 
 
 class IsaacSimFrankaController:
-    """Live dual-Franka controller using Isaac Sim 5.1 Lula IK."""
+    """Live dual-Franka controller with Lula FK and selectable IK."""
 
     def __init__(
         self,
@@ -238,6 +238,8 @@ class IsaacSimFrankaController:
         virtual_tcp_fingertip_frame_names: tuple[str, str] | None = None,
         stationary_velocity_rad_s: float = 1e-3,
         safe_stop_action_grace_s: float = 0.25,
+        ik_backend: str = "lula",
+        pink_device: str = "cuda:0",
     ) -> None:
         if set(arms) != set(_ARMS):
             raise ValueError("arms must contain exactly Arm_A and Arm_B")
@@ -254,6 +256,8 @@ class IsaacSimFrankaController:
             )
         if safe_stop_action_grace_s < 0.0:
             raise ValueError("safe_stop_action_grace_s cannot be negative")
+        if ik_backend not in {"lula", "pink"}:
+            raise ValueError("ik_backend must be 'lula' or 'pink'")
 
         try:
             from isaacsim.robot_motion.motion_generation import (
@@ -283,6 +287,9 @@ class IsaacSimFrankaController:
         self._stop_epoch = 0
         self._solvers: dict[str, Any] = {}
         self._lula_solvers: dict[str, Any] = {}
+        self._lula_configs: dict[str, Mapping[str, Any]] = {}
+        self._ik_backend = ik_backend
+        self._pink_adapter: Any | None = None
         self._control_frame_name = end_effector_frame_name
         self._tcp_offsets_local_m: dict[str, np.ndarray] = {}
         self._tcp_definitions: dict[str, dict[str, Any]] = {}
@@ -292,6 +299,7 @@ class IsaacSimFrankaController:
                     "Franka"
                 )
             )
+            self._lula_configs[arm_id] = dict(config)
             lula_solver = LulaKinematicsSolver(**config)
             self._lula_solvers[arm_id] = lula_solver
             control_solver = ArticulationKinematicsSolver(
@@ -368,6 +376,22 @@ class IsaacSimFrankaController:
                 "tcp_offset_local_m": offset.tolist(),
                 "calibration_fingertip_separation_m": separation_m,
             }
+
+        if self._ik_backend == "pink":
+            from simulation.pink_franka_adapter import PinkFrankaAdapter
+
+            self._pink_adapter = PinkFrankaAdapter(
+                arms=self._arms,
+                lula_configs=self._lula_configs,
+                control_frame_name=end_effector_frame_name,
+                device=pink_device,
+            )
+
+    @property
+    def ik_backend(self) -> str:
+        """Return the selected live inverse-kinematics backend."""
+
+        return self._ik_backend
 
     @property
     def physics_tick_index(self) -> int:
@@ -559,6 +583,11 @@ class IsaacSimFrankaController:
         self._require_owner_thread()
         if self._stop_requested.is_set():
             return "controller is already safe-stopped"
+        # Pink's QP updates its internal configuration while solving.  A Lula
+        # dry-run here would reject poses that Pink can recover through the
+        # redundant joint null space, defeating the selected backend.
+        if getattr(self, "_ik_backend", "lula") == "pink":
+            return None
         arm = self._arms[arm_id]
         solver = self._solvers[arm_id]
         lula_solver = self._lula_solvers[arm_id]
@@ -711,15 +740,42 @@ class IsaacSimFrankaController:
                     target_orientation,
                     tcp_offset_local,
                 )
-                ik_action, success = solver.compute_inverse_kinematics(
-                    target_position,
-                    target_orientation,
-                )
-                if not success:
-                    raise RuntimeError(
-                        f"Lula IK did not converge for {arm_id} at control tick "
-                        f"{control_index}/{control_ticks}"
+                if getattr(self, "_ik_backend", "lula") == "pink":
+                    target_position_base = _rotate_vector(
+                        inverse_base_orientation,
+                        target_position - base_position,
                     )
+                    target_orientation_base = _quat_multiply(
+                        inverse_base_orientation,
+                        target_orientation,
+                    )
+                    current_joints = np.asarray(
+                        arm.get_joint_positions(), dtype=float
+                    )
+                    joint_targets = self._pink_adapter.compute(
+                        arm_id=arm_id,
+                        current_joint_positions=current_joints,
+                        target_position_base_m=target_position_base,
+                        target_orientation_base_wxyz=target_orientation_base,
+                        dt_s=1.0 / self._multi_rate.control_hz,
+                    )
+                    ik_action = ArticulationAction(
+                        joint_positions=joint_targets,
+                        joint_indices=np.asarray(
+                            self._pink_adapter.controlled_indices(arm_id),
+                            dtype=np.int64,
+                        ),
+                    )
+                else:
+                    ik_action, success = solver.compute_inverse_kinematics(
+                        target_position,
+                        target_orientation,
+                    )
+                    if not success:
+                        raise RuntimeError(
+                            f"Lula IK did not converge for {arm_id} at control tick "
+                            f"{control_index}/{control_ticks}"
+                        )
                 if self._stop_requested.is_set():
                     raise RuntimeError("control lease was revoked before IK write")
                 arm.apply_action(ik_action)

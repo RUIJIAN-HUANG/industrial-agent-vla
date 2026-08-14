@@ -175,6 +175,7 @@ def main() -> int:
                 "panda_leftfingertip",
                 "panda_rightfingertip",
             ),
+            ik_backend=args.ik_backend,
         )
         image_cas, recorder = create_recorder(preflight)
         publisher = IsaacRgbCasPublisher.from_scene_config(image_cas, config)
@@ -214,6 +215,10 @@ def main() -> int:
                     f"{args.fine_translation_step_m * 1000:.0f} mm)"
                 )
                 ui.Label("P01 target: S11 = bin back row, left-most slot")
+                ui.Label(
+                    f"IK backend: {controller.ik_backend.upper()} "
+                    "+ null-space posture"
+                )
                 ui.Label("Z confirm next part | V verify handoff | B activate Arm_B")
                 ui.Label("C complete full task | P checkpoint | X safe-stop")
                 ui.Label("Tap keys once. Do not hold. Formal actions are recorded.")

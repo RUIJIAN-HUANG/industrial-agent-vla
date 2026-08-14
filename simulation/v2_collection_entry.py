@@ -46,6 +46,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--translation-step-m", type=float, default=0.05)
     parser.add_argument("--fine-translation-step-m", type=float, default=0.005)
     parser.add_argument("--rotation-step-deg", type=float, default=2.0)
+    parser.add_argument(
+        "--ik-backend",
+        choices=("pink", "lula"),
+        default="pink",
+        help="Live IK backend; Pink adds null-space posture regularization.",
+    )
     parser.add_argument("--headless", action="store_true")
     return parser
 
