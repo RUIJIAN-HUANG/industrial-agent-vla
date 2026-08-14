@@ -8,6 +8,7 @@ Isaac Lab/Pink must be imported after the SimulationApp has started.
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Mapping
 
@@ -84,6 +85,32 @@ class PinkFrankaAdapter:
             if not urdf_path:
                 raise RuntimeError(f"Lula supplied no Franka URDF path for {arm_id}")
 
+            mesh_package_root = None
+            for parent in Path(urdf_path).parents:
+                candidate = (
+                    parent
+                    / "exts"
+                    / "isaacsim.asset.importer.urdf"
+                    / "data"
+                    / "urdf"
+                    / "robots"
+                )
+                required_mesh = (
+                    candidate
+                    / "franka_description"
+                    / "meshes"
+                    / "collision"
+                    / "link0.stl"
+                )
+                if required_mesh.is_file():
+                    mesh_package_root = candidate
+                    break
+            if mesh_package_root is None:
+                raise RuntimeError(
+                    "Pink could not locate the franka_description mesh package "
+                    f"from URDF path {urdf_path!r}"
+                )
+
             model = pin.buildModelFromUrdf(urdf_path)
             frame_names = {frame.name for frame in model.frames}
             if control_frame_name not in frame_names:
@@ -124,7 +151,7 @@ class PinkFrankaAdapter:
             )
             cfg = PinkIKControllerCfg(
                 urdf_path=urdf_path,
-                mesh_path=None,
+                mesh_path=str(mesh_package_root),
                 num_hand_joints=0,
                 variable_input_tasks=[frame_task, posture_task],
                 fixed_input_tasks=[DampingTask(cost=0.02)],
