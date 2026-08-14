@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+import importlib
 import json
 from math import radians
 from pathlib import Path
@@ -71,6 +72,14 @@ def _apply_home(world: Any, arms: dict[str, Any], config: dict[str, Any]) -> Non
         raise RuntimeError("explicit HOME failed: " + "; ".join(errors))
 
 
+def _preload_pink_runtime(ik_backend: str) -> None:
+    """Register Pinocchio C++ bindings before Kit loads its plugins."""
+    if ik_backend != "pink":
+        return
+    importlib.import_module("eigenpy")
+    importlib.import_module("pinocchio")
+
+
 def main() -> int:
     for path in (REPOSITORY_ROOT, SOURCE_DIR, SCRIPT_DIR):
         if str(path) not in sys.path:
@@ -127,6 +136,7 @@ def main() -> int:
         contract = V2CollectionContract.from_config(config)
         machine = V2ManualCollectionStateMachine(contract)
 
+        _preload_pink_runtime(args.ik_backend)
         simulation_app = isaac_compat.launch_simulation_app(headless=False)
         phase = "build_scene"
         import single_bin_scene_v2_builder
