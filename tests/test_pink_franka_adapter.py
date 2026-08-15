@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import numpy as np
 
 from simulation.pink_franka_adapter import (
+    PinkFrankaAdapter,
     _joint_indices,
+    _resolve_franka_mesh_root,
     _wxyz_rotation_matrix,
 )
 
@@ -35,9 +39,39 @@ class PinkFrankaAdapterMathTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "panda_joint7"):
             _joint_indices([f"panda_joint{i}" for i in range(1, 7)])
 
-    def test_compute_rolls_differential_steps_into_absolute_target(self):
-        from simulation.pink_franka_adapter import PinkFrankaAdapter
+    def test_mesh_root_is_resolved_from_isaac_sim_tree(self):
+        with TemporaryDirectory() as root:
+            root_path = Path(root)
+            urdf = (
+                root_path
+                / "exts"
+                / "isaacsim.robot_motion.motion_generation"
+                / "motion_policy_configs"
+                / "franka"
+                / "lula_franka_gen.urdf"
+            )
+            mesh = (
+                root_path
+                / "exts"
+                / "isaacsim.asset.importer.urdf"
+                / "data"
+                / "urdf"
+                / "robots"
+                / "franka_description"
+                / "meshes"
+                / "collision"
+                / "link0.stl"
+            )
+            urdf.parent.mkdir(parents=True)
+            mesh.parent.mkdir(parents=True)
+            urdf.touch()
+            mesh.touch()
+            self.assertEqual(
+                _resolve_franka_mesh_root(str(urdf)),
+                str(mesh.parents[3]),
+            )
 
+    def test_compute_rolls_differential_steps_into_absolute_target(self):
         class Pin:
             @staticmethod
             def SE3(rotation, translation):

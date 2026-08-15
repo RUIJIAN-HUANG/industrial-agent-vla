@@ -8,6 +8,7 @@ Isaac Lab/Pink must be imported after the SimulationApp has started.
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Mapping
 
@@ -50,6 +51,31 @@ def _joint_indices(all_joint_names: list[str]) -> list[int]:
     return [all_joint_names.index(name) for name in _ARM_JOINTS]
 
 
+def _resolve_franka_mesh_root(urdf_path: str) -> str:
+    """Locate the Isaac Sim package root used by Franka package:// meshes."""
+
+    urdf = Path(urdf_path).resolve()
+    relative_mesh = (
+        Path("exts")
+        / "isaacsim.asset.importer.urdf"
+        / "data"
+        / "urdf"
+        / "robots"
+        / "franka_description"
+        / "meshes"
+        / "collision"
+        / "link0.stl"
+    )
+    for parent in urdf.parents:
+        mesh = parent / relative_mesh
+        if mesh.is_file():
+            return str(mesh.parents[3])
+    raise RuntimeError(
+        "Could not resolve Isaac Sim Franka mesh package root from "
+        f"URDF {urdf_path!r}"
+    )
+
+
 class PinkFrankaAdapter:
     """One native ``PinkIKController`` per existing Franka articulation."""
 
@@ -87,6 +113,8 @@ class PinkFrankaAdapter:
             urdf_path = str(lula_configs[arm_id].get("urdf_path", ""))
             if not urdf_path:
                 raise RuntimeError(f"Lula supplied no Franka URDF path for {arm_id}")
+
+            mesh_root = _resolve_franka_mesh_root(urdf_path)
 
             pink_urdf_path, renamed_fixed_frames = prepare_pink_compatible_urdf(
                 urdf_path
@@ -132,7 +160,7 @@ class PinkFrankaAdapter:
             )
             cfg = PinkIKControllerCfg(
                 urdf_path=pink_urdf_path,
-                mesh_path=None,
+                mesh_path=mesh_root,
                 num_hand_joints=0,
                 variable_input_tasks=[frame_task, posture_task],
                 fixed_input_tasks=[DampingTask(cost=0.02)],
@@ -156,6 +184,7 @@ class PinkFrankaAdapter:
                 "backend": "pink",
                 "urdf_path": urdf_path,
                 "pink_compatible_urdf_path": pink_urdf_path,
+                "mesh_path": mesh_root,
                 "renamed_fixed_frames": [list(item) for item in renamed_fixed_frames],
                 "control_frame_name": control_frame_name,
                 "controlled_joint_names": list(_ARM_JOINTS),
