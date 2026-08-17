@@ -683,36 +683,6 @@ class IsaacSimFrankaController:
                 tcp_offset_local,
             )
             current_orientation = _rotation_matrix_to_quaternion(current_rotation)
-
-            pink_current_position_base = None
-            pink_current_orientation_base = None
-            if getattr(self, "_ik_backend", "lula") == "pink":
-                current_joints = np.asarray(
-                    arm.get_joint_positions(), dtype=float
-                )
-                pink_controller = self._pink_adapter._controllers[arm_id]
-                ordered_joints = current_joints[
-                    pink_controller.isaac_lab_to_pink_ordering
-                ]
-                pink_controller.pink_configuration.update(ordered_joints)
-                pink_transform = (
-                    pink_controller.pink_configuration
-                    .get_transform_frame_to_world(self._control_frame_name)
-                )
-                pink_control_position = np.asarray(
-                    pink_transform.translation, dtype=float
-                )
-                pink_control_rotation = np.asarray(
-                    pink_transform.rotation, dtype=float
-                )
-                pink_current_position_base = _virtual_tcp_world_position(
-                    pink_control_position,
-                    pink_control_rotation,
-                    tcp_offset_local,
-                )
-                pink_current_orientation_base = (
-                    _rotation_matrix_to_quaternion(pink_control_rotation)
-                )
             try:
                 from isaacsim.core.utils.types import ArticulationAction
             except ImportError as exc:
@@ -767,33 +737,13 @@ class IsaacSimFrankaController:
                     tcp_offset_local,
                 )
                 if getattr(self, "_ik_backend", "lula") == "pink":
-                    if (
-                        pink_current_position_base is None
-                        or pink_current_orientation_base is None
-                    ):
-                        raise RuntimeError(
-                            "Pink action origin was not initialized"
-                        )
-                    target_tcp_position_base = (
-                        pink_current_position_base
-                        + translation * fraction
+                    target_position_base = _rotate_vector(
+                        inverse_base_orientation,
+                        target_position - base_position,
                     )
                     target_orientation_base = _quat_multiply(
-                        delta_base,
-                        pink_current_orientation_base,
-                    )
-                    target_orientation_base /= sqrt(
-                        float(
-                            np.dot(
-                                target_orientation_base,
-                                target_orientation_base,
-                            )
-                        )
-                    )
-                    target_position_base = _control_world_position_for_tcp(
-                        target_tcp_position_base,
-                        target_orientation_base,
-                        tcp_offset_local,
+                        inverse_base_orientation,
+                        target_orientation,
                     )
                     current_joints = np.asarray(arm.get_joint_positions(), dtype=float)
                     joint_targets = self._pink_adapter.compute(
