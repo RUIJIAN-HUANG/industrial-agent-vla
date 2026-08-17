@@ -76,6 +76,12 @@ def _resolve_franka_mesh_root(urdf_path: str) -> str:
     )
 
 
+# Safety envelope for one canonical keyboard action.  The Pink controller is
+# iterated predictively below because its native output is one differential
+# update.  Without an envelope, those differential updates can accumulate into
+# a large joint-space jump while chasing a 30 mm Cartesian target.
+_MAX_ACTION_JOINT_DELTA_RAD = 0.12
+
 class PinkFrankaAdapter:
     """One native ``PinkIKController`` per existing Franka articulation."""
 
@@ -254,8 +260,21 @@ class PinkFrankaAdapter:
             if last_step_rad <= _ROLLOUT_JOINT_TOLERANCE_RAD:
                 break
 
+        # Fail closed if predictive rollout asks for an implausibly large
+        # joint-space jump for one keyboard action.  Preserve direction while
+        # scaling the cumulative update back into the safety envelope.
+        cumulative_delta = targets - initial_controlled
+        cumulative_max_rad = float(np.max(np.abs(cumulative_delta)))
+        rollout_clamped = cumulative_max_rad > _MAX_ACTION_JOINT_DELTA_RAD
+        if rollout_clamped:
+            targets = initial_controlled + cumulative_delta * (
+                _MAX_ACTION_JOINT_DELTA_RAD / cumulative_max_rad
+            )
         self._diagnostics[arm_id].update(
             {
+                "rollout_clamped": rollout_clamped,
+                "rollout_cumulative_delta_rad": cumulative_max_rad,
+                "rollout_action_joint_limit_rad": _MAX_ACTION_JOINT_DELTA_RAD,
                 "rollout_iterations": iterations,
                 "rollout_last_step_rad": last_step_rad,
                 "rollout_total_joint_delta_rad": float(

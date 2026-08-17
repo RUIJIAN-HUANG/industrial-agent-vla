@@ -109,8 +109,18 @@ class PinkFrankaAdapterMathTests(unittest.TestCase):
 
         self.assertGreater(len(controller.inputs), 1)
         np.testing.assert_allclose(controller.inputs[1][:7], 0.5)
-        np.testing.assert_allclose(targets, 1.0, atol=2e-5)
-        self.assertGreater(pink.diagnostics("Arm_A")["rollout_iterations"], 1)
+
+        # Predictive rollout approaches 1.0 rad, but one keyboard action must
+        # remain inside the cumulative joint-space safety envelope.
+        np.testing.assert_allclose(targets, 0.12, atol=1e-12)
+        diagnostics = pink.diagnostics("Arm_A")
+        self.assertGreater(diagnostics["rollout_iterations"], 1)
+        self.assertTrue(diagnostics["rollout_clamped"])
+        self.assertGreater(diagnostics["rollout_cumulative_delta_rad"], 0.12)
+        self.assertEqual(diagnostics["rollout_action_joint_limit_rad"], 0.12)
+        self.assertAlmostEqual(
+            diagnostics["rollout_total_joint_delta_rad"], 0.12
+        )
 
     def test_compute_rejects_joint_state_that_does_not_cover_arm(self):
         from simulation.pink_franka_adapter import PinkFrankaAdapter
