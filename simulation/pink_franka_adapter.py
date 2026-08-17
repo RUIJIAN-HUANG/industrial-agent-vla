@@ -182,8 +182,25 @@ class PinkFrankaAdapter:
                 device=device,
                 controlled_joint_indices=indices,
             )
+            controller_tasks = getattr(
+                controller, "_variable_input_tasks", None
+            )
+            if controller_tasks is None:
+                controller_tasks = controller.cfg.variable_input_tasks
+            active_frame_tasks = [
+                task
+                for task in controller_tasks
+                if isinstance(task, FrameTask)
+                and getattr(task, "frame", None) == control_frame_name
+            ]
+            if len(active_frame_tasks) != 1:
+                raise RuntimeError(
+                    f"Pink controller has {len(active_frame_tasks)} active "
+                    f"tasks for frame {control_frame_name!r}"
+                )
+
             self._controllers[arm_id] = controller
-            self._frame_tasks[arm_id] = frame_task
+            self._frame_tasks[arm_id] = active_frame_tasks[0]
             self._controlled_indices[arm_id] = indices
             self._diagnostics[arm_id] = {
                 "backend": "pink",
