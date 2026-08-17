@@ -317,7 +317,7 @@ def main() -> int:
             translation_step_m=args.translation_step_m,
             fine_translation_step_m=args.fine_translation_step_m,
             rotation_step_rad=radians(args.rotation_step_deg),
-            duration_ms=100,
+            duration_ms=1000,
             gripper_open=True,
         )
         command_queue: Queue[str] = Queue()
