@@ -152,7 +152,7 @@ class PinkFrankaAdapter:
             frame_task = FrameTask(
                 control_frame_name,
                 position_cost=20.0,
-                orientation_cost=20.0,
+                orientation_cost=0.0,
                 lm_damping=1.0,
                 gain=0.7,
             )
