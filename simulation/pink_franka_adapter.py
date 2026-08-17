@@ -18,7 +18,7 @@ from simulation.pink_urdf_compat import prepare_pink_compatible_urdf
 
 
 _ARM_JOINTS = tuple(f"panda_joint{index}" for index in range(1, 8))
-_ROLLOUT_MAX_ITERATIONS = 32
+_ROLLOUT_MAX_ITERATIONS = 1
 _ROLLOUT_JOINT_TOLERANCE_RAD = 1e-5
 
 
