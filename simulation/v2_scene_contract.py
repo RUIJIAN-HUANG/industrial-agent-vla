@@ -44,7 +44,7 @@ EXPECTED_HOME = [
 ]
 
 EXPECTED_STATIONS = {
-    "PACK_STATION": (-0.35, -0.15, 0.785),
+    "PACK_STATION": (-0.35, 0.2, 0.785),
     "HANDOFF_CENTER": (0.0, 0.0, 0.785),
     "FINISHED_01": (0.70, 0.10, 0.785),
 }

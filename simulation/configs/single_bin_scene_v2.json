@@ -37,7 +37,7 @@
     }
   ],
   "stations": [
-    {"id": "PACK_STATION", "kind": "bin_initial", "pose": {"position_m": [-0.35, -0.15, 0.785], "rpy_deg": [0.0, 0.0, 0.0]}, "footprint_m": [0.34, 0.26], "color_rgb": [0.16, 0.48, 0.92]},
+    {"id": "PACK_STATION", "kind": "bin_initial", "pose": {"position_m": [-0.35, 0.2, 0.785], "rpy_deg": [0.0, 0.0, 0.0]}, "footprint_m": [0.34, 0.26], "color_rgb": [0.16, 0.48, 0.92]},
     {"id": "HANDOFF_CENTER", "kind": "shared_handoff", "pose": {"position_m": [0.0, 0.0, 0.785], "rpy_deg": [0.0, 0.0, 0.0]}, "footprint_m": [0.36, 0.28], "color_rgb": [0.25, 0.72, 0.3]},
     {"id": "FINISHED_01", "kind": "finished_bin", "pose": {"position_m": [0.7, 0.1, 0.785], "rpy_deg": [0.0, 0.0, 0.0]}, "footprint_m": [0.36, 0.28], "color_rgb": [0.96, 0.57, 0.16]}
   ],
@@ -60,7 +60,7 @@
   "bin": {
     "id": "Bin_01",
     "initial_station_id": "PACK_STATION",
-    "pose": {"position_m": [-0.35, -0.15, 0.795], "rpy_deg": [0.0, 0.0, 0.0]},
+    "pose": {"position_m": [-0.35, 0.2, 0.795], "rpy_deg": [0.0, 0.0, 0.0]},
     "size_m": [0.3, 0.22, 0.09],
     "mass_kg": 0.5,
     "design_loaded_mass_limit_kg": 1.2,
