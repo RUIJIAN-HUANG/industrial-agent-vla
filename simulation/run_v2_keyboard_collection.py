@@ -443,9 +443,9 @@ def main() -> int:
 
                 controller.execute_action(command.action, arm_id=active_arm)
                 # The canonical action remains exactly 100 ms. Keep its final
-                # bounded joint target active for another 0.9 s so the physical
+                # bounded joint target active for another 0.2 s so the physical
                 # articulation can converge without generating fake actions.
-                controller.settle_current_targets(physics_ticks=108)
+                controller.settle_current_targets(physics_ticks=24)
                 action_count += 1
                 status_label.text = (
                     f"{machine.token.value} | arm={active_arm} | "
