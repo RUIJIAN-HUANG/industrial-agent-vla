@@ -93,9 +93,7 @@ class EpisodeMetadata:
             raise ValueError("scene_seed must be a non-negative integer")
         if self.scene_id not in ALLOWED_SCENE_IDS:
             allowed = ", ".join(sorted(ALLOWED_SCENE_IDS))
-            raise ValueError(
-                f"scene_id must be one of the audited values: {allowed}"
-            )
+            raise ValueError(f"scene_id must be one of the audited values: {allowed}")
         if (
             not isinstance(self.git_sha, str)
             or _GIT_SHA.fullmatch(self.git_sha) is None

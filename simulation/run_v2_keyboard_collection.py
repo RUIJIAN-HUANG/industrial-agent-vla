@@ -65,9 +65,7 @@ def _apply_home(world: Any, arms: dict[str, Any], config: dict[str, Any]) -> Non
         world.step(render=True)
     errors = []
     for arm_id in ("Arm_A", "Arm_B"):
-        errors.extend(
-            _home_readback_errors(arms[arm_id], arm_id, targets[arm_id])
-        )
+        errors.extend(_home_readback_errors(arms[arm_id], arm_id, targets[arm_id]))
     if errors:
         raise RuntimeError("explicit HOME failed: " + "; ".join(errors))
 
@@ -215,7 +213,9 @@ def main() -> int:
 
         from omni import ui  # type: ignore[import-not-found]
 
-        status_window = ui.Window("V2 Canonical Keyboard Collection", width=760, height=250)
+        status_window = ui.Window(
+            "V2 Canonical Keyboard Collection", width=760, height=250
+        )
         with status_window.frame:
             with ui.VStack(spacing=5):
                 ui.Label("W/S X | A/D Y | Q/E Z | I/K J/L U/O rotation | G gripper")
@@ -226,8 +226,7 @@ def main() -> int:
                 )
                 ui.Label("P01 target: S11 = bin back row, left-most slot")
                 ui.Label(
-                    f"IK backend: {controller.ik_backend.upper()} "
-                    "+ null-space posture"
+                    f"IK backend: {controller.ik_backend.upper()} + null-space posture"
                 )
                 ui.Label("Z confirm next part | V verify handoff | B activate Arm_B")
                 ui.Label("C complete full task | P checkpoint | X safe-stop")
@@ -283,7 +282,9 @@ def main() -> int:
                         slot_id=contract.part_to_slot[part_id],
                         stable=True,
                     )
-                    print(f"HUMAN CONFIRMED {part_id}->{contract.part_to_slot[part_id]}")
+                    print(
+                        f"HUMAN CONFIRMED {part_id}->{contract.part_to_slot[part_id]}"
+                    )
                     continue
                 if command.kind == "handoff_verify":
                     arm_a = _arm_readback(controller, arms, config, "Arm_A")
@@ -356,8 +357,13 @@ def main() -> int:
             raise RuntimeError("final safe-stop readback was not confirmed")
         if action_count < 1:
             bridge.abort()
-            raise RuntimeError("collection produced no actions; unpublished episode aborted")
-        if preflight.full_task_required and machine.outcome is not EpisodeOutcome.SUCCEEDED:
+            raise RuntimeError(
+                "collection produced no actions; unpublished episode aborted"
+            )
+        if (
+            preflight.full_task_required
+            and machine.outcome is not EpisodeOutcome.SUCCEEDED
+        ):
             bridge.abort()
             raise RuntimeError("train/validation requires a complete successful task")
         episode_path = bridge.save(

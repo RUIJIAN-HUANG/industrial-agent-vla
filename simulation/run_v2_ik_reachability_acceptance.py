@@ -18,7 +18,9 @@ ARM_IDS = ("Arm_A", "Arm_B")
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run visible read-only V2 IK reachability acceptance.")
+    parser = argparse.ArgumentParser(
+        description="Run visible read-only V2 IK reachability acceptance."
+    )
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--output-scene", type=Path, required=True)
     parser.add_argument("--evidence-dir", type=Path, required=True)
@@ -95,7 +97,9 @@ def _ik_targets(config: Mapping[str, Any]) -> list[dict[str, Any]]:
         )
 
     if len(targets) != 8 or len({item["target_id"] for item in targets}) != 8:
-        raise RuntimeError("V2 IK target construction must produce eight unique targets")
+        raise RuntimeError(
+            "V2 IK target construction must produce eight unique targets"
+        )
     for item in targets:
         if item["arm_id"] not in ARM_IDS:
             raise RuntimeError(f"invalid IK arm: {item['arm_id']}")
@@ -223,7 +227,9 @@ def main() -> int:
             )
             solution = getattr(ik_action, "joint_positions", None)
             solution_array = (
-                np.asarray(solution, dtype=float) if solution is not None else np.asarray([])
+                np.asarray(solution, dtype=float)
+                if solution is not None
+                else np.asarray([])
             )
             finite_solution = bool(
                 solution_array.size and np.all(np.isfinite(solution_array))
@@ -287,7 +293,9 @@ def main() -> int:
                 "franka_asset": franka_asset,
                 "target_count": len(targets),
                 "successful_target_count": sum(
-                    1 for item in ik_records if item["success"] and item["finite_solution"]
+                    1
+                    for item in ik_records
+                    if item["success"] and item["finite_solution"]
                 ),
                 "ik_records": ik_records,
                 "max_live_joint_change_rad": max_joint_change,
@@ -307,7 +315,9 @@ def main() -> int:
                 "traceback": traceback.format_exc(),
             }
         )
-        print(json.dumps(_jsonable(result), indent=2, ensure_ascii=False), file=sys.stderr)
+        print(
+            json.dumps(_jsonable(result), indent=2, ensure_ascii=False), file=sys.stderr
+        )
     finally:
         result["finished_at_local"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
         try:

@@ -44,11 +44,12 @@ def test_valid_practice_preflight_uses_real_v2_identity(tmp_path: Path) -> None:
     assert result.git_sha == GIT_SHA
     assert result.scene_config_sha256.startswith("sha256:")
     assert len(result.scene_config_sha256) == 71
-    assert result.episode_dir == (
-        tmp_path
-        / "episodes"
-        / "v2-manual-20260812-130000-seed007-run001"
-    ).resolve()
+    assert (
+        result.episode_dir
+        == (
+            tmp_path / "episodes" / "v2-manual-20260812-130000-seed007-run001"
+        ).resolve()
+    )
 
 
 @pytest.mark.parametrize(

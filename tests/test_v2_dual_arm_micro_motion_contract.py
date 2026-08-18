@@ -25,9 +25,7 @@ class V2DualArmMicroMotionContractTests(unittest.TestCase):
             _micro_action_values(0.0051)
 
     def test_return_delta_uses_the_measured_upward_motion(self) -> None:
-        self.assertAlmostEqual(
-            _bounded_return_delta_z_m([0.0, 0.0, 0.00363]), -0.00363
-        )
+        self.assertAlmostEqual(_bounded_return_delta_z_m([0.0, 0.0, 0.00363]), -0.00363)
 
     def test_return_delta_remains_capped_at_five_mm(self) -> None:
         self.assertEqual(_bounded_return_delta_z_m([0.0, 0.0, 0.006]), -0.005)

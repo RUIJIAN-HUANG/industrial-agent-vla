@@ -25,7 +25,9 @@ MOTION_SETTLE_PHYSICS_STEPS = 60
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run visible V2 dual-arm micro-motion acceptance.")
+    parser = argparse.ArgumentParser(
+        description="Run visible V2 dual-arm micro-motion acceptance."
+    )
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--output-scene", type=Path, required=True)
     parser.add_argument("--evidence-dir", type=Path, required=True)
@@ -326,7 +328,9 @@ def main() -> int:
                 "traceback": traceback.format_exc(),
             }
         )
-        print(json.dumps(_jsonable(result), indent=2, ensure_ascii=False), file=sys.stderr)
+        print(
+            json.dumps(_jsonable(result), indent=2, ensure_ascii=False), file=sys.stderr
+        )
         if controller is not None:
             try:
                 receipt = controller.safe_stop("V2 micro-motion acceptance failed")

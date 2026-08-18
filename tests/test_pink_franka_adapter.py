@@ -118,9 +118,7 @@ class PinkFrankaAdapterMathTests(unittest.TestCase):
         self.assertTrue(diagnostics["rollout_clamped"])
         self.assertGreater(diagnostics["rollout_cumulative_delta_rad"], 0.12)
         self.assertEqual(diagnostics["rollout_action_joint_limit_rad"], 0.12)
-        self.assertAlmostEqual(
-            diagnostics["rollout_total_joint_delta_rad"], 0.12
-        )
+        self.assertAlmostEqual(diagnostics["rollout_total_joint_delta_rad"], 0.12)
 
     def test_compute_rejects_joint_state_that_does_not_cover_arm(self):
         from simulation.pink_franka_adapter import PinkFrankaAdapter

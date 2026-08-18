@@ -92,7 +92,9 @@ def asset_summary(parts: list[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _hex_ring_mesh(stage: Any, path: str, geometry: Mapping[str, Any], color: Any) -> None:
+def _hex_ring_mesh(
+    stage: Any, path: str, geometry: Mapping[str, Any], color: Any
+) -> None:
     from pxr import Gf, UsdGeom
 
     across_flats = float(geometry["across_flats_m"])
@@ -116,16 +118,36 @@ def _hex_ring_mesh(stage: Any, path: str, geometry: Mapping[str, Any], color: An
     for segment in range(6):
         nxt = segment + 1
         faces.append(
-            [index(1, 0, segment), index(1, 0, nxt), index(1, 1, nxt), index(1, 1, segment)]
+            [
+                index(1, 0, segment),
+                index(1, 0, nxt),
+                index(1, 1, nxt),
+                index(1, 1, segment),
+            ]
         )
         faces.append(
-            [index(0, 1, segment), index(0, 1, nxt), index(0, 0, nxt), index(0, 0, segment)]
+            [
+                index(0, 1, segment),
+                index(0, 1, nxt),
+                index(0, 0, nxt),
+                index(0, 0, segment),
+            ]
         )
         faces.append(
-            [index(0, 0, segment), index(0, 0, nxt), index(1, 0, nxt), index(1, 0, segment)]
+            [
+                index(0, 0, segment),
+                index(0, 0, nxt),
+                index(1, 0, nxt),
+                index(1, 0, segment),
+            ]
         )
         faces.append(
-            [index(0, 1, nxt), index(0, 1, segment), index(1, 1, segment), index(1, 1, nxt)]
+            [
+                index(0, 1, nxt),
+                index(0, 1, segment),
+                index(1, 1, segment),
+                index(1, 1, nxt),
+            ]
         )
     mesh = UsdGeom.Mesh.Define(stage, path)
     mesh.CreatePointsAttr(points)

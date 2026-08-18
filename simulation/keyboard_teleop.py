@@ -123,9 +123,7 @@ class KeyboardTeleopMapper:
                 "part_placed", key, "confirm next part is stable in its slot"
             )
         if key == "v":
-            return TeleopCommand(
-                "handoff_verify", key, "confirm handoff preconditions"
-            )
+            return TeleopCommand("handoff_verify", key, "confirm handoff preconditions")
         if key == "b":
             return TeleopCommand("activate_b", key, "activate Arm_B")
         if key == "c":

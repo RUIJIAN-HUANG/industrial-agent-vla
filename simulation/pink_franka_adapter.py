@@ -71,8 +71,7 @@ def _resolve_franka_mesh_root(urdf_path: str) -> str:
         if mesh.is_file():
             return str(mesh.parents[3])
     raise RuntimeError(
-        "Could not resolve Isaac Sim Franka mesh package root from "
-        f"URDF {urdf_path!r}"
+        f"Could not resolve Isaac Sim Franka mesh package root from URDF {urdf_path!r}"
     )
 
 
@@ -81,6 +80,7 @@ def _resolve_franka_mesh_root(urdf_path: str) -> str:
 # update.  Without an envelope, those differential updates can accumulate into
 # a large joint-space jump while chasing a 30 mm Cartesian target.
 _MAX_ACTION_JOINT_DELTA_RAD = 0.12
+
 
 class PinkFrankaAdapter:
     """One native ``PinkIKController`` per existing Franka articulation."""
@@ -133,8 +133,7 @@ class PinkFrankaAdapter:
                     name
                     for name in frame_names
                     if any(
-                        word in name.lower()
-                        for word in ("hand", "gripper", "finger")
+                        word in name.lower() for word in ("hand", "gripper", "finger")
                     )
                 )
                 raise RuntimeError(

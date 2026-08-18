@@ -370,9 +370,7 @@ class IsaacSimFrankaController:
             self._tcp_definitions[arm_id] = {
                 "mode": "virtual_two_fingertip_midpoint",
                 "control_frame_name": end_effector_frame_name,
-                "fingertip_frame_names": list(
-                    virtual_tcp_fingertip_frame_names
-                ),
+                "fingertip_frame_names": list(virtual_tcp_fingertip_frame_names),
                 "tcp_offset_local_m": offset.tolist(),
                 "calibration_fingertip_separation_m": separation_m,
             }
@@ -468,9 +466,7 @@ class IsaacSimFrankaController:
             np.asarray(base_position, dtype=float),
             np.asarray(base_orientation, dtype=float),
         )
-        control_position, rotation = self._solvers[
-            arm_id
-        ].compute_end_effector_pose()
+        control_position, rotation = self._solvers[arm_id].compute_end_effector_pose()
         control_position = np.asarray(control_position, dtype=float)
         rotation = np.asarray(rotation, dtype=float)
         if (
@@ -749,9 +745,7 @@ class IsaacSimFrankaController:
                         inverse_base_orientation,
                         target_orientation,
                     )
-                    current_joints = np.asarray(
-                        arm.get_joint_positions(), dtype=float
-                    )
+                    current_joints = np.asarray(arm.get_joint_positions(), dtype=float)
                     joint_targets = self._pink_adapter.compute(
                         arm_id=arm_id,
                         current_joint_positions=current_joints,

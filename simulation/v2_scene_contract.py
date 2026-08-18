@@ -236,8 +236,7 @@ def validate_config(config: Mapping[str, Any]) -> list[str]:
             )
         position = _numbers(part.get("pose", {}).get("position_m"), 3)
         if position is None or not all(
-            math.isclose(position[index], xy[index], abs_tol=1e-9)
-            for index in (0, 1)
+            math.isclose(position[index], xy[index], abs_tol=1e-9) for index in (0, 1)
         ):
             errors.append(f"parts.{part_id}.pose X/Y must equal {list(xy)!r}")
         try:
@@ -278,8 +277,7 @@ def validate_config(config: Mapping[str, Any]) -> list[str]:
             errors.append(f"bin.slots.{slot_id}.profile must equal {profile!r}")
         center = _numbers(slot.get("center_local_m"), 3)
         if center is None or not all(
-            math.isclose(center[index], xy[index], abs_tol=1e-9)
-            for index in (0, 1)
+            math.isclose(center[index], xy[index], abs_tol=1e-9) for index in (0, 1)
         ):
             errors.append(f"bin.slots.{slot_id}.center_local_m X/Y is frozen")
         if isinstance(slot.get("part_id"), str):

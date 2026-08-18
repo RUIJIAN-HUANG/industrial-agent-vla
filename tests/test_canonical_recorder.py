@@ -241,6 +241,7 @@ def test_each_stream_enforces_its_frozen_physics_tick_grid(tmp_path: Path) -> No
         )
     recorder.abort()
 
+
 # V2_SCENE_ID_COMPATIBILITY_TESTS
 def test_episode_metadata_accepts_only_audited_scene_ids() -> None:
     v1 = _metadata("scene-v1")

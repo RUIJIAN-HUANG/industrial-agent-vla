@@ -34,9 +34,7 @@ class V2FailureCode(str, Enum):
     HANDOFF_PRECONDITION_FAILED = "V2_COLLECTION_HANDOFF_PRECONDITION_FAILED"
     FINISH_PRECONDITION_FAILED = "V2_COLLECTION_FINISH_PRECONDITION_FAILED"
     USER_SAFE_STOP = "V2_COLLECTION_USER_SAFE_STOP"
-    SAFE_STOP_CONFIRMATION_FAILED = (
-        "V2_COLLECTION_SAFE_STOP_CONFIRMATION_FAILED"
-    )
+    SAFE_STOP_CONFIRMATION_FAILED = "V2_COLLECTION_SAFE_STOP_CONFIRMATION_FAILED"
 
 
 class CollectionStateError(RuntimeError):
@@ -107,8 +105,7 @@ class V2CollectionContract:
 
         if set(part_to_slot) != set(formal_part_order):
             raise ValueError(
-                "formal part order and bin slot mappings must contain "
-                "the same parts"
+                "formal part order and bin slot mappings must contain the same parts"
             )
 
         workflow = config.get("workflow")
@@ -233,9 +230,7 @@ class V2ManualCollectionStateMachine:
                 "handoff verification requires A_ONLY",
             )
 
-        all_parts_placed = (
-            tuple(self._placed_parts) == self.contract.formal_part_order
-        )
+        all_parts_placed = tuple(self._placed_parts) == self.contract.formal_part_order
         if not all(
             (
                 all_parts_placed,

@@ -15,7 +15,9 @@ DEFAULT_CONFIG = SCRIPT_DIR / "configs" / "single_bin_scene_v2.json"
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run the V2 static scene contract gate.")
+    parser = argparse.ArgumentParser(
+        description="Run the V2 static scene contract gate."
+    )
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--evidence-dir", type=Path, required=True)
     return parser.parse_args()

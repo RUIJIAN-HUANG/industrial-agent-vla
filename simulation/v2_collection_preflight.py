@@ -53,9 +53,7 @@ def _non_blank(value: Any, name: str, *, maximum: int = 16_384) -> str:
         raise CollectionPreflightError(f"{name} must be non-empty")
     normalized = value.strip()
     if len(normalized) > maximum:
-        raise CollectionPreflightError(
-            f"{name} exceeds {maximum} characters"
-        )
+        raise CollectionPreflightError(f"{name} exceeds {maximum} characters")
     return normalized
 
 
@@ -63,9 +61,7 @@ def _safe_output_root(value: str | Path, name: str) -> Path:
     source = Path(value).expanduser()
 
     if source.exists() and source.is_symlink():
-        raise CollectionPreflightError(
-            f"{name} must not be a symbolic link"
-        )
+        raise CollectionPreflightError(f"{name} must not be a symbolic link")
 
     return source.resolve()
 
@@ -87,19 +83,14 @@ def build_collection_preflight(
     """Validate immutable identity before constructing any Isaac object."""
 
     if headless:
-        raise CollectionPreflightError(
-            "manual collection requires a visible Isaac GUI"
-        )
+        raise CollectionPreflightError("manual collection requires a visible Isaac GUI")
 
     if not worktree_clean:
         raise CollectionPreflightError(
             "formal collection requires a clean Git worktree"
         )
 
-    if (
-        not isinstance(git_sha, str)
-        or _GIT_SHA.fullmatch(git_sha) is None
-    ):
+    if not isinstance(git_sha, str) or _GIT_SHA.fullmatch(git_sha) is None:
         raise CollectionPreflightError(
             "git_sha must be exactly 40 hexadecimal characters"
         )
@@ -108,18 +99,14 @@ def build_collection_preflight(
         not isinstance(episode_id, str)
         or _SAFE_EPISODE_ID.fullmatch(episode_id) is None
     ):
-        raise CollectionPreflightError(
-            "episode_id must match ^[A-Za-z0-9._-]{1,128}$"
-        )
+        raise CollectionPreflightError("episode_id must match ^[A-Za-z0-9._-]{1,128}$")
 
     if (
         isinstance(scene_seed, bool)
         or not isinstance(scene_seed, int)
         or scene_seed < 0
     ):
-        raise CollectionPreflightError(
-            "scene_seed must be a non-negative integer"
-        )
+        raise CollectionPreflightError("scene_seed must be a non-negative integer")
 
     try:
         normalized_split = CollectionSplit(split)
@@ -130,43 +117,29 @@ def build_collection_preflight(
 
     source_config = Path(config_path).expanduser()
     if source_config.is_symlink():
-        raise CollectionPreflightError(
-            "config_path must not be a symbolic link"
-        )
+        raise CollectionPreflightError("config_path must not be a symbolic link")
     config = source_config.resolve()
     if not config.is_file():
-        raise CollectionPreflightError(
-            f"scene config does not exist: {config}"
-        )
+        raise CollectionPreflightError(f"scene config does not exist: {config}")
 
     raw_config = config.read_bytes()
     try:
         payload = json.loads(raw_config.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise CollectionPreflightError(
-            "scene config must be valid UTF-8 JSON"
-        ) from exc
+        raise CollectionPreflightError("scene config must be valid UTF-8 JSON") from exc
 
     if not isinstance(payload, dict):
-        raise CollectionPreflightError(
-            "scene config root must be an object"
-        )
+        raise CollectionPreflightError("scene config root must be an object")
 
     contract = V2CollectionContract.from_config(payload)
 
     collection = payload.get("collection")
     if not isinstance(collection, dict):
-        raise CollectionPreflightError(
-            "collection config must be an object"
-        )
+        raise CollectionPreflightError("collection config must be an object")
     if collection.get("mode") != "manual_keyboard":
-        raise CollectionPreflightError(
-            "collection mode must be manual_keyboard"
-        )
+        raise CollectionPreflightError("collection mode must be manual_keyboard")
     if collection.get("online_gt_allowed") is not False:
-        raise CollectionPreflightError(
-            "online ground truth must remain disabled"
-        )
+        raise CollectionPreflightError("online ground truth must remain disabled")
 
     episodes = _safe_output_root(episode_root, "episode_root")
     cas = _safe_output_root(cas_root, "cas_root")
@@ -174,8 +147,7 @@ def build_collection_preflight(
 
     if episode_dir.exists() or episode_dir.is_symlink():
         raise CollectionPreflightError(
-            f"episode already exists and will not be overwritten: "
-            f"{episode_dir}"
+            f"episode already exists and will not be overwritten: {episode_dir}"
         )
 
     return CollectionPreflight(

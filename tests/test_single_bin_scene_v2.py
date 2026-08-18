@@ -65,9 +65,7 @@ class V2SceneContractTests(unittest.TestCase):
                 "parts.P03.initial_orientation_state",
             ),
             (
-                lambda config: config["bin"]["slots"][0].update(
-                    {"part_id": "P02"}
-                ),
+                lambda config: config["bin"]["slots"][0].update({"part_id": "P02"}),
                 "bin.slots.S11.part_id",
             ),
             (

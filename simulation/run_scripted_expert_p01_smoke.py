@@ -504,9 +504,7 @@ def main() -> int:
         slot_local = slot_locals[slot_index]
         verification_path = offline_gt_root / "p01_grasp_verification.json"
         calibration_path = offline_gt_root / "p01_pinch_calibration.json"
-        live_part_center = np.asarray(
-            gt.world_position(part_path), dtype=float
-        )
+        live_part_center = np.asarray(gt.world_position(part_path), dtype=float)
         desired_approach_pinch = live_part_center + np.asarray(
             [0.0, 0.0, tuning.approach_clearance_m], dtype=float
         )

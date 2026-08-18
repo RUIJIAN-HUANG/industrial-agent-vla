@@ -16,7 +16,9 @@ DEFAULT_CONFIG = SCRIPT_DIR / "configs" / "single_bin_scene_v2.json"
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run visible V2 explicit-HOME acceptance.")
+    parser = argparse.ArgumentParser(
+        description="Run visible V2 explicit-HOME acceptance."
+    )
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--output-scene", type=Path, required=True)
     parser.add_argument("--evidence-dir", type=Path, required=True)
@@ -169,7 +171,9 @@ def main() -> int:
             final_home_errors.extend(
                 _home_readback_errors(arms[arm_id], arm_id, final_targets[arm_id])
             )
-        all_errors.extend(f"final HOME hold: {message}" for message in final_home_errors)
+        all_errors.extend(
+            f"final HOME hold: {message}" for message in final_home_errors
+        )
         final_robot_states = [
             _robot_state(arms[arm_id], arm_id) for arm_id in ("Arm_A", "Arm_B")
         ]
@@ -215,7 +219,9 @@ def main() -> int:
                 "traceback": traceback.format_exc(),
             }
         )
-        print(json.dumps(_jsonable(result), indent=2, ensure_ascii=False), file=sys.stderr)
+        print(
+            json.dumps(_jsonable(result), indent=2, ensure_ascii=False), file=sys.stderr
+        )
     finally:
         result["finished_at_local"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
         try:

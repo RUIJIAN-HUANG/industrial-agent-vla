@@ -241,7 +241,10 @@ class MultiRateExecutionTests(unittest.TestCase):
                 return object(), True
 
         class Arm:
-            dof_names: ClassVar[list[str]] = ["panda_finger_joint1", "panda_finger_joint2"]
+            dof_names: ClassVar[list[str]] = [
+                "panda_finger_joint1",
+                "panda_finger_joint2",
+            ]
 
             @staticmethod
             def get_world_pose():
