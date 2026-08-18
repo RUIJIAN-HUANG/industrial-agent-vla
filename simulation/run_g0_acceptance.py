@@ -40,6 +40,11 @@ REQUIRED_PRIMS = (
     "/World/Cameras/CAM_B_TOP",
 )
 
+_ARM_JOINT_NAMES = tuple(f"panda_joint{index}" for index in range(1, 8))
+_FINGER_JOINT_NAMES = ("panda_finger_joint1", "panda_finger_joint2")
+_HOME_POSITION_TOLERANCE = 1e-3
+_HOME_VELOCITY_TOLERANCE = 1e-3
+
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -108,6 +113,92 @@ def _all_finite(values: Any) -> bool:
         return True
 
     return walk(flattened)
+
+
+def _joint_names(arm: Any) -> list[str]:
+    names = getattr(arm, "dof_names", None)
+    if names is None:
+        names = getattr(arm, "joint_names", None)
+    if names is None:
+        raise RuntimeError("Franka articulation exposes no joint names")
+    return [str(name) for name in names]
+
+
+def _explicit_home_target(
+    config: dict[str, Any],
+    arm: Any,
+    arm_id: str,
+) -> list[float]:
+    """Build a full-articulation target only from the frozen scene config."""
+
+    robot = next(
+        (item for item in config.get("robots", []) if item.get("id") == arm_id),
+        None,
+    )
+    if not isinstance(robot, dict) or not isinstance(robot.get("home"), dict):
+        raise RuntimeError(f"{arm_id} has no explicit HOME configuration")
+    home = robot["home"]
+    arm_values = home.get("arm_joint_positions_rad")
+    finger_values = home.get("finger_joint_positions_m")
+    if not isinstance(arm_values, list) or len(arm_values) != 7:
+        raise RuntimeError(f"{arm_id} HOME must contain exactly 7 arm joints")
+    if not isinstance(finger_values, list) or len(finger_values) != 2:
+        raise RuntimeError(f"{arm_id} HOME must contain exactly 2 finger joints")
+
+    configured = dict(zip(_ARM_JOINT_NAMES, arm_values))
+    configured.update(zip(_FINGER_JOINT_NAMES, finger_values))
+    names = _joint_names(arm)
+    if set(names) != set(configured):
+        raise RuntimeError(
+            f"{arm_id} articulation joints do not match frozen HOME: {names!r}"
+        )
+    target = [float(configured[name]) for name in names]
+    if not _all_finite(target):
+        raise RuntimeError(f"{arm_id} HOME contains a non-finite value")
+    return target
+
+
+def _write_explicit_home(
+    config: dict[str, Any],
+    arm: Any,
+    arm_id: str,
+) -> list[float]:
+    """Write fixed HOME positions and zero velocity; never derive HOME at runtime."""
+
+    target = _explicit_home_target(config, arm, arm_id)
+    arm.set_joint_positions(target)
+    arm.set_joint_velocities([0.0] * len(target))
+    return target
+
+
+def _home_readback_errors(
+    arm: Any,
+    arm_id: str,
+    expected: list[float],
+) -> list[str]:
+    positions = [float(value) for value in arm.get_joint_positions()]
+    velocities = [float(value) for value in arm.get_joint_velocities()]
+    if len(positions) != len(expected) or len(velocities) != len(expected):
+        return [f"{arm_id} HOME readback size mismatch"]
+    if not _all_finite(positions) or not _all_finite(velocities):
+        return [f"{arm_id} HOME readback contains a non-finite value"]
+
+    errors: list[str] = []
+    position_error = max(
+        abs(actual - target) for actual, target in zip(positions, expected)
+    )
+    velocity_error = max(abs(value) for value in velocities)
+    if position_error > _HOME_POSITION_TOLERANCE:
+        errors.append(
+            f"{arm_id} HOME max position error {position_error:.6f} exceeds "
+            f"{_HOME_POSITION_TOLERANCE:.6f}"
+        )
+    if velocity_error > _HOME_VELOCITY_TOLERANCE:
+        errors.append(
+            f"{arm_id} HOME max velocity {velocity_error:.6f} exceeds "
+            f"{_HOME_VELOCITY_TOLERANCE:.6f}"
+        )
+    return errors
 
 
 def _write_ppm(
@@ -372,11 +463,21 @@ def _run(args: argparse.Namespace, result: dict[str, Any]) -> None:
         reset_count = max(args.resets, 1)
         for reset_index in range(1, reset_count + 1):
             world.reset()
+            home_targets = {
+                "Arm_A": _write_explicit_home(config, arm_a, "Arm_A"),
+                "Arm_B": _write_explicit_home(config, arm_b, "Arm_B"),
+            }
             for _ in range(settle_steps):
                 world.step(render=False)
             runtime_stage = isaac_compat.get_current_stage()
             snapshot = _dynamic_snapshot(runtime_stage)
             current_errors = _validate_dynamic_snapshot(snapshot, expected_positions)
+            current_errors.extend(
+                _home_readback_errors(arm_a, "Arm_A", home_targets["Arm_A"])
+            )
+            current_errors.extend(
+                _home_readback_errors(arm_b, "Arm_B", home_targets["Arm_B"])
+            )
             robot_states = [
                 _robot_state(arm_a, "Arm_A"),
                 _robot_state(arm_b, "Arm_B"),
@@ -386,6 +487,8 @@ def _run(args: argparse.Namespace, result: dict[str, Any]) -> None:
                     "reset_index": reset_index,
                     "dynamic_positions_m": snapshot,
                     "robot_states": robot_states,
+                    "explicit_home_written": True,
+                    "home_targets": home_targets,
                     "errors": current_errors,
                 }
             )
@@ -445,6 +548,9 @@ def _run(args: argparse.Namespace, result: dict[str, Any]) -> None:
                 "steps_per_second": args.steps / elapsed if elapsed else None,
                 "resets_requested": args.resets,
                 "resets_completed": args.resets,
+                "explicit_home_writes_completed": args.resets,
+                "home_position_tolerance": _HOME_POSITION_TOLERANCE,
+                "home_velocity_tolerance": _HOME_VELOCITY_TOLERANCE,
                 "reset_settle_steps": settle_steps,
                 "camera_samples": camera_captures,
                 "robot_observation_file": args.evidence_dir / "robot_observation.json",

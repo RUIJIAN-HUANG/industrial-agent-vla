@@ -1,13 +1,14 @@
 """Isaac Sim 5.1 Franka backend for ``IsaacExecutionEnvironment``.
 
 Import this module only after ``SimulationApp`` has started.  It converts the
-frozen robot-base 7-D action contract into Lula inverse-kinematics targets and
-writes them to the selected ``SingleArticulation``.
+frozen robot-base 7-D action contract into Lula or Pink inverse-kinematics
+targets and writes them to the selected ``SingleArticulation``.
 """
 
 from __future__ import annotations
 
-from math import cos, isclose, sin, sqrt
+from collections.abc import Callable
+from math import atan2, cos, isclose, sin, sqrt
 from threading import Event, Lock, get_ident
 from typing import Any, Mapping
 
@@ -53,6 +54,25 @@ def _rotvec_quaternion(rotvec: np.ndarray) -> np.ndarray:
         return np.asarray([1.0, 0.0, 0.0, 0.0], dtype=float)
     axis = rotvec / angle
     return np.concatenate((np.asarray([cos(angle / 2.0)]), axis * sin(angle / 2.0)))
+
+
+def _quaternion_to_rotvec(quaternion: np.ndarray) -> np.ndarray:
+    """Convert a wxyz quaternion to the shortest axis-angle vector."""
+
+    quaternion = np.asarray(quaternion, dtype=float)
+    if quaternion.shape != (4,) or not np.all(np.isfinite(quaternion)):
+        raise ValueError("quaternion must contain four finite values")
+    norm = float(np.linalg.norm(quaternion))
+    if norm <= 0.0:
+        raise ValueError("quaternion cannot have zero norm")
+    quaternion = quaternion / norm
+    if quaternion[0] < 0.0:
+        quaternion = -quaternion
+    vector_norm = float(np.linalg.norm(quaternion[1:]))
+    if vector_norm < 1e-12:
+        return np.zeros(3, dtype=float)
+    angle = 2.0 * atan2(vector_norm, float(quaternion[0]))
+    return quaternion[1:] * (angle / vector_norm)
 
 
 def _rotate_vector(quaternion: np.ndarray, vector: np.ndarray) -> np.ndarray:
@@ -118,6 +138,64 @@ def _rotation_matrix_to_quaternion(matrix: np.ndarray) -> np.ndarray:
     return quaternion / norm
 
 
+def _midpoint_tcp_offset_local(
+    *,
+    control_position_world_m: np.ndarray,
+    control_rotation_world: np.ndarray,
+    left_tip_world_m: np.ndarray,
+    right_tip_world_m: np.ndarray,
+) -> np.ndarray:
+    """Return the rigid control-frame offset to the two-fingertip midpoint."""
+
+    control_position = np.asarray(control_position_world_m, dtype=float)
+    control_rotation = np.asarray(control_rotation_world, dtype=float)
+    left_tip = np.asarray(left_tip_world_m, dtype=float)
+    right_tip = np.asarray(right_tip_world_m, dtype=float)
+    if any(value.shape != (3,) for value in (control_position, left_tip, right_tip)):
+        raise ValueError("control and fingertip positions must be 3-D")
+    if control_rotation.shape != (3, 3):
+        raise ValueError("control rotation must be 3-by-3")
+    if not all(
+        np.all(np.isfinite(value))
+        for value in (control_position, control_rotation, left_tip, right_tip)
+    ):
+        raise ValueError("virtual TCP calibration values must be finite")
+    if not np.allclose(
+        control_rotation.T @ control_rotation,
+        np.eye(3),
+        atol=1e-6,
+        rtol=0.0,
+    ):
+        raise ValueError("control rotation must be orthonormal")
+    midpoint_world = (left_tip + right_tip) / 2.0
+    return control_rotation.T @ (midpoint_world - control_position)
+
+
+def _virtual_tcp_world_position(
+    control_position_world_m: np.ndarray,
+    control_rotation_world: np.ndarray,
+    tcp_offset_local_m: np.ndarray,
+) -> np.ndarray:
+    """Transform a rigid local TCP offset into its current world position."""
+
+    return np.asarray(control_position_world_m, dtype=float) + np.asarray(
+        control_rotation_world, dtype=float
+    ) @ np.asarray(tcp_offset_local_m, dtype=float)
+
+
+def _control_world_position_for_tcp(
+    tcp_position_world_m: np.ndarray,
+    tcp_orientation_world_wxyz: np.ndarray,
+    tcp_offset_local_m: np.ndarray,
+) -> np.ndarray:
+    """Convert a desired virtual-TCP pose into the Lula control-frame position."""
+
+    return np.asarray(tcp_position_world_m, dtype=float) - _rotate_vector(
+        np.asarray(tcp_orientation_world_wxyz, dtype=float),
+        np.asarray(tcp_offset_local_m, dtype=float),
+    )
+
+
 def _position_targets_match(controller: Any, expected_positions: np.ndarray) -> bool:
     """Confirm that the controller accepted a full-articulation hold target."""
 
@@ -148,7 +226,7 @@ def _gripper_opening_m(command: float) -> float:
 
 
 class IsaacSimFrankaController:
-    """Live dual-Franka controller using Isaac Sim 5.1 Lula IK."""
+    """Live dual-Franka controller with Lula FK and selectable IK."""
 
     def __init__(
         self,
@@ -157,8 +235,11 @@ class IsaacSimFrankaController:
         arms: Mapping[str, Any],
         physics_dt_s: float,
         end_effector_frame_name: str = "right_gripper",
+        virtual_tcp_fingertip_frame_names: tuple[str, str] | None = None,
         stationary_velocity_rad_s: float = 1e-3,
         safe_stop_action_grace_s: float = 0.25,
+        ik_backend: str = "lula",
+        pink_device: str = "cuda:0",
     ) -> None:
         if set(arms) != set(_ARMS):
             raise ValueError("arms must contain exactly Arm_A and Arm_B")
@@ -175,6 +256,8 @@ class IsaacSimFrankaController:
             )
         if safe_stop_action_grace_s < 0.0:
             raise ValueError("safe_stop_action_grace_s cannot be negative")
+        if ik_backend not in {"lula", "pink"}:
+            raise ValueError("ik_backend must be 'lula' or 'pink'")
 
         try:
             from isaacsim.robot_motion.motion_generation import (
@@ -192,6 +275,7 @@ class IsaacSimFrankaController:
         self._physics_dt_s = float(physics_dt_s)
         self._multi_rate = FROZEN_MULTI_RATE
         self._physics_tick_index = 0
+        self._tick_observer: Callable[[int, bool], None] | None = None
         self._stationary_velocity_rad_s = float(stationary_velocity_rad_s)
         self._safe_stop_action_grace_s = float(safe_stop_action_grace_s)
         self._owner_thread_id = get_ident()
@@ -203,19 +287,136 @@ class IsaacSimFrankaController:
         self._stop_epoch = 0
         self._solvers: dict[str, Any] = {}
         self._lula_solvers: dict[str, Any] = {}
+        self._lula_configs: dict[str, Mapping[str, Any]] = {}
+        self._ik_backend = ik_backend
+        self._pink_adapter: Any | None = None
+        self._control_frame_name = end_effector_frame_name
+        self._tcp_offsets_local_m: dict[str, np.ndarray] = {}
+        self._tcp_definitions: dict[str, dict[str, Any]] = {}
         for arm_id, arm in self._arms.items():
             config = (
                 interface_config_loader.load_supported_lula_kinematics_solver_config(
                     "Franka"
                 )
             )
+            self._lula_configs[arm_id] = dict(config)
             lula_solver = LulaKinematicsSolver(**config)
             self._lula_solvers[arm_id] = lula_solver
-            self._solvers[arm_id] = ArticulationKinematicsSolver(
+            control_solver = ArticulationKinematicsSolver(
                 arm,
                 lula_solver,
                 end_effector_frame_name,
             )
+            self._solvers[arm_id] = control_solver
+            if virtual_tcp_fingertip_frame_names is None:
+                self._tcp_offsets_local_m[arm_id] = np.zeros(3, dtype=float)
+                self._tcp_definitions[arm_id] = {
+                    "mode": "lula_frame",
+                    "control_frame_name": end_effector_frame_name,
+                    "tcp_frame_name": end_effector_frame_name,
+                    "tcp_offset_local_m": [0.0, 0.0, 0.0],
+                }
+                continue
+
+            valid_frames = set(lula_solver.get_all_frame_names())
+            missing = [
+                name
+                for name in virtual_tcp_fingertip_frame_names
+                if name not in valid_frames
+            ]
+            if missing:
+                raise RuntimeError(
+                    "Lula virtual TCP fingertip frames are unavailable: "
+                    + ", ".join(missing)
+                )
+            base_position, base_orientation = arm.get_world_pose()
+            lula_solver.set_robot_base_pose(
+                np.asarray(base_position, dtype=float),
+                np.asarray(base_orientation, dtype=float),
+            )
+            left_solver = ArticulationKinematicsSolver(
+                arm,
+                lula_solver,
+                virtual_tcp_fingertip_frame_names[0],
+            )
+            right_solver = ArticulationKinematicsSolver(
+                arm,
+                lula_solver,
+                virtual_tcp_fingertip_frame_names[1],
+            )
+            control_position, control_rotation = (
+                control_solver.compute_end_effector_pose()
+            )
+            left_position, _ = left_solver.compute_end_effector_pose()
+            right_position, _ = right_solver.compute_end_effector_pose()
+            offset = _midpoint_tcp_offset_local(
+                control_position_world_m=control_position,
+                control_rotation_world=control_rotation,
+                left_tip_world_m=left_position,
+                right_tip_world_m=right_position,
+            )
+            separation_m = float(
+                np.linalg.norm(
+                    np.asarray(left_position, dtype=float)
+                    - np.asarray(right_position, dtype=float)
+                )
+            )
+            if not 0.0 < separation_m <= 0.20:
+                raise RuntimeError(
+                    "Lula fingertip separation is invalid for virtual TCP: "
+                    f"{separation_m:.6f} m"
+                )
+            self._tcp_offsets_local_m[arm_id] = offset
+            self._tcp_definitions[arm_id] = {
+                "mode": "virtual_two_fingertip_midpoint",
+                "control_frame_name": end_effector_frame_name,
+                "fingertip_frame_names": list(
+                    virtual_tcp_fingertip_frame_names
+                ),
+                "tcp_offset_local_m": offset.tolist(),
+                "calibration_fingertip_separation_m": separation_m,
+            }
+
+        if self._ik_backend == "pink":
+            from simulation.pink_franka_adapter import PinkFrankaAdapter
+
+            self._pink_adapter = PinkFrankaAdapter(
+                arms=self._arms,
+                lula_configs=self._lula_configs,
+                control_frame_name=end_effector_frame_name,
+                device=pink_device,
+            )
+
+    @property
+    def ik_backend(self) -> str:
+        """Return the selected live inverse-kinematics backend."""
+
+        return self._ik_backend
+
+    @property
+    def physics_tick_index(self) -> int:
+        """Return the current 120 Hz episode-local physics tick."""
+
+        return self._physics_tick_index
+
+    def set_tick_observer(
+        self,
+        observer: Callable[[int, bool], None] | None,
+    ) -> None:
+        """Attach the canonical recorder hook before executing actions.
+
+        The callback runs on the Isaac owner thread after every physics step.
+        ``render_due`` is true only on the frozen 30 Hz render grid.  Replacing
+        the callback while an action is active is rejected so one action can
+        never be split across two recorders.
+        """
+
+        self._require_owner_thread()
+        if observer is not None and not callable(observer):
+            raise TypeError("observer must be callable or None")
+        if not self._action_idle.is_set():
+            raise RuntimeError("cannot replace tick observer during an action")
+        self._tick_observer = observer
 
     def _is_owner_thread(self) -> bool:
         return get_ident() == self._owner_thread_id
@@ -256,7 +457,7 @@ class IsaacSimFrankaController:
             )
 
     def end_effector_pose(self, arm_id: str) -> tuple[np.ndarray, np.ndarray]:
-        """Return the live world-frame TCP position and rotation matrix."""
+        """Return the live world-frame virtual TCP position and rotation."""
 
         self._require_owner_thread()
         if arm_id not in self._arms:
@@ -267,17 +468,44 @@ class IsaacSimFrankaController:
             np.asarray(base_position, dtype=float),
             np.asarray(base_orientation, dtype=float),
         )
-        position, rotation = self._solvers[arm_id].compute_end_effector_pose()
-        position = np.asarray(position, dtype=float)
+        control_position, rotation = self._solvers[
+            arm_id
+        ].compute_end_effector_pose()
+        control_position = np.asarray(control_position, dtype=float)
         rotation = np.asarray(rotation, dtype=float)
         if (
-            position.shape != (3,)
-            or not np.all(np.isfinite(position))
+            control_position.shape != (3,)
+            or not np.all(np.isfinite(control_position))
             or rotation.shape != (3, 3)
             or not np.all(np.isfinite(rotation))
         ):
             raise RuntimeError(f"Isaac returned an invalid TCP pose for {arm_id}")
+        offset = getattr(self, "_tcp_offsets_local_m", {}).get(
+            arm_id, np.zeros(3, dtype=float)
+        )
+        position = _virtual_tcp_world_position(
+            control_position,
+            rotation,
+            offset,
+        )
         return position, rotation
+
+    def tcp_definition(self, arm_id: str) -> dict[str, Any]:
+        """Return auditable metadata for the frame controlled as the TCP."""
+
+        self._require_owner_thread()
+        if arm_id not in self._arms:
+            raise RuntimeError(f"unknown Isaac Franka arm: {arm_id!r}")
+        definitions = getattr(self, "_tcp_definitions", {})
+        if arm_id not in definitions:
+            return {
+                "mode": "lula_frame",
+                "control_frame_name": getattr(
+                    self, "_control_frame_name", "right_gripper"
+                ),
+                "tcp_offset_local_m": [0.0, 0.0, 0.0],
+            }
+        return dict(definitions[arm_id])
 
     def end_effector_pose_in_base(
         self,
@@ -305,6 +533,117 @@ class IsaacSimFrankaController:
                 f"Isaac returned an invalid base-frame TCP orientation for {arm_id}"
             )
         return base_frame_position, base_frame_orientation / norm
+
+    def world_orientation_error_in_base(
+        self,
+        arm_id: str,
+        target_world_rotation: np.ndarray,
+    ) -> np.ndarray:
+        """Return the base-frame rotvec that aligns TCP with a world target."""
+
+        _, current_world_rotation = self.end_effector_pose(arm_id)
+        target_world = _rotation_matrix_to_quaternion(target_world_rotation)
+        current_world = _rotation_matrix_to_quaternion(current_world_rotation)
+        delta_world = _quat_multiply(target_world, _quat_inverse(current_world))
+        _, base_orientation = self._arms[arm_id].get_world_pose()
+        base_orientation = np.asarray(base_orientation, dtype=float)
+        delta_base = _quat_multiply(
+            _quat_multiply(_quat_inverse(base_orientation), delta_world),
+            base_orientation,
+        )
+        return _quaternion_to_rotvec(delta_base)
+
+    def gripper_joint_positions(self, arm_id: str) -> np.ndarray:
+        """Read both live finger positions in metres from the articulation."""
+
+        self._require_owner_thread()
+        if arm_id not in self._arms:
+            raise RuntimeError(f"unknown Isaac Franka arm: {arm_id!r}")
+        arm = self._arms[arm_id]
+        names = self._joint_names(arm)
+        try:
+            indices = [names.index(name) for name in _FINGER_JOINTS]
+        except ValueError as exc:
+            raise RuntimeError(
+                f"{arm_id} Franka finger joints are missing from {names!r}"
+            ) from exc
+        positions = np.asarray(arm.get_joint_positions(), dtype=float)
+        if positions.ndim != 1 or positions.size <= max(indices):
+            raise RuntimeError(f"Isaac returned invalid joint positions for {arm_id}")
+        fingers = positions[indices]
+        if not np.all(np.isfinite(fingers)):
+            raise RuntimeError(
+                f"Isaac returned non-finite finger positions for {arm_id}"
+            )
+        return fingers.copy()
+
+    def action_rejection_reason(self, action: ActionStep, *, arm_id: str) -> str | None:
+        """Return an IK rejection reason without moving the robot."""
+
+        self._require_owner_thread()
+        if self._stop_requested.is_set():
+            return "controller is already safe-stopped"
+        # Pink's QP updates its internal configuration while solving.  A Lula
+        # dry-run here would reject poses that Pink can recover through the
+        # redundant joint null space, defeating the selected backend.
+        if getattr(self, "_ik_backend", "lula") == "pink":
+            return None
+        arm = self._arms[arm_id]
+        solver = self._solvers[arm_id]
+        lula_solver = self._lula_solvers[arm_id]
+        translation = np.asarray(action.values[:3], dtype=float)
+        rotation = np.asarray(action.values[3:6], dtype=float)
+        control_ticks = self._multi_rate.control_ticks_for_duration_ms(
+            action.duration_ms
+        )
+        base_position, base_orientation = arm.get_world_pose()
+        base_position = np.asarray(base_position, dtype=float)
+        base_orientation = np.asarray(base_orientation, dtype=float)
+        lula_solver.set_robot_base_pose(base_position, base_orientation)
+        control_position, current_rotation = solver.compute_end_effector_pose()
+        control_position = np.asarray(control_position, dtype=float)
+        current_rotation = np.asarray(current_rotation, dtype=float)
+        tcp_offset_local = getattr(self, "_tcp_offsets_local_m", {}).get(
+            arm_id, np.zeros(3, dtype=float)
+        )
+        current_position = _virtual_tcp_world_position(
+            control_position,
+            current_rotation,
+            tcp_offset_local,
+        )
+        current_orientation = _rotation_matrix_to_quaternion(current_rotation)
+        world_translation = _rotate_vector(base_orientation, translation)
+        inverse_base_orientation = _quat_inverse(base_orientation)
+        for control_index in range(1, control_ticks + 1):
+            fraction = control_index / control_ticks
+            target_tcp_position = current_position + world_translation * fraction
+            delta_base = _rotvec_quaternion(rotation * fraction)
+            delta_world = _quat_multiply(
+                _quat_multiply(base_orientation, delta_base),
+                inverse_base_orientation,
+            )
+            target_orientation = _quat_multiply(
+                delta_world,
+                current_orientation,
+            )
+            target_orientation /= sqrt(
+                float(np.dot(target_orientation, target_orientation))
+            )
+            target_position = _control_world_position_for_tcp(
+                target_tcp_position,
+                target_orientation,
+                tcp_offset_local,
+            )
+            _, success = solver.compute_inverse_kinematics(
+                target_position,
+                target_orientation,
+            )
+            if not success:
+                return (
+                    f"{arm_id} cannot reach this target "
+                    f"(IK tick {control_index}/{control_ticks})"
+                )
+        return None
 
     def execute_action(self, action: ActionStep, *, arm_id: str) -> None:
         self._require_owner_thread()
@@ -336,7 +675,17 @@ class IsaacSimFrankaController:
             # refreshed.  The frozen scene places two Frankas away from the origin,
             # so omitting it produces valid-looking but incorrect IK targets.
             lula_solver.set_robot_base_pose(base_position, base_orientation)
-            current_position, current_rotation = solver.compute_end_effector_pose()
+            control_position, current_rotation = solver.compute_end_effector_pose()
+            control_position = np.asarray(control_position, dtype=float)
+            current_rotation = np.asarray(current_rotation, dtype=float)
+            tcp_offset_local = getattr(self, "_tcp_offsets_local_m", {}).get(
+                arm_id, np.zeros(3, dtype=float)
+            )
+            current_position = _virtual_tcp_world_position(
+                control_position,
+                current_rotation,
+                tcp_offset_local,
+            )
             current_orientation = _rotation_matrix_to_quaternion(current_rotation)
             try:
                 from isaacsim.core.utils.types import ArticulationAction
@@ -370,7 +719,7 @@ class IsaacSimFrankaController:
                         "control lease was revoked during action execution"
                     )
                 fraction = control_index / control_ticks
-                target_position = (
+                target_tcp_position = (
                     np.asarray(current_position, dtype=float)
                     + world_translation * fraction
                 )
@@ -386,15 +735,47 @@ class IsaacSimFrankaController:
                 target_orientation /= sqrt(
                     float(np.dot(target_orientation, target_orientation))
                 )
-                ik_action, success = solver.compute_inverse_kinematics(
-                    target_position,
+                target_position = _control_world_position_for_tcp(
+                    target_tcp_position,
                     target_orientation,
+                    tcp_offset_local,
                 )
-                if not success:
-                    raise RuntimeError(
-                        f"Lula IK did not converge for {arm_id} at control tick "
-                        f"{control_index}/{control_ticks}"
+                if getattr(self, "_ik_backend", "lula") == "pink":
+                    target_position_base = _rotate_vector(
+                        inverse_base_orientation,
+                        target_position - base_position,
                     )
+                    target_orientation_base = _quat_multiply(
+                        inverse_base_orientation,
+                        target_orientation,
+                    )
+                    current_joints = np.asarray(
+                        arm.get_joint_positions(), dtype=float
+                    )
+                    joint_targets = self._pink_adapter.compute(
+                        arm_id=arm_id,
+                        current_joint_positions=current_joints,
+                        target_position_base_m=target_position_base,
+                        target_orientation_base_wxyz=target_orientation_base,
+                        dt_s=1.0 / self._multi_rate.control_hz,
+                    )
+                    ik_action = ArticulationAction(
+                        joint_positions=joint_targets,
+                        joint_indices=np.asarray(
+                            self._pink_adapter.controlled_indices(arm_id),
+                            dtype=np.int64,
+                        ),
+                    )
+                else:
+                    ik_action, success = solver.compute_inverse_kinematics(
+                        target_position,
+                        target_orientation,
+                    )
+                    if not success:
+                        raise RuntimeError(
+                            f"Lula IK did not converge for {arm_id} at control tick "
+                            f"{control_index}/{control_ticks}"
+                        )
                 if self._stop_requested.is_set():
                     raise RuntimeError("control lease was revoked before IK write")
                 arm.apply_action(ik_action)
@@ -421,6 +802,9 @@ class IsaacSimFrankaController:
                         == 0
                     )
                     self._world.step(render=render_due)
+                    observer = getattr(self, "_tick_observer", None)
+                    if observer is not None:
+                        observer(self._physics_tick_index, render_due)
                     if self._stop_requested.is_set():
                         raise RuntimeError(
                             "control lease was revoked during action execution"

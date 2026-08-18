@@ -29,6 +29,14 @@ def test_normalize_gui_key_name_accepts_enum_name_and_string() -> None:
     assert normalize_gui_key_name(SimpleNamespace(name="F1")) is None
 
 
+def test_v2_workflow_gui_keys_are_mapped() -> None:
+    assert normalize_gui_key_name(SimpleNamespace(name="F")) == "f"
+    assert normalize_gui_key_name(SimpleNamespace(name="Z")) == "z"
+    assert normalize_gui_key_name(SimpleNamespace(name="V")) == "v"
+    assert normalize_gui_key_name(SimpleNamespace(name="B")) == "b"
+    assert normalize_gui_key_name(SimpleNamespace(name="C")) == "c"
+
+
 def test_gui_source_only_enqueues_key_press_and_ignores_repeat() -> None:
     output: Queue[str] = Queue()
     interface = _FakeInputInterface()

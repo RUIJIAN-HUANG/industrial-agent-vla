@@ -31,12 +31,36 @@ _ROBOTS = {
         "rpy_deg": [0.0, 0.0, 90.0],
         "executor": "pi05",
         "role": "pack_and_handoff",
+        "home": {
+            "arm_joint_positions_rad": [
+                0.01199996,
+                -0.56927347,
+                0.00000009,
+                -2.81087494,
+                0.00000669,
+                3.03692675,
+                0.741,
+            ],
+            "finger_joint_positions_m": [0.04, 0.04],
+        },
     },
     "Arm_B": {
         "position_m": [0.5, -0.3, 0.75],
         "rpy_deg": [0.0, 0.0, 90.0],
         "executor": "openvla_oft",
         "role": "bin_transport",
+        "home": {
+            "arm_joint_positions_rad": [
+                0.01199996,
+                -0.56927347,
+                0.00000009,
+                -2.81087494,
+                0.00000669,
+                3.03692675,
+                0.741,
+            ],
+            "finger_joint_positions_m": [0.04, 0.04],
+        },
     },
 }
 _STATIONS = {
@@ -418,6 +442,12 @@ def validate_scene_config(config: Mapping[str, Any]) -> list[str]:
             f"robots.{robot_id}.soft_work_radius_m",
             robot.get("soft_work_radius_m"),
             0.65,
+        )
+        _expect(
+            errors,
+            f"robots.{robot_id}.home",
+            robot.get("home"),
+            expected["home"],
         )
 
     for station_id, expected in _STATIONS.items():

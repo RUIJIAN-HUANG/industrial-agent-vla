@@ -8,7 +8,10 @@ import numpy as np
 
 from simulation.run_g0_acceptance import (
     REQUIRED_PRIMS,
+    _explicit_home_target,
+    _home_readback_errors,
     _robot_state,
+    _write_explicit_home,
     _write_ppm,
 )
 
@@ -19,15 +22,64 @@ class FakeArticulation:
             self.dof_names = dof_names
         if joint_names is not None:
             self.joint_names = joint_names
+        self.positions = [0.1, 0.2]
+        self.velocities = [0.0, 0.0]
 
     def get_joint_positions(self):
-        return [0.1, 0.2]
+        return list(self.positions)
 
     def get_joint_velocities(self):
-        return [0.0, 0.0]
+        return list(self.velocities)
+
+    def set_joint_positions(self, values):
+        self.positions = list(values)
+
+    def set_joint_velocities(self, values):
+        self.velocities = list(values)
 
 
 class G0AcceptanceTests(unittest.TestCase):
+    @staticmethod
+    def _home_config() -> dict:
+        home = {
+            "arm_joint_positions_rad": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7],
+            "finger_joint_positions_m": [0.04, 0.04],
+        }
+        return {"robots": [{"id": "Arm_A", "home": home}]}
+
+    @staticmethod
+    def _franka() -> FakeArticulation:
+        return FakeArticulation(
+            dof_names=[
+                "panda_joint1",
+                "panda_joint2",
+                "panda_joint3",
+                "panda_joint4",
+                "panda_joint5",
+                "panda_joint6",
+                "panda_joint7",
+                "panda_finger_joint1",
+                "panda_finger_joint2",
+            ]
+        )
+
+    def test_explicit_home_target_uses_config_and_articulation_order(self) -> None:
+        arm = self._franka()
+        target = _explicit_home_target(self._home_config(), arm, "Arm_A")
+        self.assertEqual(target, [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.04, 0.04])
+
+    def test_explicit_home_is_written_and_read_back(self) -> None:
+        arm = self._franka()
+        target = _write_explicit_home(self._home_config(), arm, "Arm_A")
+        self.assertEqual(_home_readback_errors(arm, "Arm_A", target), [])
+        self.assertEqual(arm.velocities, [0.0] * 9)
+
+    def test_home_readback_rejects_position_drift(self) -> None:
+        arm = self._franka()
+        target = _write_explicit_home(self._home_config(), arm, "Arm_A")
+        arm.positions[0] += 0.002
+        self.assertTrue(_home_readback_errors(arm, "Arm_A", target))
+
     def test_frozen_station_prims_are_required(self) -> None:
         self.assertTrue(
             {

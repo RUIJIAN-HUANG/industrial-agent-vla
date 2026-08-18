@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from math import sqrt
 from types import ModuleType
+from typing import ClassVar
 from threading import Event, Lock, Thread
 from unittest.mock import patch
 import sys
@@ -13,12 +14,15 @@ from industrial_agent.contracts import ActionStep
 from industrial_agent.sync_contract import FROZEN_MULTI_RATE
 from simulation.isaac_franka_controller import (
     IsaacSimFrankaController,
+    _control_world_position_for_tcp,
     _gripper_opening_m,
+    _midpoint_tcp_offset_local,
     _position_targets_match,
+    _quaternion_to_rotvec,
     _rotate_vector,
     _rotation_matrix_to_quaternion,
+    _virtual_tcp_world_position,
 )
-from simulation.run_isaac_adapter_smoke import _quaternion_to_rotvec
 
 
 class IsaacFrankaControllerMathTests(unittest.TestCase):
@@ -43,8 +47,87 @@ class IsaacFrankaControllerMathTests(unittest.TestCase):
         vector = _rotate_vector(rotation_z_90, np.asarray([1.0, 0.0, 0.0]))
         np.testing.assert_allclose(vector, [0.0, 1.0, 0.0], atol=1e-12)
 
+    def test_virtual_tcp_offset_is_calibrated_in_control_local_frame(self):
+        rotation_z_90 = np.asarray(
+            [
+                [0.0, -1.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ]
+        )
+        offset = _midpoint_tcp_offset_local(
+            control_position_world_m=np.asarray([1.0, 2.0, 3.0]),
+            control_rotation_world=rotation_z_90,
+            left_tip_world_m=np.asarray([0.98, 2.1, 3.0]),
+            right_tip_world_m=np.asarray([1.02, 2.1, 3.0]),
+        )
+        np.testing.assert_allclose(offset, [0.1, 0.0, 0.0], atol=1e-12)
+        np.testing.assert_allclose(
+            _virtual_tcp_world_position(
+                np.asarray([1.0, 2.0, 3.0]),
+                rotation_z_90,
+                offset,
+            ),
+            [1.0, 2.1, 3.0],
+            atol=1e-12,
+        )
+
+    def test_virtual_tcp_target_is_converted_back_to_lula_control_frame(self):
+        rotation_z_90 = np.asarray([sqrt(0.5), 0.0, 0.0, sqrt(0.5)])
+        target = _control_world_position_for_tcp(
+            np.asarray([1.0, 2.0, 3.0]),
+            rotation_z_90,
+            np.asarray([0.1, 0.0, 0.0]),
+        )
+        np.testing.assert_allclose(target, [1.0, 1.9, 3.0], atol=1e-12)
+
 
 class MultiRateExecutionTests(unittest.TestCase):
+    def test_preflight_rejects_unreachable_action_without_world_step(self):
+        class World:
+            steps = 0
+
+        class Lula:
+            @staticmethod
+            def set_robot_base_pose(position, orientation):
+                del position, orientation
+
+        class Solver:
+            calls = 0
+
+            @staticmethod
+            def compute_end_effector_pose():
+                return np.zeros(3), np.eye(3)
+
+            @classmethod
+            def compute_inverse_kinematics(cls, position, orientation):
+                del position, orientation
+                cls.calls += 1
+                return object(), cls.calls < 5
+
+        class Arm:
+            @staticmethod
+            def get_world_pose():
+                return np.zeros(3), np.asarray([1.0, 0.0, 0.0, 0.0])
+
+        controller = object.__new__(IsaacSimFrankaController)
+        controller._world = World()
+        controller._arms = {"Arm_A": Arm()}
+        controller._solvers = {"Arm_A": Solver()}
+        controller._lula_solvers = {"Arm_A": Lula()}
+        controller._owner_thread_id = __import__("threading").get_ident()
+        controller._stop_requested = Event()
+        controller._multi_rate = FROZEN_MULTI_RATE
+
+        action = ActionStep.from_sequence(
+            [0.03, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+            duration_ms=100,
+        )
+        reason = controller.action_rejection_reason(action, arm_id="Arm_A")
+
+        self.assertIn("IK tick 5/6", reason)
+        self.assertEqual(World.steps, 0)
+
     def test_100ms_model_delta_is_interpolated_at_60hz(self):
         class World:
             def __init__(self):
@@ -77,7 +160,7 @@ class MultiRateExecutionTests(unittest.TestCase):
                 return object(), True
 
         class Arm:
-            dof_names = [
+            dof_names: ClassVar[list[str]] = [
                 "panda_joint1",
                 "panda_joint2",
                 "panda_finger_joint1",
@@ -109,6 +192,7 @@ class MultiRateExecutionTests(unittest.TestCase):
         controller._stop_requested = Event()
         controller._multi_rate = FROZEN_MULTI_RATE
         controller._physics_tick_index = 0
+        controller._tick_observer = None
 
         action = ActionStep.from_sequence(
             [0.06, 0.0, 0.0, 0.0, 0.0, 0.06, 1.0],
@@ -128,6 +212,65 @@ class MultiRateExecutionTests(unittest.TestCase):
             [index + 1 for index, flag in enumerate(world.render_flags) if flag],
             [4, 8, 12],
         )
+
+    def test_tick_observer_receives_every_post_step_tick(self):
+        observed = []
+
+        class World:
+            @staticmethod
+            def play():
+                return None
+
+            @staticmethod
+            def step(*, render):
+                del render
+
+        class Lula:
+            @staticmethod
+            def set_robot_base_pose(position, orientation):
+                del position, orientation
+
+        class Solver:
+            @staticmethod
+            def compute_end_effector_pose():
+                return np.zeros(3), np.eye(3)
+
+            @staticmethod
+            def compute_inverse_kinematics(position, orientation):
+                del position, orientation
+                return object(), True
+
+        class Arm:
+            dof_names: ClassVar[list[str]] = ["panda_finger_joint1", "panda_finger_joint2"]
+
+            @staticmethod
+            def get_world_pose():
+                return np.zeros(3), np.asarray([1.0, 0.0, 0.0, 0.0])
+
+            @staticmethod
+            def apply_action(action):
+                del action
+
+        controller = object.__new__(IsaacSimFrankaController)
+        controller._world = World()
+        controller._arms = {"Arm_A": Arm()}
+        controller._solvers = {"Arm_A": Solver()}
+        controller._lula_solvers = {"Arm_A": Lula()}
+        controller._owner_thread_id = __import__("threading").get_ident()
+        controller._action_lock = Lock()
+        controller._action_idle = Event()
+        controller._action_idle.set()
+        controller._stop_requested = Event()
+        controller._multi_rate = FROZEN_MULTI_RATE
+        controller._physics_tick_index = 0
+        controller._tick_observer = lambda tick, render: observed.append((tick, render))
+
+        action = ActionStep.from_sequence([0, 0, 0, 0, 0, 0, 1], duration_ms=100)
+        with patch.dict(sys.modules, _isaac_type_modules()):
+            controller.execute_action(action, arm_id="Arm_A")
+
+        self.assertEqual([tick for tick, _ in observed], list(range(1, 13)))
+        self.assertEqual([tick for tick, render in observed if render], [4, 8, 12])
 
     def test_invalid_rotation_matrix_fails_closed(self):
         with self.assertRaisesRegex(RuntimeError, "invalid"):
@@ -186,6 +329,27 @@ class GripperMappingTests(unittest.TestCase):
             self.assertEqual(_gripper_opening_m(closed), 0.0)
         for opened in (0.5, 1.0):
             self.assertEqual(_gripper_opening_m(opened), 0.04)
+
+    def test_live_finger_positions_are_read_by_joint_name(self):
+        class Arm:
+            dof_names: ClassVar[list[str]] = [
+                "panda_joint1",
+                "panda_finger_joint2",
+                "panda_joint2",
+                "panda_finger_joint1",
+            ]
+
+            @staticmethod
+            def get_joint_positions():
+                return np.asarray([0.2, 0.012, -0.3, 0.011])
+
+        controller = object.__new__(IsaacSimFrankaController)
+        controller._arms = {"Arm_A": Arm()}
+        controller._owner_thread_id = __import__("threading").get_ident()
+        np.testing.assert_allclose(
+            controller.gripper_joint_positions("Arm_A"),
+            [0.011, 0.012],
+        )
 
 
 class _FakeArticulationAction:

@@ -1,0 +1,132 @@
+"""Isolated Isaac ground-truth access for scripted experts and offline QA.
+
+Nothing in this module is imported by the Observation or Canonical Recorder
+paths.  Callers may persist its detailed reports only below an ``offline_gt``
+artifact directory; Canonical fields receive at most the final episode outcome.
+"""
+
+from __future__ import annotations
+
+from itertools import product
+from typing import Any, Mapping, Sequence
+
+
+class OfflineGtProbe:
+    """Read live USD transforms without exposing them to online consumers."""
+
+    def __init__(self, stage: Any) -> None:
+        try:
+            from pxr import Usd, UsdGeom
+            from isaacsim.core.utils.prims import get_prim_at_path
+        except ImportError as exc:
+            raise RuntimeError(
+                "offline_gt requires Isaac Sim USD bindings and prim utilities"
+            ) from exc
+        if stage is None:
+            raise TypeError("stage must not be None")
+        self._stage = stage
+        self._Usd = Usd
+        self._UsdGeom = UsdGeom
+        self._get_prim_at_path = get_prim_at_path
+
+    def _prim(self, path: str) -> Any:
+        # Use Isaac Sim's public prim utility instead of calling UsdStage
+        # methods directly.  Some 5.1 Python/Boost builds expose a Stage whose
+        # GetPrimAtPath/Traverse overloads reject otherwise valid arguments.
+        prim = self._get_prim_at_path(path)
+        if not prim or not prim.IsValid():
+            raise RuntimeError(f"offline_gt prim is missing: {path}")
+        return prim
+
+    def _world_aligned_range(self, path: str) -> Any:
+        cache = self._UsdGeom.BBoxCache(
+            self._Usd.TimeCode.Default(),
+            [self._UsdGeom.Tokens.default_, self._UsdGeom.Tokens.render],
+            useExtentsHint=False,
+            ignoreVisibility=True,
+        )
+        return cache.ComputeWorldBound(self._prim(path)).ComputeAlignedRange()
+
+    def _world_matrix(self, path: str) -> Any:
+        cache = self._UsdGeom.XformCache(self._Usd.TimeCode.Default())
+        return cache.GetLocalToWorldTransform(self._prim(path))
+
+    def world_position(self, path: str) -> list[float]:
+        translation = self._world_matrix(path).ExtractTranslation()
+        return [float(value) for value in translation]
+
+    def local_point_to_world(
+        self,
+        path: str,
+        local_point: Sequence[float],
+    ) -> list[float]:
+        if len(local_point) != 3:
+            raise ValueError("local point must contain three values")
+        try:
+            from pxr import Gf
+        except ImportError as exc:
+            raise RuntimeError("offline_gt requires Isaac Sim Gf bindings") from exc
+        transformed = self._world_matrix(path).Transform(
+            Gf.Vec3d(*(float(value) for value in local_point))
+        )
+        return [float(value) for value in transformed]
+
+    def part_fully_inside_bin(
+        self,
+        *,
+        part_path: str,
+        bin_path: str,
+        bin_config: Mapping[str, Any],
+        numerical_tolerance_m: float = 0.001,
+    ) -> dict[str, Any]:
+        """Conservatively require the complete part bound inside bin walls."""
+
+        tolerance = float(numerical_tolerance_m)
+        if tolerance < 0.0 or tolerance > 0.001:
+            raise ValueError("numerical tolerance must be in [0, 0.001] m")
+        size = [float(value) for value in bin_config["size_m"]]
+        if len(size) != 3:
+            raise ValueError("bin size must contain three values")
+        wall = float(bin_config["wall_thickness_m"])
+        bottom = float(bin_config["bottom_thickness_m"])
+
+        world_range = self._world_aligned_range(part_path)
+        world_min = world_range.GetMin()
+        world_max = world_range.GetMax()
+        bin_inverse = self._world_matrix(bin_path).GetInverse()
+
+        local_corners: list[list[float]] = []
+        for x, y, z in product(
+            (float(world_min[0]), float(world_max[0])),
+            (float(world_min[1]), float(world_max[1])),
+            (float(world_min[2]), float(world_max[2])),
+        ):
+            try:
+                from pxr import Gf
+            except ImportError as exc:
+                raise RuntimeError("offline_gt requires Isaac Sim Gf bindings") from exc
+            point = bin_inverse.Transform(Gf.Vec3d(x, y, z))
+            local_corners.append([float(value) for value in point])
+
+        local_min = [min(corner[axis] for corner in local_corners) for axis in range(3)]
+        local_max = [max(corner[axis] for corner in local_corners) for axis in range(3)]
+        allowed_min = [
+            -size[0] / 2.0 + wall,
+            -size[1] / 2.0 + wall,
+            -size[2] / 2.0 + bottom,
+        ]
+        allowed_max = [size[0] / 2.0 - wall, size[1] / 2.0 - wall, size[2] / 2.0]
+        axis_pass = [
+            local_min[axis] >= allowed_min[axis] - tolerance
+            and local_max[axis] <= allowed_max[axis] + tolerance
+            for axis in range(3)
+        ]
+        return {
+            "pass": all(axis_pass),
+            "part_path": part_path,
+            "bin_path": bin_path,
+            "part_bound_in_bin_local_m": {"min": local_min, "max": local_max},
+            "allowed_bin_interior_m": {"min": allowed_min, "max": allowed_max},
+            "axis_pass": {"x": axis_pass[0], "y": axis_pass[1], "z": axis_pass[2]},
+            "numerical_tolerance_m": tolerance,
+        }
