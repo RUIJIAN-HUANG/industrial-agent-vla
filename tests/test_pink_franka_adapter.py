@@ -66,9 +66,8 @@ class PinkFrankaAdapterMathTests(unittest.TestCase):
             mesh.parent.mkdir(parents=True)
             urdf.touch()
             mesh.touch()
-            self.assertEqual(
-                _resolve_franka_mesh_root(str(urdf)),
-                str(mesh.parents[3]),
+            self.assertTrue(
+                Path(_resolve_franka_mesh_root(str(urdf))).samefile(mesh.parents[3]),
             )
 
     def test_compute_rolls_differential_steps_into_absolute_target(self):

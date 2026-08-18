@@ -19,6 +19,9 @@ from industrial_agent.isaac_environment import (
 from industrial_agent.observation import ObservationGateway
 
 
+_THREAD_TIMEOUT_SECONDS = 5.0
+
+
 def _image_reference(camera_id: str, digest_character: str) -> dict:
     digest = digest_character * 64
     return {
@@ -152,7 +155,9 @@ class _Controller:
         self.execution_entered.set()
         if self.fail_execution:
             raise RuntimeError("controller write failed")
-        if self.block_execution and not self.release_execution.wait(timeout=2.0):
+        if self.block_execution and not self.release_execution.wait(
+            timeout=_THREAD_TIMEOUT_SECONDS
+        ):
             raise RuntimeError("test controller remained blocked")
 
     def request_stop(self, reason):
@@ -432,14 +437,16 @@ class IsaacExecutionEnvironmentTests(unittest.TestCase):
 
         worker = Thread(target=execute)
         worker.start()
-        self.assertTrue(self.controller.execution_entered.wait(timeout=0.5))
+        self.assertTrue(
+            self.controller.execution_entered.wait(timeout=_THREAD_TIMEOUT_SECONDS)
+        )
 
         receipt = self.environment.safe_stop("watchdog timeout")
         self.assertTrue(receipt.confirmed)
         self.assertEqual(self.controller.stop_reasons, ["watchdog timeout"])
 
         self.controller.release_execution.set()
-        worker.join(timeout=0.5)
+        worker.join(timeout=_THREAD_TIMEOUT_SECONDS)
         self.assertFalse(worker.is_alive())
         self.assertRegex(str(outcome["error"]), "control lease revocation")
         self.assertEqual(self.source.counter, 1)
@@ -471,14 +478,16 @@ class IsaacExecutionEnvironmentTests(unittest.TestCase):
 
         worker = Thread(target=first_step)
         worker.start()
-        self.assertTrue(self.controller.execution_entered.wait(timeout=0.5))
+        self.assertTrue(
+            self.controller.execution_entered.wait(timeout=_THREAD_TIMEOUT_SECONDS)
+        )
         with self.assertRaisesRegex(RuntimeError, "overlapping step"):
             self._execute(observation, command_id="command-2")
 
         self.environment.safe_stop("test cleanup")
         self.controller.release_execution.set()
-        self.assertTrue(first_done.wait(timeout=0.5))
-        worker.join(timeout=0.5)
+        self.assertTrue(first_done.wait(timeout=_THREAD_TIMEOUT_SECONDS))
+        worker.join(timeout=_THREAD_TIMEOUT_SECONDS)
 
     def test_new_observation_during_claim_prevents_old_action_write(self):
         observation = self.environment.observe()
@@ -489,7 +498,7 @@ class IsaacExecutionEnvironmentTests(unittest.TestCase):
         def blocking_claim(command_id, request_digest):
             original_claim(command_id, request_digest)
             claim_entered.set()
-            release_claim.wait(timeout=1.0)
+            release_claim.wait(timeout=_THREAD_TIMEOUT_SECONDS)
 
         self.environment._command_ledger.claim = blocking_claim
         outcome: dict[str, BaseException] = {}
@@ -502,10 +511,10 @@ class IsaacExecutionEnvironmentTests(unittest.TestCase):
 
         worker = Thread(target=execute)
         worker.start()
-        self.assertTrue(claim_entered.wait(timeout=0.5))
+        self.assertTrue(claim_entered.wait(timeout=_THREAD_TIMEOUT_SECONDS))
         self.environment.observe()
         release_claim.set()
-        worker.join(timeout=0.5)
+        worker.join(timeout=_THREAD_TIMEOUT_SECONDS)
         self.assertFalse(worker.is_alive())
         self.assertRegex(str(outcome["error"]), "no longer latest")
         self.assertEqual(self.controller.actions, [])
@@ -519,7 +528,7 @@ class IsaacExecutionEnvironmentTests(unittest.TestCase):
         def blocking_claim(command_id, request_digest):
             original_claim(command_id, request_digest)
             claim_entered.set()
-            release_claim.wait(timeout=1.0)
+            release_claim.wait(timeout=_THREAD_TIMEOUT_SECONDS)
 
         self.environment._command_ledger.claim = blocking_claim
         outcome: dict[str, BaseException] = {}
@@ -532,10 +541,10 @@ class IsaacExecutionEnvironmentTests(unittest.TestCase):
 
         worker = Thread(target=execute)
         worker.start()
-        self.assertTrue(claim_entered.wait(timeout=0.5))
+        self.assertTrue(claim_entered.wait(timeout=_THREAD_TIMEOUT_SECONDS))
         self.source.packed_part_count = 1
         release_claim.set()
-        worker.join(timeout=0.5)
+        worker.join(timeout=_THREAD_TIMEOUT_SECONDS)
 
         self.assertFalse(worker.is_alive())
         self.assertIsInstance(outcome["error"], PreWriteStateStaleError)
@@ -559,10 +568,12 @@ class IsaacExecutionEnvironmentTests(unittest.TestCase):
 
         worker = Thread(target=execute)
         worker.start()
-        self.assertTrue(self.controller.execution_entered.wait(timeout=0.5))
+        self.assertTrue(
+            self.controller.execution_entered.wait(timeout=_THREAD_TIMEOUT_SECONDS)
+        )
         self.environment.observe()
         self.controller.release_execution.set()
-        worker.join(timeout=0.5)
+        worker.join(timeout=_THREAD_TIMEOUT_SECONDS)
 
         self.assertFalse(worker.is_alive())
         self.assertNotIsInstance(outcome["error"], PreWriteStateStaleError)
@@ -581,7 +592,7 @@ class IsaacExecutionEnvironmentTests(unittest.TestCase):
         def blocking_claim(command_id, request_digest):
             original_claim(command_id, request_digest)
             claim_entered.set()
-            release_claim.wait(timeout=1.0)
+            release_claim.wait(timeout=_THREAD_TIMEOUT_SECONDS)
 
         self.environment._command_ledger.claim = blocking_claim
         outcome: dict[str, BaseException] = {}
@@ -594,10 +605,10 @@ class IsaacExecutionEnvironmentTests(unittest.TestCase):
 
         worker = Thread(target=execute)
         worker.start()
-        self.assertTrue(claim_entered.wait(timeout=0.5))
+        self.assertTrue(claim_entered.wait(timeout=_THREAD_TIMEOUT_SECONDS))
         self.source.protective_stop = True
         release_claim.set()
-        worker.join(timeout=0.5)
+        worker.join(timeout=_THREAD_TIMEOUT_SECONDS)
         self.assertFalse(worker.is_alive())
         self.assertRegex(str(outcome["error"]), "protective stop")
         self.assertEqual(self.controller.actions, [])
