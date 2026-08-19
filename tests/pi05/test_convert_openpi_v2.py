@@ -8,6 +8,7 @@ import pytest
 
 from industrial_agent.data import SplitRegistry
 from industrial_agent.image_cas import ImageCas, ImageCasConfig
+from scripts.pi05.convert_openpi import main as convert_openpi_main
 from scripts.pi05.convert_openpi_v2 import (
     ACTION_HORIZON,
     build_complete_action_windows,
@@ -213,3 +214,30 @@ def test_canonical_v2_to_lerobot_smoke_is_lossless(
     result.manifest_path.write_text("{}\n", encoding="utf-8")
     with pytest.raises(ValueError, match="SHA-256 mismatch"):
         verify_conversion_manifest(result.manifest_path)
+
+
+def test_formal_converter_entry_dispatches_v2_reader_and_preflight(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    episode_path = _record_episode(tmp_path)
+    registry_path = _registry("v2-convert-000001").save(
+        tmp_path / "split-registry-dispatch.json"
+    )
+
+    assert (
+        convert_openpi_main(
+            [
+                "v2",
+                "--data-dir",
+                str(episode_path.parent),
+                "--split-registry",
+                str(registry_path),
+                "--preflight-only",
+            ]
+        )
+        == 0
+    )
+    report = capsys.readouterr().out
+    assert '"source_format": "canonical_hdf5_v2"' in report
+    assert '"windows": 1' in report
