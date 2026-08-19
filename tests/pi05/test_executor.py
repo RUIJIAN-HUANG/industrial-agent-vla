@@ -297,7 +297,9 @@ def test_real_mode_without_wrist_omits_policy_input(
 
     def fake_infer(example):
         captured.update(example)
-        return {"actions": np.zeros((1, ACTION_DIM), dtype=np.float32)}
+        return {
+            "actions": np.zeros((MOCK_CHUNK_LEN, ACTION_DIM), dtype=np.float32)
+        }
 
     fake_policy = MagicMock()
     fake_policy.client_type = "local"
@@ -357,12 +359,12 @@ def test_prep_image_rejects_bad_shape():
 # 用例 3：动作切片与 Chunking
 # ---------------------------------------------------------------------------
 def test_action_chunking(mock_executor, sample_observation):
-    """用例3：Mock 输出 [Batch, Horizon, 7] -> CanonicalActionChunk 切片维度/序列长度正确。"""
+    """预测 10 步但部署只发布第 1 个 100 ms 动作。"""
     chunk = mock_executor.infer(sample_observation)
 
     assert isinstance(chunk, CanonicalActionChunk)
     # 维度与序列长度
-    assert chunk.actions.shape == (MOCK_CHUNK_LEN, ACTION_DIM)
+    assert chunk.actions.shape == (1, ACTION_DIM)
     assert chunk.actions.dtype == np.float32
     # 协议字段（方案书 §3.4 CanonicalActionChunk v1）
     assert chunk.space_id == SPACE_ID
@@ -373,7 +375,7 @@ def test_action_chunking(mock_executor, sample_observation):
     assert chunk.expires_after_ms == EXPIRES_AFTER_MS
     # 待执行动作队列已记录（方案书 §3.3.1 Para186：切换时清空）
     assert mock_executor._pending_chunk is not None
-    assert mock_executor._pending_chunk.shape == (MOCK_CHUNK_LEN, ACTION_DIM)
+    assert mock_executor._pending_chunk.shape == (1, ACTION_DIM)
     assert mock_executor._pending_generated_step == sample_observation.step_id
     # Mock 动作均在安全限幅范围内（不触发截断）
     assert mock_executor._last_truncation_count == 0
@@ -401,35 +403,35 @@ def test_action_chunking_rejects_padding_truncation_and_promotion(
     assert ex._pending_chunk is None
 
 
-@pytest.mark.parametrize("step_count", [0, 33])
-def test_action_chunking_rejects_step_count_outside_contract(
+@pytest.mark.parametrize("step_count", [0, 1, 9, 11, 32, 33])
+def test_action_chunking_rejects_non_frozen_horizon(
     clean_pi05_env, monkeypatch, tmp_path, step_count
 ):
-    """动作块长度只能是 1..32。"""
+    """模型输出必须原生为冻结的 10×7，禁止补齐或截断。"""
 
     ex = _make_real_executor(
         monkeypatch,
         tmp_path,
         actions=np.zeros((step_count, ACTION_DIM), dtype=np.float32),
     )
-    with pytest.raises(InferenceError, match="empty|expected 1..32"):
+    with pytest.raises(InferenceError, match="empty|frozen horizon 10"):
         ex.infer(_make_minimal_obs(step_id=2))
     assert ex._pending_chunk is None
 
 
-@pytest.mark.parametrize("step_count", [1, 32])
-def test_action_chunking_accepts_contract_boundaries(
-    clean_pi05_env, monkeypatch, tmp_path, step_count
+def test_action_chunking_accepts_ten_and_publishes_only_first(
+    clean_pi05_env, monkeypatch, tmp_path
 ):
-    """N×7 在 N=1 和 N=32 两个边界均保持原形状。"""
-
     ex = _make_real_executor(
         monkeypatch,
         tmp_path,
-        actions=np.zeros((step_count, ACTION_DIM), dtype=np.float32),
+        actions=np.arange(MOCK_CHUNK_LEN * ACTION_DIM, dtype=np.float32).reshape(
+            MOCK_CHUNK_LEN, ACTION_DIM
+        ) * 0.0,
     )
     chunk = ex.infer(_make_minimal_obs(step_id=3))
-    assert chunk.actions.shape == (step_count, ACTION_DIM)
+    assert chunk.actions.shape == (1, ACTION_DIM)
+    assert chunk.expires_after_ms == 100
 
 
 # ---------------------------------------------------------------------------
@@ -452,8 +454,13 @@ def test_norm_stats_no_double_denormalization(clean_pi05_env, monkeypatch, tmp_p
     captured: dict = {}
 
     # 模拟 openpi output_transform 已反归一化的物理动作（均在安全限幅内，仅夹爪需取整）
-    openpi_actions = np.array(
-        [[0.01, -0.01, 0.005, 0.01, -0.01, 0.005, 0.499]], dtype=np.float32
+    openpi_actions = np.repeat(
+        np.array(
+            [[0.01, -0.01, 0.005, 0.01, -0.01, 0.005, 0.499]],
+            dtype=np.float32,
+        ),
+        MOCK_CHUNK_LEN,
+        axis=0,
     )
 
     def fake_infer(example):
@@ -476,12 +483,12 @@ def test_norm_stats_no_double_denormalization(clean_pi05_env, monkeypatch, tmp_p
 
     # 2) 反归一化由 openpi 完成：适配器直接使用已反归一化输出，未再乘 std 加 mean
     #    期望 = openpi 输出经限幅/取整（夹爪 0.499 < 0.5 -> 0.0），平移/旋转均在限幅内不截断
-    expected = openpi_actions.copy()
+    expected = openpi_actions[:1].copy()
     expected[:, 6] = 0.0
     np.testing.assert_allclose(chunk.actions, expected)
 
     # 3) 显式确认不出现双重反归一化：若误做 (out * std + mean)，结果会与本输出明显不同
-    double_denorm = openpi_actions * std + mean
+    double_denorm = openpi_actions[:1] * std + mean
     assert not np.allclose(chunk.actions, double_denorm)
 
 

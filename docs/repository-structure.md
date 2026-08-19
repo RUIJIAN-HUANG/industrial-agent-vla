@@ -6,6 +6,15 @@
 固定串行协作。目录调整不得产生第二套生命周期、第二个同职责服务或其他仿真
 平台主线。
 
+当前 V2 场景的权威入口是：
+
+- `simulation/configs/single_bin_scene_v2.json`：数值配置；
+- `simulation/v2_scene_contract.py`：静态合同与派生校验；
+- `simulation/run_v2_keyboard_collection.py`：人工 Canonical Episode 采集；
+- `docs/v2-manual-industrial-collection.md`：面向使用者的当前场景说明。
+
+V1 自动闭环文件继续保留，不得为了迁移 V2 而机械替换其中的四工件 TaskProfile。
+
 ## 1. 规范目录
 
 ```text

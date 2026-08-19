@@ -14,12 +14,18 @@
 | `executor-infer.schema.json` | A/D/E | 推理请求/响应信封 |
 | `executor-cancel.schema.json` | A/D/E | 幂等取消 |
 | `action-chunk.schema.json` | A/B/D/E | 统一 N×7 动作 |
-| `canonical-episode.schema.json` | B/C/D/E/F | 离线 HDF5 Episode 结构、三路 RGB、双臂状态、动作与 Padding mask |
+| `canonical-episode.schema.json` | A/C + B/D/E/F 评审 | V1 自动闭环 HDF5 Episode；允许显式 mask padding |
+| `canonical-episode-v2.schema.json` | A/C + B/E 评审 | V2 P01→S11 人工采集；严格 7D、无 padding、固定场景/任务/指令 |
 | `verify.schema.json` | A/F | 在线后置条件核验 |
 | `event.schema.json` | A/F | 结构化事件证据 |
 
 CI 会用 Draft 2020-12 元 Schema 校验所有文件，并验证默认 Agent 配置。
 Schema 变化必须先更新接口文档和契约测试，再修改生产服务。
+
+Canonical V1/V2 是并存且互不兼容的落盘合同。V1 顶层版本键为
+`schema_version="1.0"`；V2 顶层版本键为
+`canonical_schema_version="2.0"`。Recorder、Reader 和转换器必须按版本显式选择，
+不得通过改写字段把 V1 Episode 冒充为 V2。
 
 Schema 只覆盖跨进程、落盘或对外交换的 JSON 合同。`RunMemory`、
 `StateTransition`、`ExecutorDescriptor`、`ExecutionContext`、

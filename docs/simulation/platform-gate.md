@@ -1,5 +1,9 @@
 # G0 - Isaac Sim 5.1 平台验收报告
 
+> 历史证据说明：本报告只覆盖 V1 `single_bin_scene_v1` 四工件静态场景，不可作为
+> 当前 V2 `single_bin_manual_industrial_v2` 八工件场景的通过证据。V2 需单独完成
+> GUI、物理稳定性、IK、抓取及 1.0 kg 满载搬运验证。
+
 > **当前 PR 合并门禁：未通过。** 本页 PASS 证据仅对应 `b1e6a05`，
 > 不适用于 PR #7 当前 head。请以当前 head 在 Linux Isaac Sim 5.1
 > 重跑三次并生成新 SHA256 证据后，再由 F/A 签署。
@@ -18,7 +22,7 @@
 |---|---:|---:|---|
 | Isaac Sim 独立启动 | 连续 3 次 | 3/3 次启动成功，退出码均为 `0` | PASS |
 | Headless 物理步 | 1000 步 | 1000/1000 | PASS |
-| 场景必要 Prim | 双 Franka、4 零件、1 料箱、3 相机 | 10/10 个必要 Prim | PASS |
+| V1 场景必要 Prim | 双 Franka、4 零件、1 料箱、3 相机 | 10/10 个必要 Prim | PASS |
 | Reset | 连续 20 次 | 20/20 | PASS |
 | 数值稳定性 | 无 NaN/Inf、物体未离开工作区 | 自动检查无错误 | PASS |
 | 双臂状态 | 关节名、位置、速度均可读 | `robot_observation.json` 已生成 | PASS |

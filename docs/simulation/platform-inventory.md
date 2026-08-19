@@ -1,5 +1,9 @@
 # B - Isaac Sim 仿真平台盘点
 
+> 历史证据说明：本页记录的是 V1 四工件静态场景在 2026-07-27 的 G0 平台证据，
+> 不是当前 V2 八工件场景的验收结论。V2 已通过仓库内静态合同检查，但 GUI、物理、
+> IK、抓取和满载搬运仍需在 Isaac Sim 5.1 上重新留证。
+
 > **当前 PR 合并门禁：未通过。** 本文原始 PASS 证据只对应提交
 > `b1e6a05fc52ef95a576442bacff96dbe699920b9`，不能证明 PR #7 当前 head。
 > 当前脚本已要求 13 个 Prim，并新增 Isaac Sim 5.1 版本、相机像素质量和
@@ -55,7 +59,8 @@
 | `python.sh` | `/home/xyz/isaacsim/python.sh` |
 | Franka USD | `https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Robots/FrankaRobotics/FrankaPanda/franka.usd` |
 | 仓库 commit | `b1e6a05fc52ef95a576442bacff96dbe699920b9` |
-| 场景合同 | `simulation/configs/single_bin_scene_v1.json` |
+| V1 证据场景合同 | `simulation/configs/single_bin_scene_v1.json` |
+| 当前 V2 场景合同 | `simulation/configs/single_bin_scene_v2.json`（本页历史 G0 未覆盖） |
 | 物理步长 | `1/120 s`，以配置实际值为准 |
 | 渲染步长 | `1/30 s`，以配置实际值为准 |
 | 控制频率 | `60 Hz`，以配置实际值为准 |

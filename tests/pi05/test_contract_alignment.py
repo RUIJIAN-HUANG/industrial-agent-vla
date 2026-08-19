@@ -198,7 +198,7 @@ def test_e2e_adapter_plan_returns_valid_action_chunk(resolved_camera):
     assert len(chunk.chunk_id) > 0
 
     # ── steps 结构 ──
-    assert len(chunk.steps) == MOCK_CHUNK_LEN
+    assert len(chunk.steps) == 1
     for step in chunk.steps:
         assert len(step.values) == 7
         assert all(np.isfinite(v) for v in step.values)
@@ -370,7 +370,8 @@ def test_to_action_chunk_validates_contract():
     chunk = ex.to_action_chunk(canonical, task_id="task-1", executor_name="pi05")
     assert chunk.executor == "pi05"
     assert chunk.task_id == "task-1"
-    assert len(chunk.steps) == 3
+    assert len(chunk.steps) == 1
+    assert chunk.steps[0].duration_ms == 100
 
 
 # ── 用例 6：arm_a_rgb 解码失败防御 ──────────────────────────────────────────────

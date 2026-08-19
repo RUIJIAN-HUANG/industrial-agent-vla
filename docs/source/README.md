@@ -11,3 +11,9 @@ SHA-256 为
 
 运行 `python scripts/verify_project_frozen_inputs.py` 可校验该 v1.0 快照和两张
 团队冻结图。该校验不代表 DOCX 具有官方文件地位。
+
+`source-code-parameter-and-documentation-guide.docx` 保留为 2026-08-07 的源码手册
+基线；`source-code-parameter-and-documentation-guide-v2.docx` 是面向当前仓库的
+可修订版本，已补充 V2 人工工业场景、采集入口与 V1/V2 适用边界。两者都不是
+运行时合同真源；场景参数以 `simulation/configs/single_bin_scene_v2.json` 和
+`simulation/v2_scene_contract.py` 为准。

@@ -1,5 +1,9 @@
 # Model Services
 
+> 当前场景边界：下述四零件双 VLA 串行流程是 V1 自动闭环兼容合同。V2
+> `single_bin_manual_industrial_v2` 目前用于 8 工件人工示教和 Canonical Episode
+> 采集，为后续训练提供数据，不改变现有服务 API，也不代表已接通自动推理控制。
+
 模型运行时必须与轻量总控 Agent 分离，避免 YOLO/PyTorch/CUDA 与 JAX/openpi
 的依赖冲突。系统固定为四个 Agent：总控、YOLO、OpenVLA-OFT 和 π0.5；
 Verifier、环境和离线 mAP 评测器不是 Agent。

@@ -170,10 +170,10 @@ def test_state_mapper_blocks_unapproved_production_semantics() -> None:
     assert require_state_mapper(mapper, production=False) is mapper
 
 
-def test_unfrozen_action_horizon_remains_a_production_sentinel() -> None:
-    with pytest.raises(RuntimeError, match="ARCH-2026-001 item 4"):
-        require_frozen_action_horizon(10, production=True)
-    assert require_frozen_action_horizon(10, production=False) == 10
+def test_action_horizon_is_formally_frozen_at_ten() -> None:
+    assert require_frozen_action_horizon(10, production=True) == 10
+    with pytest.raises(RuntimeError, match="frozen at 10"):
+        require_frozen_action_horizon(9, production=True)
 
 
 def test_conversion_uses_hdf5_lineage_and_atomic_offline_reopen(

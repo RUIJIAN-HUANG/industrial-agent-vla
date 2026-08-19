@@ -19,20 +19,71 @@ G0 后只能保留一个主仿真平台；不要同时维护重复的 Isaac/Gaze
 实验必须记录平台版本、物理参数、控制频率、坐标系、随机 seed 和资产 SHA。
 `cache/`、`generated/`、`packages/`、录像及机器人录包均由 `.gitignore` 排除。
 
-## 冻结 MVP 场景：双 Franka + 单箱固定交接
+## 当前场景：V2 人工工业采集
 
-当前代码只实现已经冻结的场景，不再引入传送带、多料箱或第三台机械臂：
+> 实现状态（2026-08-19）：下列 V2 场景配置、构建器和 GUI 验收/采集脚本是 B 侧
+> 计划交付物，当前仓库尚不存在。现有 `v2_collection_recorder.py` 只提供经过测试的
+> Canonical V2 同步写入边界，不构成可运行场景或正式采集入口。
 
-- Arm A（π0.5）完成 4 个零件装箱，并把满箱放到中央固定交接位；
-- Supervisor 完成 `A_ONLY → HANDOFF_VERIFY → B_ONLY` 令牌切换；
-- Arm B（OpenVLA）只在 durable `handoff.ready` 事件确认后把同一料箱搬到成品位；
-- 三台固定相机同时服务 VLA 观测、YOLO 检测证据和闭环验证。
+当前主场景 ID 为 `single_bin_manual_industrial_v2`。它保留双 Franka、三相机、
+单箱固定交接的安全框架，并把采集对象升级为 8 个工业零件和 `2×4` 料箱：
 
-本目录的第一版场景工具如下：
+- P01/P02 为正立轴件，P03/P04 为倒立轴件；
+- N01/N02 为带可见通孔的六角螺母；
+- W01/W02 为带平行手柄和开口端的简化扳手；
+- A/B/C/D 四区各 2 件，S11-S24 与 8 件一一固定映射；
+- 料箱带中央提梁和 `BIN_CARRY_TCP`，计划满载质量 `1.0 kg`；
+- 键盘采集以 `10 Hz` 写入 Canonical Episode，在线 GT 被禁止。
+
+V2 计划文件（除 `v2_collection_recorder.py` 外尚待 B 提交）：
 
 ```text
 simulation/
-├── configs/single_bin_scene_v1.json  # 唯一场景坐标合同
+├── configs/single_bin_scene_v2.json       # V2 场景机器真源
+├── v2_scene_contract.py                   # 数量、坐标、槽位、质量、相机合同
+├── v2_industrial_assets.py                # 轴件、螺母、扳手程序化资产
+├── single_bin_scene_v2_builder.py         # 2×4 料箱、提梁、机器人、相机构建
+├── build_single_bin_scene_v2.py           # V2 USD 构建入口
+├── run_v2_gui_scene_acceptance.py         # 可见 GUI + 四张图证据
+├── run_v2_home_acceptance.py              # 两臂 HOME
+├── run_v2_ik_reachability_acceptance.py   # IK 可达性
+├── run_v2_dual_arm_micro_motion_acceptance.py
+├── run_v2_keyboard_collection.py          # 人工键盘 Canonical Episode
+├── v2_collection_preflight.py             # 正式采集预检
+├── v2_collection_state.py                 # V2 人工采集状态机
+└── v2_collection_recorder.py              # 已实现：Canonical V2 同步写入边界
+```
+
+以下静态预检命令须待对应 B 侧脚本提交后使用：
+
+```powershell
+python simulation\run_v2_scene_acceptance.py `
+  --evidence-dir artifacts\v2\static
+```
+
+使用 Isaac Sim Python 运行可见 GUI 验收：
+
+```powershell
+python simulation\run_v2_gui_scene_acceptance.py `
+  --output-scene simulation\generated\single_bin_scene_v2.usda `
+  --evidence-dir artifacts\v2\gui `
+  --review-seconds 45
+```
+
+V2 的静态 PASS 不代表 GUI、物理、IK、抓取或满载搬运通过。正式顺序与状态声明
+见 [`../docs/v2-manual-industrial-collection.md`](../docs/v2-manual-industrial-collection.md)。
+
+## V1 自动闭环兼容基线
+
+`single_bin_pack_handoff_v1` 仍用于四 Agent 自动串行闭环：Arm_A/π0.5 处理
+P01-P04，Supervisor 执行三帧交接核验，Arm_B/OpenVLA-OFT 搬运同一料箱。
+V1 的 `2×3` 料箱、冻结指令和后置条件未被 V2 静默替换。
+
+V1 场景工具如下：
+
+```text
+simulation/
+├── configs/single_bin_scene_v1.json  # V1 自动闭环场景坐标合同
 ├── scene_layout.py                   # 无 Isaac Sim 也可运行的静态预检
 ├── isaac_compat.py                   # Isaac Sim 4.2/4.5/5.1 薄兼容层
 ├── single_bin_scene_builder.py       # USD 几何、物理、相机与机器人构建
@@ -78,7 +129,7 @@ EXPECTED_GIT_SHA="$(git rev-parse HEAD)" \
 主开发与最终 Docker 建议冻结 **Isaac Sim 5.1.x**。代码兼容 4.5，并为 4.2
 保留最低限度的导入回退；不要把多个 Isaac Sim 版本混入同一个正式镜像。
 
-### 1. 先做本地合同与距离预检
+### V1-1. 先做本地合同与距离预检
 
 这一步只需要普通 Python 3.10+：
 
@@ -92,7 +143,7 @@ python -m pytest tests\test_scene_layout.py
 通过仅表示场景数量、坐标、区域配方和水平软半径没有明显错误，不代表机器人 IK、
 碰撞或抓取物理已经通过。
 
-### 2. 在 Isaac Sim 中生成 USD
+### V1-2. 在 Isaac Sim 中生成 USD
 
 若使用 NVIDIA 安装包，在 PowerShell 中将路径替换为自己的 Isaac Sim 安装目录：
 
@@ -124,7 +175,7 @@ python simulation\build_single_bin_scene.py `
 `/Isaac/Robots/Franka/franka.usd`。找不到资产时脚本会明确失败，不会悄悄生成两台
 “空机器人”。
 
-### 3. 打开并复核
+### V1-3. 打开并复核
 
 在 Isaac Sim 中选择 **File → Open**，打开：
 
@@ -154,7 +205,7 @@ simulation/generated/single_bin_scene_v1.usda
 色块是各 Station 下的 `Marker` 子节点。后续控制器应读取 Station 根节点，不能把
 色块表面高度误当成料箱中心高度。
 
-### 4. Isaac Sim 内的硬验收
+### V1-4. Isaac Sim 内的硬验收
 
 生成 USD 后，必须按顺序完成：
 

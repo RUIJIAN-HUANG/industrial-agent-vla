@@ -1,4 +1,11 @@
-"""Supervisor Agent: fixed lifecycle, execution, verification, and recovery."""
+"""Supervisor Agent: fixed lifecycle, execution, verification, and recovery.
+
+工业智能体核心:固定四智能体(Four-Agent)监督器,编排
+"双 VLA(Arm_A 抓取码放 → Arm_B 搬运入箱)+ YOLO 感知"完成码垛任务。
+职责覆盖完整闭环:任务校验 → 语义规划 → 影子感知 → 安全执行 →
+后置条件验证 → 有界恢复,并通过固定生命周期(control token 互锁)
+保证任意时刻至多一个机械臂持有执行权。
+"""
 
 from __future__ import annotations
 
@@ -63,6 +70,7 @@ from .sync_contract import canonical_state_7d
 from .telemetry import EventRecord, EventSink, MemoryStore, RunMemory
 from .verifier import PostconditionVerifier, VerificationResult, Verdict
 
+# 泛型变量:让 _invoke_with_hard_deadline 保留调用方的返回值类型
 T = TypeVar("T")
 
 
@@ -70,8 +78,14 @@ def _invoke_with_hard_deadline(
     operation: Callable[[], T],
     timeout_ms: int,
 ) -> tuple[bool, T | None, BaseException | None]:
-    """Run an untrusted adapter call behind a daemon watchdog."""
+    """Run an untrusted adapter call behind a daemon watchdog.
 
+    在守护线程中执行不可信的外部适配器调用(控制器、VLA、YOLO)。
+    即使被调方卡死或崩溃,Supervisor 也最多等待 timeout_ms 就宣告失败,
+    保证监督器自身永不阻塞。返回 (是否完成, 成功值或None, 异常或None)。
+    """
+
+    # 队列容量 1:只容纳"成功结果"或"异常"二者之一
     result_queue: Queue[tuple[bool, Any]] = Queue(maxsize=1)
 
     def worker() -> None:
@@ -80,10 +94,12 @@ def _invoke_with_hard_deadline(
         except BaseException as exc:  # keep adapter failures in the worker
             result_queue.put((False, exc))
 
+    # 守护线程:主线程超时返回后它仍可被回收,不会拖住进程退出
     thread = Thread(target=worker, daemon=True)
     thread.start()
     thread.join(timeout_ms / 1_000)
     if thread.is_alive():
+        # 工作线程仍在运行 → 调用超时,Supervisor 侧直接按失败处理
         return (
             False,
             None,
@@ -92,6 +108,7 @@ def _invoke_with_hard_deadline(
     try:
         succeeded, value = result_queue.get_nowait()
     except Empty:
+        # 线程已退出但未放入结果(理论不可达,防御性处理)
         return False, None, RuntimeError("adapter worker exited without a result")
     if succeeded:
         return True, value, None
@@ -101,6 +118,17 @@ def _invoke_with_hard_deadline(
 
 @dataclass(frozen=True)
 class RunResult:
+    """一次任务运行的最终报告(不可变对象,便于审计与持久化)。
+
+    executor_history:执行器(VLA)被选择的顺序记录
+    control_token_history:控制令牌流转轨迹
+    replan_counts:每个执行器的重规划次数(证明恢复有界)
+    transitions:FSM 全部状态转移记录
+    verification:最终后置条件验证结果
+    task_plan:语义任务计划快照
+    events:本次运行产生的全部遥测事件
+    """
+
     run_id: str
     task_id: str
     state: AgentState
@@ -117,7 +145,15 @@ class RunResult:
 
 
 class IndustrialAgent:
-    """Fixed four-Agent supervisor with bounded, auditable recovery."""
+    """Fixed four-Agent supervisor with bounded, auditable recovery.
+
+    固定四智能体监督器:Supervisor(本类)+ Arm_A 主 VLA + Arm_B 协作 VLA + YOLO 感知。
+    核心设计约束:
+    1. 生命周期固定 —— 执行权由 control token 在 A_ONLY / HANDOFF_VERIFY /
+       B_ONLY / NONE 之间按冻结序列流转,且观测必须与当前令牌互锁;
+    2. 恢复有界 —— 同一 VLA 至多重规划一次,绝不用另一台 VLA 替换;
+    3. 可审计 —— 每个决策、状态转移、令牌变更都写入持久化事件流。
+    """
 
     def __init__(
         self,
@@ -143,6 +179,7 @@ class IndustrialAgent:
         require_durable_handoff: bool = True,
         safe_stop_timeout_ms: int = 2_000,
     ):
+        # ---- 参数校验:所有阈值都必须在冻结的合法范围内 ----
         if verification_frames < 1 or verification_frames > 9:
             raise ValueError("verification_frames must be in [1, 9]")
         if not 1 <= max_decisions_per_strategy_attempt <= 100:
@@ -151,17 +188,20 @@ class IndustrialAgent:
             raise ValueError("perception_timeout_ms must be in [1, 120000]")
         if not 1 <= safe_stop_timeout_ms <= 30_000:
             raise ValueError("safe_stop_timeout_ms must be in [1, 30000]")
+        # 感知模式枚举归一化(字符串 → PerceptionMode),非法值直接拒绝
         try:
             normalized_perception_mode = PerceptionMode(perception_mode)
         except (TypeError, ValueError) as exc:
             raise ValueError(
                 f"unsupported perception_mode: {perception_mode!r}"
             ) from exc
+        # 固定拓扑要求恰好 1 次"失败不阻断控制"的旁路感知尝试
         if max_perception_attempts != 1:
             raise ValueError(
                 f"{normalized_perception_mode.value} uses exactly one "
                 "failure-non-gating sidecar attempt"
             )
+        # 置信度/IOU 阈值必须是 [0,1] 内的有限数值(且不得是 bool)
         for name, value in (
             ("perception_confidence_threshold", perception_confidence_threshold),
             ("perception_iou_threshold", perception_iou_threshold),
@@ -175,6 +215,7 @@ class IndustrialAgent:
                 raise ValueError(f"{name} must be a finite number in [0, 1]")
         if require_perception is not None and not isinstance(require_perception, bool):
             raise ValueError("require_perception must be boolean or None")
+        # 固定四智能体拓扑:YOLO 感知是必选组件,不允许削弱
         requested_perception = True
         if require_perception is False:
             raise ValueError(
@@ -185,8 +226,10 @@ class IndustrialAgent:
                 "the fixed four-Agent topology requires an injected YOLO "
                 "PerceptionAgent"
             )
+        # ---- 任务画像与执行器拓扑校验 ----
         profile = task_profile or FixedTaskProfile()
         profile.validate_frozen()
+        # 注入的执行器集合必须与冻结画像完全一致(恰好两个,缺一不可)
         executor_names = {item.descriptor.name for item in executors}
         required_names = {
             profile.primary_executor,
@@ -198,6 +241,7 @@ class IndustrialAgent:
                 f"expected={sorted(required_names)}, "
                 f"provided={sorted(executor_names)}"
             )
+        # 交接验证帧数必须等于画像冻结值(三帧两票)
         if verification_frames != profile.handoff_verification_frames:
             raise ValueError(
                 "fixed dual-VLA handoff requires exactly "
@@ -205,11 +249,13 @@ class IndustrialAgent:
             )
         if perception is not None and perception.descriptor.name != "yolo":
             raise ValueError("the independent perception Agent must be named 'yolo'")
+        # ---- 组装依赖并初始化运行期状态 ----
         self.executors = ExecutorRegistry(executors)
         self.gateway = gateway or ObservationGateway()
         self.safety = safety or ActionSafetyValidator()
         self.verifier = verifier or PostconditionVerifier()
         self.events = events or EventSink()
+        # 交接必须走持久化事件流(fsync 落盘),保证可恢复、可审计
         if require_durable_handoff is not True:
             raise ValueError(
                 "fixed dual-VLA handoff cannot disable durable event persistence"
@@ -234,6 +280,7 @@ class IndustrialAgent:
         self.max_decisions_per_strategy_attempt = max_decisions_per_strategy_attempt
         self.safe_stop_timeout_ms = safe_stop_timeout_ms
 
+        # 运行期状态:每次 run() 重建;_run_lock 保证同一实例不并发运行
         self._fsm = AgentFSM()
         self._queue: deque[ActionStep] = deque()
         self._run_id = ""
@@ -248,7 +295,10 @@ class IndustrialAgent:
 
     @property
     def current_control_token(self) -> str:
-        """Expose the authoritative lease to the controller boundary."""
+        """Expose the authoritative lease to the controller boundary.
+
+        对外暴露当前控制令牌(哪个机械臂拥有执行权);无活动运行时为 NONE。
+        """
 
         lifecycle = self._lifecycle
         return (
@@ -269,10 +319,16 @@ class IndustrialAgent:
         perception_evidence: DetectionEvidenceSink | None = None,
         require_perception: bool | None = None,
     ) -> IndustrialAgent:
-        """Build the core from the versioned JSON-compatible configuration."""
+        """Build the core from the versioned JSON-compatible configuration.
+
+        从版本化 JSON 配置构建智能体,并逐项"冻结校验":
+        生命周期模式、恢复不变量、安全边界,以及执行器/感知模型的
+        部署指纹(sha256)都必须与核心契约完全一致,任何偏差直接拒绝。
+        """
 
         if not isinstance(config, Mapping):
             raise ValueError("agent config must be an object")
+        # 配置版本必须锁定在 1.x(核心契约版本)
         version = config.get("config_version")
         if not isinstance(version, str) or version.split(".", 1)[0] != "1":
             raise ValueError(f"unsupported config_version: {version!r}")
@@ -282,6 +338,7 @@ class IndustrialAgent:
                 "routing is obsolete in FIXED_DUAL_VLA_SERIAL mode; "
                 "executor ownership comes from lifecycle.task_profile"
             )
+        # 顶层键必须恰好齐全:既不允许缺键,也不允许未知键混入
         expected_top_level_keys = {
             "config_version",
             "verification_frames",
@@ -299,6 +356,8 @@ class IndustrialAgent:
                 f"agent config must contain exactly {sorted(expected_top_level_keys)}"
             )
         ImageCasConfig.from_mapping(config.get("image_cas"))
+
+        # ---- lifecycle:冻结的双 VLA 串行模式与令牌序列 ----
         raw_lifecycle = config.get("lifecycle")
         if not isinstance(raw_lifecycle, Mapping):
             raise ValueError("lifecycle config must be an object")
@@ -314,6 +373,7 @@ class IndustrialAgent:
             raise ValueError(
                 f"lifecycle.token_sequence must be {expected_token_sequence!r}"
             )
+        # 任务画像(机械臂、料箱、交接区、票数要求)同样被冻结
         profile = FixedTaskProfile.from_mapping(raw_lifecycle.get("task_profile", {}))
 
         def required_int(
@@ -351,6 +411,7 @@ class IndustrialAgent:
                 )
             return float(value)
 
+        # ---- recovery:恢复不变量冻结(最多 1 次重规划、0 次切换)----
         recovery = config.get("recovery")
         if not isinstance(recovery, Mapping):
             raise ValueError("recovery config must be an object")
@@ -377,6 +438,7 @@ class IndustrialAgent:
         if mismatches:
             raise ValueError(f"recovery invariants are frozen: {mismatches}")
 
+        # ---- safety:轴限位、双臂工作空间、单块步数与安全停止超时 ----
         raw_safety = config.get("safety")
         if not isinstance(raw_safety, Mapping):
             raise ValueError("safety config must be an object")
@@ -455,6 +517,7 @@ class IndustrialAgent:
             raise ValueError("all safety.axis_abs_limits values must be positive")
         if axis_limits[6] > 1.0:
             raise ValueError("gripper axis limit cannot exceed normalized range 1.0")
+        # 依据配置构造安全策略:限位 + 工作空间边界 + 单块最大步数
         policy = SafetyPolicy(
             axis_abs_limits=axis_limits,  # type: ignore[arg-type]
             arm_a_workspace_min_m=workspace_bounds["Arm_A"][0],  # type: ignore[arg-type]
@@ -471,6 +534,7 @@ class IndustrialAgent:
                 "safety.action_contract_version must match core contract 1.0"
             )
 
+        # ---- executors:双 VLA 部署身份(sha256 指纹)必须与配置一致 ----
         raw_executors = config.get("executors")
         if not isinstance(raw_executors, Mapping):
             raise ValueError("executors config must be an object")
@@ -483,6 +547,7 @@ class IndustrialAgent:
                 "config.executors must declare exactly "
                 f"{sorted(required_executor_names)}"
             )
+        # 配置声明的启用集合必须恰好等于画像要求的两个执行器
         enabled_names: set[str] = set()
         for name, raw in raw_executors.items():
             if not isinstance(raw, Mapping):
@@ -510,6 +575,7 @@ class IndustrialAgent:
                 f"expected={sorted(required_executor_names)}, "
                 f"enabled={sorted(enabled_names)}"
             )
+        # 注入的执行器逐个核验:名称去重、契约版本、sha256 指纹必须已固定
         provided_names: set[str] = set()
         for executor in executors:
             descriptor = executor.descriptor
@@ -555,6 +621,7 @@ class IndustrialAgent:
                 f"missing={missing}, unexpected={unexpected}"
             )
 
+        # ---- perception:YOLO 为必选组件,同样要求固定部署指纹 ----
         raw_perception = config.get("perception")
         if not isinstance(raw_perception, Mapping):
             raise ValueError("config.perception must be an object")
@@ -616,6 +683,7 @@ class IndustrialAgent:
                     f"expected {expected_value!r}, got {actual_value!r}"
                 )
 
+        # ---- telemetry:事件持久化路径 + 强制持久化交接 ----
         raw_telemetry = config.get("telemetry")
         if not isinstance(raw_telemetry, Mapping) or set(raw_telemetry) != {
             "event_jsonl_path",
@@ -635,6 +703,7 @@ class IndustrialAgent:
                 "config.telemetry.require_durable_handoff must remain true"
             )
 
+        # 全部校验通过,统一构造智能体
         return cls(
             executors,
             gateway=gateway,
@@ -691,6 +760,7 @@ class IndustrialAgent:
         )
 
     def _emit(self, event_type: str, payload: dict[str, Any] | None = None) -> None:
+        """统一遥测出口:自动附带运行 id、任务 id、状态与当前控制令牌。"""
         event_payload = dict(payload or {})
         if self._lifecycle is not None:
             event_payload.setdefault(
@@ -711,6 +781,7 @@ class IndustrialAgent:
         current: ControlToken,
         reason: str,
     ) -> None:
+        """记录控制令牌变更:更新运行内存历史并发出审计事件。"""
         assert self._memory is not None
         self._memory.control_token = current.value
         if (
@@ -728,6 +799,7 @@ class IndustrialAgent:
         )
 
     def _transition(self, target: AgentState, reason: str) -> None:
+        """执行一次 FSM 状态转移并发布转移事件(供审计复现)。"""
         record = self._fsm.transition(target, reason)
         self._emit(
             "fsm.transition",
@@ -739,6 +811,7 @@ class IndustrialAgent:
         )
 
     def _clear_queue(self, reason: str) -> None:
+        """清空待执行动作队列;恢复/终止前必须清空,防止陈旧动作被下发。"""
         removed = len(self._queue)
         self._queue.clear()
         self._emit("action_queue.cleared", {"reason": reason, "removed_steps": removed})
@@ -750,6 +823,7 @@ class IndustrialAgent:
         verification: VerificationResult | None,
         event_start: int,
     ) -> RunResult:
+        """汇总本次运行的最终报告(状态、历史、事件快照)。"""
         assert self._memory is not None
         return RunResult(
             run_id=self._run_id,
@@ -774,6 +848,12 @@ class IndustrialAgent:
         verification: VerificationResult | None,
         event_start: int,
     ) -> RunResult:
+        """失败终结路径:记录失败码并强制释放控制令牌。
+
+        即使没有发生任何物理动作、不需要硬件安全停止,
+        也必须把令牌复位到 NONE——绝不允许运行结束后
+        遗留 A_ONLY / HANDOFF_VERIFY / B_ONLY 租约。
+        """
         assert self._memory is not None
         self._memory.last_failure_code = code.value
         # A terminal run must never leave the controller lease at A_ONLY,
@@ -812,6 +892,11 @@ class IndustrialAgent:
         verification: VerificationResult | None,
         event_start: int,
     ) -> RunResult:
+        """物理安全停止路径:复位令牌 → 清空队列 → 控制器停止 → 观测确认。
+
+        停止确认成功 → SAFE_STOPPED;失败 → SAFE_STOP_FAILED(按系统故障上报)。
+        遥测写入失败不阻断停止流程,而是收集到 telemetry_errors 一并上报。
+        """
         assert self._memory is not None
         self._memory.last_failure_code = code.value
         telemetry_errors: list[str] = []
@@ -954,6 +1039,12 @@ class IndustrialAgent:
         verification: VerificationResult | None,
         event_start: int,
     ) -> RunResult | None:
+        """每帧观测的统一安全闸门:任一层检查失败立即安全停止。
+
+        1. safety_state_failure:安全状态本身异常;
+        2. 双机械臂观测一致性互锁(自相矛盾的传感器摘要不得参与投票);
+        3. 控制令牌互锁(观测到的机械臂状态必须与当前令牌相容)。
+        """
         fault = safety_state_failure(observation)
         if fault is not None:
             code, reason = fault
@@ -991,7 +1082,15 @@ class IndustrialAgent:
     def _fixed_observation_consistency_failure(
         observation: Observation,
     ) -> str | None:
-        """Reject contradictory sensor summaries before they can vote."""
+        """Reject contradictory sensor summaries before they can vote.
+
+        在验证投票之前,先对整份观测做模式级校验:
+        相机流(键集合、camera_id、冻结分辨率)、机器人状态
+        (active_arm、state_7d 与 tcp_pose+夹爪的一致性)、任务摘要
+        (packed_part_count、bin 位置互斥)、质量置信度,
+        以及 task.*_retreated 与 robot.*.retreated 的一致性。
+        返回 None 表示通过;否则返回可读失败原因,调用方据此安全停止。
+        """
 
         camera = observation.data.get("camera")
         robot = observation.data.get("robot")
@@ -1021,6 +1120,7 @@ class IndustrialAgent:
                 "camera is missing frozen phase streams: "
                 f"{sorted(missing_phase_cameras)}"
             )
+        # 每个阶段相机流必须来自固定编号的相机
         expected_camera_ids = {
             "arm_a_rgb": "CAM_A_TOP",
             "handoff_rgb": "CAM_HANDOFF",
@@ -1078,10 +1178,12 @@ class IndustrialAgent:
                     f"camera.{image_key} must use frozen "
                     f"{FROZEN_IMAGE_WIDTH}x{FROZEN_IMAGE_HEIGHT} resolution"
                 )
+        # ---- 机器人状态 ----
         if not isinstance(robot, Mapping):
             return "robot state is missing or invalid"
         if set(robot) != {"active_arm", "arm_a", "arm_b"}:
             return "robot must contain exactly active_arm, arm_a and arm_b"
+        # ---- 任务传感器摘要 ----
         if not isinstance(task_state, Mapping):
             return "task sensor summary is invalid"
         allowed_task_keys = {
@@ -1116,6 +1218,7 @@ class IndustrialAgent:
             or float(bin_speed_m_s) < 0.0
         ):
             return "task.bin_speed_m_s must be a finite non-negative number"
+        # ---- 质量置信度 ----
         if not isinstance(quality, Mapping):
             return "quality state is missing or invalid"
         quality_confidence = quality.get("confidence")
@@ -1126,6 +1229,7 @@ class IndustrialAgent:
             or not 0.0 <= float(quality_confidence) <= 1.0
         ):
             return "quality.confidence must be a finite number in [0, 1]"
+        # ---- 双机械臂状态与摘要一致性 ----
         active_arm = robot.get("active_arm")
         if active_arm not in {"Arm_A", "Arm_B", "NONE"}:
             return f"robot.active_arm is invalid: {active_arm!r}"
@@ -1173,6 +1277,7 @@ class IndustrialAgent:
             gripper_open = arm_state.get("gripper_open")
             if not isinstance(gripper_open, bool):
                 return f"robot.{arm_key}.gripper_open must be boolean"
+            # state_7d 必须等于 tcp_pose + 控制器确认的夹爪状态,否则传感器自相矛盾
             try:
                 expected_state = canonical_state_7d(tcp_pose, gripper_open)
             except (TypeError, ValueError) as exc:
@@ -1204,7 +1309,12 @@ class IndustrialAgent:
         *,
         arm_id: str,
     ) -> str | None:
-        """Cross-check active-arm and opposite-arm retreat sensor state."""
+        """Cross-check active-arm and opposite-arm retreat sensor state.
+
+        双臂互锁:当前臂(arm_id)动作之前,对侧臂必须
+        retreated(退回安全位)且 stationary(静止),
+        防止双臂在同一空间相互干涉。
+        """
 
         robot = observation.data.get("robot")
         if not isinstance(robot, Mapping):
@@ -1234,7 +1344,12 @@ class IndustrialAgent:
         *,
         arm_id: str,
     ) -> str | None:
-        """Invalidate a chunk if critical state changed during model latency."""
+        """Invalidate a chunk if critical state changed during model latency.
+
+        关闭推理期间的 TOCTOU 窗口:VLA 推理耗时期间,
+        安全状态、active_arm、退回/夹爪/静止标志或位姿数值发生变化,
+        该动作块直接作废,不允许把"基于旧观测"的动作发到控制器。
+        """
 
         if planning_observation.data.get("safety") != execution_observation.data.get(
             "safety"
@@ -1280,7 +1395,12 @@ class IndustrialAgent:
         planning_observation: Observation,
         execution_observation: Observation,
     ) -> str | None:
-        """Detect meaningful scene drift without reacting to confidence noise."""
+        """Detect meaningful scene drift without reacting to confidence noise.
+
+        语义漂移检测:任务计数/状态变化、料箱速度超差、
+        物体身份或区域变化才算"漂移";
+        置信度等数值噪声被忽略,避免误触发恢复。
+        """
 
         before_task = planning_observation.data.get("task")
         after_task = execution_observation.data.get("task")
@@ -1331,7 +1451,15 @@ class IndustrialAgent:
         self,
         observation: Observation,
     ) -> str | None:
-        """Bind every observed arm state to the currently held control token."""
+        """Bind every observed arm state to the currently held control token.
+
+        控制令牌互锁:当前令牌决定观测必须满足的机械臂状态——
+        A_ONLY:active_arm ∈ {Arm_A, NONE} 且 Arm_B 退回;
+        HANDOFF_VERIFY:active_arm=NONE 且双臂退回、静止;
+        B_ONLY:active_arm ∈ {Arm_B, NONE} 且 Arm_A 退回;
+        NONE:active_arm=NONE 且双臂静止。
+        这是"任意时刻至多一个机械臂拥有执行权"的物理级保证。
+        """
 
         assert self._lifecycle is not None
         robot = observation.data.get("robot")
@@ -1378,7 +1506,12 @@ class IndustrialAgent:
         *,
         camera_key: str = "full_image",
     ) -> ImageReference:
-        """Resolve the phase image shared by the current VLA and YOLO."""
+        """Resolve the phase image shared by the current VLA and YOLO.
+
+        按阶段选择相机流(交接子任务→handoff_rgb、运输→arm_b_rgb 等),
+        校验图像引用结构、camera_id 与冻结分辨率,
+        保证 VLA 与 YOLO 消费的是同一帧图像。
+        """
 
         camera = observation.data.get("camera")
         if not isinstance(camera, Mapping):
@@ -1444,7 +1577,11 @@ class IndustrialAgent:
         *,
         camera_key: str,
     ) -> str | None:
-        """Require genuinely distinct camera frames for a voting quorum."""
+        """Require genuinely distinct camera frames for a voting quorum.
+
+        验证投票要求"真实不同的帧":时间戳严格递增,
+        且图像 SHA 全部唯一——不允许用同一帧反复投票凑多数。
+        """
 
         timestamps = [frame.timestamp_ms for frame in frames]
         if any(
@@ -1484,7 +1621,13 @@ class IndustrialAgent:
         action_has_executed: bool,
         step_id: int,
     ) -> tuple[Observation, DetectionPacket | None, RunResult | None]:
-        """Sample YOLO once for scoring; never gate or mutate VLA recovery."""
+        """Sample YOLO once for scoring; never gate or mutate VLA recovery.
+
+        YOLO 只做"影子打分"(SHADOW_SCORE):每步调用一次,
+        结果持久化到证据文件与事件流,供离线评估/mAP 使用。
+        任何感知失败(超时、坏响应、指纹不匹配)都只记录事件,
+        绝不阻断或改变 VLA 的执行/恢复路径(control_path_impact="none")。
+        """
 
         del environment, verification, event_start, action_has_executed
         if self.perception is None:
@@ -1504,6 +1647,7 @@ class IndustrialAgent:
             "sample same-frame YOLO scoring sidecar",
         )
         descriptor = self.perception.descriptor
+        # 按子任务阶段选择与 VLA 共享的相机流
         subtask_id = str(task.metadata.get("subtask_id", task.task_id))
         image: ImageReference | None = None
         try:
@@ -1551,11 +1695,13 @@ class IndustrialAgent:
                     "control_path_impact": "none",
                 },
             )
+            # 带硬截止时间调用 YOLO;超时/失败只降级侧车,不碰控制路径
             completed, packet_value, detector_error = _invoke_with_hard_deadline(
                 lambda: self.perception.detect(context),
                 self.perception_timeout_ms,
             )
             if not completed:
+                # 硬超时:本运行禁用侧车并隔离 YOLO,后台取消在途请求
                 if isinstance(detector_error, TimeoutError):
                     self._perception_disabled_for_run = True
                     self._perception_quarantined = True
@@ -1584,6 +1730,7 @@ class IndustrialAgent:
                     FailureCode.PERCEPTION_BAD_RESPONSE,
                     "YOLO Agent must return a DetectionPacket",
                 )
+            # 部署指纹校验:返回包必须来自当前部署的 YOLO 版本
             revision_mismatches = {
                 key: {
                     "expected": getattr(descriptor, key),
@@ -1602,6 +1749,7 @@ class IndustrialAgent:
                     FailureCode.PERCEPTION_REVISION_MISMATCH,
                     f"YOLO packet deployment identity mismatch: {revision_mismatches}",
                 )
+            # 帧级校验:包必须引用同一观测与同一图像
             try:
                 packet.validate_against(
                     observation_id=observation.observation_id,
@@ -1613,6 +1761,7 @@ class IndustrialAgent:
                     FailureCode.PERCEPTION_BAD_RESPONSE,
                     f"YOLO packet frame/contract validation failed: {exc}",
                 ) from exc
+            # 相关性校验:包必须对应本运行、本子任务、本步
             expected_correlation = {
                 "trace_id": self._run_id,
                 "episode_id": self._run_id,
@@ -1634,6 +1783,7 @@ class IndustrialAgent:
                     f"YOLO packet correlation mismatch: {mismatches}",
                 )
             packet_data = packet.to_dict()
+            # 持久化证据包(写入失败仅告警,不影响控制路径)
             try:
                 self.perception_evidence.record_packet(
                     packet,
@@ -1683,6 +1833,7 @@ class IndustrialAgent:
             code = FailureCode.PERCEPTION_UNAVAILABLE
             message = f"unexpected YOLO Agent error: {exc}"
 
+        # 失败路径:证据与事件照常记录,但绝不触发恢复(control_path_impact=none)
         try:
             self.perception_evidence.record_failure(
                 trace_id=self._run_id,
@@ -1738,11 +1889,20 @@ class IndustrialAgent:
         reason: str,
         local_replans: dict[str, int],
     ) -> tuple[Executor | None, bool]:
-        """Retry the same lifecycle-assigned VLA once, then stop the phase."""
+        """Retry the same lifecycle-assigned VLA once, then stop the phase.
+
+        有界恢复策略:
+        1. 首次失败:取消在途推理 → 清空动作队列 → 进入 REPLANNING,
+           返回 (current, True) 让主循环重试一次;
+        2. 第二次失败:不再规划,返回 (current, False),由调用方
+           以 RECOVERY_EXHAUSTED 终止本阶段。
+        固定生命周期从不允许用另一台 VLA 替换当前角色(switch_allowed=False)。
+        """
 
         assert self._memory is not None
         name = current.descriptor.name
         self._memory.last_failure_code = code.value
+        # 首次失败:允许一次重规划
         replans = local_replans.get(name, 0)
         if replans < 1:
             local_replans[name] = replans + 1
@@ -1750,6 +1910,7 @@ class IndustrialAgent:
                 self._memory.replan_counts.get(name, 0) + 1
             )
             self._clear_queue("replan")
+            # 先取消在途推理(截止 1 秒,取消失败按隔离级错误处理)
             cancelled, _, cancel_error = _invoke_with_hard_deadline(
                 lambda: current.cancel(task.task_id, reason),
                 min(self.executor_timeout_ms, 1_000),
@@ -1773,6 +1934,7 @@ class IndustrialAgent:
             )
             self._transition(AgentState.OBSERVING, "refresh observation for replan")
             return current, True
+        # 重规划额度已耗尽:本阶段终止,不切换 VLA
         self._emit(
             "recovery.phase_exhausted",
             {
@@ -1787,6 +1949,7 @@ class IndustrialAgent:
     def _observe_with_deadline(
         self, environment: ExecutionEnvironment
     ) -> Mapping[str, Any]:
+        """带硬截止时间观测;超时意味着控制器状态未知 → 按系统故障处理。"""
         completed, value, error = _invoke_with_hard_deadline(
             environment.observe,
             self.executor_timeout_ms,
@@ -1815,6 +1978,12 @@ class IndustrialAgent:
         expected_observation_id: str,
         expected_state_digest: str,
     ) -> Mapping[str, Any]:
+        """带硬截止时间执行单步动作,并附带观测 id 与状态摘要防竞争。
+
+        expected_observation_id / expected_state_digest 用于控制器侧
+        原子性写前校验;PreWriteStateStaleError 表示命令在写入前
+        已被控制器安全中止(见调用方处理)。
+        """
         completed, value, error = _invoke_with_hard_deadline(
             lambda: environment.step(
                 action,
@@ -1842,14 +2011,21 @@ class IndustrialAgent:
         return value
 
     def run(self, task: TaskSchema, environment: ExecutionEnvironment) -> RunResult:
-        """Run one task; reject overlapping calls on this stateful instance."""
+        """Run one task; reject overlapping calls on this stateful instance.
 
+        对外入口:非阻塞互斥锁保证同一实例同一时刻只有一个任务。
+        任何 BaseException(包括 KeyboardInterrupt / SystemExit)都会触发
+        安全停止兜底;初始化失败(尚无运行内存)时也强制调用 safe_stop。
+        """
+
+        # 并发保护:拒绝重叠调用
         if not self._run_lock.acquire(blocking=False):
             raise AgentError(
                 FailureCode.AGENT_BUSY,
                 "IndustrialAgent already has an active workcell control run",
             )
         self._memory = None
+        # 记录事件基线,便于最终只截取本次运行产生的事件
         event_start = len(self.events.events)
         try:
             try:
@@ -1907,8 +2083,19 @@ class IndustrialAgent:
         task: TaskSchema,
         environment: ExecutionEnvironment,
     ) -> RunResult:
-        """Plan semantic subtasks and execute them with bounded local recovery."""
+        """Plan semantic subtasks and execute them with bounded local recovery.
 
+        单次任务主流程:
+        ① 初始化(FSM、队列、运行 id、固定生命周期);
+        ② 任务校验(指令必须匹配冻结的 Arm_A 指令,后置条件三帧两票);
+        ③ 语义规划(固定双 VLA 分配,校验计划未被篡改);
+        ④ 执行器 preflight + YOLO 健康检查;
+        ⑤ 子任务控制循环:观测 → 安全检查 → 前置条件 → 感知 →
+           授权 → 推理 → 推理后复核 → 安全限幅 → 单步执行 → 验证 →
+           推进 / 重复 / 有界恢复。
+        """
+
+        # ---- 阶段①:初始化每次运行的独立状态 ----
         self._fsm = AgentFSM()
         self._queue.clear()
         self._plan = None
@@ -1946,15 +2133,18 @@ class IndustrialAgent:
                 "reason": "fixed task profile accepted",
             },
         )
+        # ---- 阶段②:校验任务契约 ----
         self._transition(AgentState.VALIDATING_TASK, "validate TaskSchema")
         try:
             task.validate()
+            # 指令必须与冻结的 Arm_A 部署指令逐字一致
             if task.instruction != self.task_profile.arm_a_instruction:
                 raise AgentError(
                     FailureCode.INVALID_TASK,
                     "task instruction must exactly match the frozen Arm_A "
                     "deployment instruction",
                 )
+            # 后置条件必须使用冻结的三帧/两票投票规则
             if any(
                 condition.required_votes != self.task_profile.handoff_required_votes
                 for condition in task.postconditions
@@ -1972,6 +2162,7 @@ class IndustrialAgent:
                 verification=verification,
                 event_start=event_start,
             )
+        # ---- 阶段③:语义规划(固定双 VLA 分配)----
         self._transition(AgentState.PLANNING, "build semantic TaskPlan")
         try:
             self._plan = self.planner.plan(task, self._run_id)
@@ -1997,6 +2188,7 @@ class IndustrialAgent:
                     f"expected={expected_assignments!r}, "
                     f"actual={actual_assignments!r}",
                 )
+            # preflight:隔离中的执行器禁止复用;逐个预选执行器
             for planned_subtask in self._plan.subtasks:
                 required_executor = self.task_profile.executor_for_subtask(
                     planned_subtask.subtask_id
@@ -2018,6 +2210,7 @@ class IndustrialAgent:
                         "subtask_id": planned_subtask.subtask_id,
                     },
                 )
+            # YOLO 健康检查:失败则本运行禁用侧车(不影响控制路径)
             perception_health_error: str | None = None
             try:
                 perception_ready = (
@@ -2063,6 +2256,11 @@ class IndustrialAgent:
             },
         )
 
+        # ---- 阶段⑤:子任务控制循环 ----
+        # current:当前生命周期指派的 VLA;每个子任务开始时重置为 None
+        # local_replans:本子任务内各执行器的重规划计数
+        # decisions_in_strategy_attempt:当前策略回合已做的决策数(预算上限)
+        # action_has_executed:是否已发生物理动作(决定失败时安全停止 or 仅失败)
         subtask_index = 0
         subtask = self._plan.subtasks[subtask_index]
         subtask.status = SubtaskStatus.READY
@@ -2084,6 +2282,7 @@ class IndustrialAgent:
             exc: AgentError,
             phase: str,
         ) -> RunResult:
+            """观测失败分流:已动过机械臂 → 安全停止;否则直接失败。"""
             if action_has_executed:
                 return self._safe_stop(
                     environment,
@@ -2099,7 +2298,11 @@ class IndustrialAgent:
             message: str,
             terminal_verification: VerificationResult | None,
         ) -> RunResult:
-            """Physically stop whenever a failed run has already moved a robot."""
+            """Physically stop whenever a failed run has already moved a robot.
+
+            已产生物理动作的失败必须硬件安全停止;
+            尚未动作的失败只需复位令牌(见 _fail)。
+            """
 
             if action_has_executed:
                 return self._safe_stop(
@@ -2119,6 +2322,11 @@ class IndustrialAgent:
         def collect_verification_frames(
             initial_frames: Sequence[Observation],
         ) -> tuple[list[Observation], RunResult | None]:
+            """采集满 verification_frames 帧观测,用于后置条件投票。
+
+            逐帧观测并经过 _check_system_fault 闸门;
+            返回 (帧列表, 终止结果或None)。
+            """
             frames = list(initial_frames)
             try:
                 while len(frames) < self.verification_frames:
@@ -2151,6 +2359,7 @@ class IndustrialAgent:
             return frames, None
 
         def start_handoff_verification(reason: str) -> RunResult | None:
+            """进入交接验证:令牌→HANDOFF_VERIFY(actuator_access=NONE,双臂锁定)。"""
             assert self._lifecycle is not None
             try:
                 previous, current_token = self._lifecycle.begin_handoff_verification()
@@ -2175,6 +2384,9 @@ class IndustrialAgent:
             )
             return None
 
+        # ============ 子任务控制主循环 ============
+        # 每轮迭代:观测 → 安全闸门 → 前置条件 → 感知 → 授权 →
+        # 推理 → 推理后复核(TOCTOU)→ 安全限幅 → 单步执行 → 验证
         while True:
             try:
                 last_observation = self.gateway.ingest_online(
@@ -2200,6 +2412,7 @@ class IndustrialAgent:
                 subtask.status = SubtaskStatus.FAILED
                 return stopped
 
+            # ---- 前置条件:存在前置条件时先做多帧投票验证 ----
             if subtask.status is SubtaskStatus.READY and subtask.preconditions:
                 precondition_frames = [last_observation]
                 try:
@@ -2254,8 +2467,8 @@ class IndustrialAgent:
                         precondition_result,
                     )
 
-            # A repeat-until workflow must be a no-op when its observable
-            # postcondition already holds (for example, a bin is already full).
+            # repeat-until 子任务:若可观测后置条件已经满足(如料箱已满),
+            # 必须表现为无操作(no-op),直接视为完成
             if subtask.repeat_until_postcondition and subtask_iterations == 0:
                 precheck_frames = [last_observation]
                 try:
@@ -2351,6 +2564,7 @@ class IndustrialAgent:
                     )
                     continue
 
+            # ---- YOLO 影子打分(失败只记录,不阻断执行)----
             last_observation, perception_packet, perception_terminal = (
                 self._perceive_for_vla(
                     task=active_task,
@@ -2369,6 +2583,7 @@ class IndustrialAgent:
                 AgentState.ASSIGNING_ROLE,
                 "assign or retain the lifecycle-owned VLA role",
             )
+            # ---- 首次进入本子任务:生命周期授权 + 选择执行器 ----
             if current is None:
                 try:
                     required_executor = self.task_profile.executor_for_subtask(
@@ -2420,6 +2635,7 @@ class IndustrialAgent:
                     },
                 )
             name = current.descriptor.name
+            # ---- VLA 推理:请求一个动作块 ----
             self._transition(AgentState.EXECUTING, f"request action chunk from {name}")
             context = ExecutionContext(
                 run_id=self._run_id,
@@ -2540,9 +2756,9 @@ class IndustrialAgent:
                     verification,
                 )
 
-            # Close the inference-time TOCTOU window.  The robot must still be
-            # safe after model latency, and the controller receives the exact
-            # fresh observation id it must atomically revalidate.
+            # ---- 推理后复核:关闭 TOCTOU 窗口 ----
+            # 模型推理期间世界可能已变化,下发动作前必须基于最新观测重查安全;
+            # 控制器还会拿到确切的观测 id 做原子性写前再校验。
             try:
                 execution_observation = self.gateway.ingest_online(
                     self._observe_with_deadline(environment)
@@ -2614,6 +2830,7 @@ class IndustrialAgent:
                 )
             last_observation = execution_observation
             command_token = self._lifecycle.token.value
+            # ---- 安全校验:限位/工作空间/令牌检查,必要时限幅 ----
             decision = self.safety.validate_and_limit(
                 chunk,
                 last_observation,
@@ -2640,9 +2857,8 @@ class IndustrialAgent:
                         "limited_axes": list(decision.limited_axes),
                     },
                 )
-            # Receding-horizon policy: never execute an action generated before
-            # the newest observation. Remaining chunk steps are intentionally
-            # discarded and the VLA is queried again after verification.
+            # 滑动窗口(Receding-horizon)策略:绝不执行"先于最新观测"产生的动作;
+            # 动作块剩余步数被有意丢弃,验证后重新向 VLA 请求新块。
             try:
                 self._lifecycle.authorize(subtask.subtask_id, name)
             except AgentError as exc:
@@ -2677,6 +2893,7 @@ class IndustrialAgent:
                     verification,
                     event_start,
                 )
+            # 单步入队:每个动作块只执行第一步,其余丢弃,下轮重新推理
             self._queue.append(decision.chunk.steps[0])
             self._emit(
                 "action_chunk.accepted",
@@ -2698,6 +2915,7 @@ class IndustrialAgent:
                     ),
                 },
             )
+            # ---- 执行:逐步下发,写前校验防竞争 ----
             try:
                 while self._queue:
                     action = self._queue.popleft()
@@ -2725,10 +2943,9 @@ class IndustrialAgent:
                         subtask.status = SubtaskStatus.FAILED
                         return stopped
             except PreWriteStateStaleError as exc:
-                # The adapter's typed contract proves that the command was
-                # durably aborted before any controller write. Do not claim an
-                # execution or stop the cell; discard the chunk and ask the
-                # lifecycle-owned VLA for one bounded replan.
+                # 写前状态过期:类型化契约保证命令在控制器任何写入之前
+                # 已被持久化中止——不视为执行、也不停止产线,
+                # 丢弃该块并允许生命周期指定的 VLA 做一次有界重规划。
                 subtask_iterations = max(0, subtask_iterations - 1)
                 self._emit(
                     "execution.prewrite_state_stale",
@@ -2776,9 +2993,13 @@ class IndustrialAgent:
                     verification,
                     event_start,
                 )
+            # 记录已执行块 id:执行器重复下发同一 chunk 会被拒绝
             self._memory.completed_chunk_ids.append(decision.chunk.chunk_id)
 
+            # ---- 后置条件验证(多帧投票)----
             self._transition(AgentState.VERIFYING, "verify subtask postconditions")
+            # 交接子任务的验证分两步:先"候选帧"单帧预检,
+            # 通过后锁定双臂,再在锁定状态下重新采集投票帧
             handoff_subtask = (
                 self._lifecycle is not None
                 and subtask.subtask_id == ARM_A_PACK_HANDOFF_SUBTASK_ID
@@ -2811,7 +3032,7 @@ class IndustrialAgent:
                     if stopped is not None:
                         subtask.status = SubtaskStatus.FAILED
                         return stopped
-                    # All quorum frames must be captured after actuator lockout.
+                    # 投票帧必须全部在机械臂锁定(actuator lockout)之后采集
                     initial_frames = []
 
             frames, verification_terminal = collect_verification_frames(initial_frames)
@@ -2877,9 +3098,11 @@ class IndustrialAgent:
                     ],
                 },
             )
+            # ---- 验证通过:标记 VERIFIED 并推进/完成 ----
             if verification.verdict is Verdict.PASS:
                 subtask.status = SubtaskStatus.VERIFIED
                 if self._lifecycle is not None:
+                    # ---- 交接验证通过:授予 Arm_B 独占权(B_ONLY)----
                     if subtask.subtask_id == ARM_A_PACK_HANDOFF_SUBTASK_ID:
                         interlock_failure = self._fixed_arm_interlock_failure(
                             frames[-1],
@@ -2938,6 +3161,7 @@ class IndustrialAgent:
                             current_token,
                             "durable handoff.ready grants Arm B exclusive control",
                         )
+                    # ---- 终端子任务:最终互锁检查后完成生命周期 ----
                     elif subtask.subtask_id == ARM_B_TRANSPORT_SUBTASK_ID:
                         final_interlock_failure = (
                             self._fixed_observation_consistency_failure(frames[-1])
@@ -2981,6 +3205,7 @@ class IndustrialAgent:
                         "iterations": subtask_iterations,
                     },
                 )
+                # 最后一个子任务通过 → 整个任务成功
                 if subtask_index + 1 == len(self._plan.subtasks):
                     self._transition(
                         AgentState.SUCCEEDED, "all subtasks and postconditions passed"
@@ -2993,6 +3218,7 @@ class IndustrialAgent:
                         verification,
                         event_start,
                     )
+                # 推进到下一子任务:重置执行器与计数状态
                 self._transition(
                     AgentState.ADVANCING_SUBTASK,
                     "advance after verified current subtask",
@@ -3025,6 +3251,7 @@ class IndustrialAgent:
                 )
                 continue
 
+            # 双臂已锁定后验证失去多数 → 必须安全停止(不能留在锁定态)
             if handoff_subtask and self._lifecycle.token is ControlToken.HANDOFF_VERIFY:
                 subtask.status = SubtaskStatus.FAILED
                 return self._safe_stop(
@@ -3035,6 +3262,7 @@ class IndustrialAgent:
                     event_start,
                 )
 
+            # ---- repeat-until:验证失败且未达最大迭代 → 循环重试 ----
             if (
                 subtask.repeat_until_postcondition
                 and verification.verdict is Verdict.FAIL
@@ -3068,6 +3296,7 @@ class IndustrialAgent:
                     verification,
                 )
 
+            # ---- 闭环重决策:预算内的重观测-推理循环 ----
             if decisions_in_strategy_attempt < self.max_decisions_per_strategy_attempt:
                 self._emit(
                     "closed_loop.redecision",
@@ -3086,6 +3315,7 @@ class IndustrialAgent:
                 )
                 continue
 
+            # 决策预算耗尽:同执行器最后一次重规划,仍失败则本阶段终止
             current, should_continue = self._recover(
                 task=active_task,
                 current=current,

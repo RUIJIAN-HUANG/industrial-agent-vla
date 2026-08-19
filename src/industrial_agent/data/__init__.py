@@ -7,6 +7,7 @@ fields to the frozen online ``ActionChunk`` schema.
 
 from .padding import PaddingPolicy, PaddingResult, PaddingStrategy, pad_actions
 from .recorder import CanonicalRecorder, EpisodeMetadata
+from .recorder_v2 import CanonicalV2EpisodeMetadata, CanonicalV2Recorder
 from .replay import CanonicalEpisodeReader, OfflineEpisodeReplay, OfflineReplayAction
 from .split_registry import (
     DataLeakageError,
@@ -21,6 +22,8 @@ from .split_registry import (
 __all__ = [
     "CanonicalEpisodeReader",
     "CanonicalRecorder",
+    "CanonicalV2EpisodeMetadata",
+    "CanonicalV2Recorder",
     "DataLeakageError",
     "DatasetSplit",
     "EpisodeMetadata",

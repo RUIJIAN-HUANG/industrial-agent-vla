@@ -1,7 +1,7 @@
 # XH-202607 工业环境 VLA 智能体
 
 面向“工业环境下物体感知识别与指令交互型智能体研发”比赛的六人协作仓库。
-项目目标是在仿真中完成：
+项目目标是在仿真中完成两条相互隔离、共享底层合同的工程链路：
 
 > 预设任务指令 → π0.5 控制 Arm_A 装箱并送至固定交接位 →
 > 总控三帧核验并切换控制令牌 → OpenVLA-OFT 控制 Arm_B 搬箱 →
@@ -11,8 +11,28 @@
 在同一个任务中按固定顺序工作：前者只负责 Arm_A，后者只负责 Arm_B；失败时
 各自在本阶段使用新鲜观测有界重试，禁止跨角色替换。
 
-当前状态（2026-07-26）：**固定双 VLA 串行 Mock 和 Isaac Sim 场景生成代码
-可运行；真实 OpenVLA-OFT、π0.5、YOLO 权重和端到端 Isaac Sim 控制尚未集成。**
+当前状态（2026-08-18）：**V2 人工工业场景源码、静态合同、键盘采集、Pink IK
+与 Canonical Episode 入口已经合入 `main`；完整 Python CI 已通过。Isaac Sim
+可见 GUI、物理、IK、抓取和满载搬运仍需按 V2 Gate 生成正式证据。**
+
+## 当前工业场景口径
+
+当前场景真源是 `single_bin_manual_industrial_v2`，用于人工工业数据采集：
+
+- 两台 Franka：`Arm_A` 负责零件装箱与交接，`Arm_B` 负责料箱搬运；
+- 三台固定 RGB 相机：`CAM_A_TOP`、`CAM_HANDOFF`、`CAM_B_TOP`；
+- 8 个程序化工业零件：4 个轴件、2 个六角螺母、2 把开口扳手；
+- A/B/C/D 四个区域各放 2 件，P03/P04 初始倒立；
+- 一个 `2×4` 料箱，S11-S24 与 P01-P04/N01-N02/W01-W02 固定映射；
+- 料箱中央提梁提供 `BIN_CARRY_TCP`，计划满载质量为 `1.0 kg`；
+- 人工键盘动作按 `10 Hz` 写入 Canonical Episode，在线 Observation 禁止 GT。
+
+V2 的配置、构建、采集与验收入口见
+[V2 人工工业采集说明](docs/v2-manual-industrial-collection.md)。
+
+`single_bin_pack_handoff_v1` 仍是四 Agent 自动串行闭环的冻结 TaskProfile；其中
+P01-P04 和 `2×3` 料箱属于兼容基线，不应被误写为当前 V2 人工采集场景。V2 尚未
+宣称已经替换该自动闭环的 TaskProfile、指令或 Supervisor 后置条件。
 
 ![中文版：冻结四 Agent 双 VLA 双臂闭环](docs/architecture/assets/four-agent-fixed-dual-vla-architecture-v4-zh.png)
 
@@ -57,7 +77,8 @@
 | 判断代码、模型、数据和报告应放哪里 | [仓库目录与文件规范](docs/repository-structure.md) |
 | 查看团队的 Issue/PR/DoD 规则 | [CONTRIBUTING.md](CONTRIBUTING.md) |
 | 查看总 Agent 设计 | [Agent 架构文档](docs/architecture/agent-framework.md) |
-| 查看冻结场景与完整闭环 | [最终场景与流程](docs/architecture/final-frozen-scene-and-flow.md) |
+| 查看当前 V2 工业场景 | [V2 人工工业采集说明](docs/v2-manual-industrial-collection.md) |
+| 查看 V2 场景与 V1 自动闭环边界 | [场景与流程总说明](docs/architecture/final-frozen-scene-and-flow.md) |
 | 对接 D/E/B/F 服务 | [极详细接口契约](docs/architecture/interface-contracts.md) |
 | 采集训练数据并安排 B-F 工作 | [数据采集与五人执行指南](docs/project-management/data-collection-and-five-member-execution-guide.md) |
 | 查看真实完成度与评分缺口 | [项目看板](docs/project-management/dashboard.md) |

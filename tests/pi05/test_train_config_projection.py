@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from configs.pi05.train_config import (
+    ACTION_HORIZON,
     CANONICAL_ACTION_DIM,
     MODEL_ACTION_DIM,
     PI05_INDUSTRIAL_CONFIG,
@@ -17,6 +18,7 @@ def test_pi05_model_head_stays_base_checkpoint_compatible() -> None:
     assert PI05_INDUSTRIAL_CONFIG.model.action_dim == MODEL_ACTION_DIM == 32
     assert PI05_INDUSTRIAL_CONFIG.model.pi05 is True
     assert PI05_INDUSTRIAL_CONFIG.model.discrete_state_input is True
+    assert PI05_INDUSTRIAL_CONFIG.model.action_horizon == ACTION_HORIZON == 10
 
 
 def test_pi05_policy_projection_returns_canonical_n_by_7() -> None:

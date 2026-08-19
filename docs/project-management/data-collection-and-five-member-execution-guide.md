@@ -1,5 +1,24 @@
 # 单箱双臂 VLA：数据采集与 B–F 五位成员执行指南
 
+> **2026-08-18 当前执行口径：** 新采集优先使用
+> `single_bin_manual_industrial_v2`：8 个工件、A/B/C/D 各 2 件、2×4 料箱，
+> 计划通过 `simulation/run_v2_keyboard_collection.py` 人工生成 Canonical Episode；
+> 该 B 侧入口及其 V2 场景配置当前尚未进入仓库，补齐前不得正式采集。
+> 本文其余四工件、2×3 料箱、冻结双 VLA 指令与 40 天自动闭环安排保留为 V1
+> 兼容计划，不应写入 V2 Episode 的场景身份。
+
+## 当前 V2 人工采集基线（优先）
+
+1. 由 B 先提交 V2 场景配置、构建器、GUI 采集入口和场景 Preflight；
+2. 在 Isaac Sim 中依次完成静态、HOME、IK 和微动验收；
+3. 验收通过后才可使用计划入口
+   `python simulation/run_v2_keyboard_collection.py --output-dir <目录>` 采集；
+4. 固定槽位映射为 S11=P01、S12=P03、S13=N01、S14=W01、
+   S21=P02、S22=P04、S23=N02、S24=W02；
+5. 只有实际完成 GUI/物理/IK/抓取/满载搬运并保留证据后，才能将对应状态写为通过。
+
+完整参数与命令见 [V2 人工工业采集说明](../v2-manual-industrial-collection.md)。
+
 > 版本：v1.0
 >
 > 适用周期：六人 40 天
@@ -95,7 +114,8 @@ Supervisor 启动任务时读取的是人工预先配置的运行档案，例如
 
 #### C：先保证每条数据“可追、可回放、可转换”
 
-1. 按 `schemas/canonical-episode.schema.json` 生成 `episode.h5 + structure.json`。
+1. V1 按 `schemas/canonical-episode.schema.json`，V2 按
+   `schemas/canonical-episode-v2.schema.json` 生成 `episode.h5 + structure.json`。
 2. 独立记录三路 RGB（30Hz）、双臂 `state_7d`（60Hz）和动作（10Hz）。
 3. 在 Episode 开始前分配 Seed 与 Split，禁止采完后按帧随机切分。
 4. 实现录制中断清理、完整性检查、回放和 SHA-256 Manifest。
@@ -262,7 +282,8 @@ Schema 保留 `wrist_image` 键，但本版本在 Episode 元数据中固定写 
 不要把三个相机都强制复制给两个 VLA。Canonical 可以统一保存，转换器只选
 对应模型需要的视角，减少显存和训练噪声。
 
-当前实现的唯一结构真源是 `schemas/canonical-episode.schema.json`；旧的
+当前结构真源按版本分为 `schemas/canonical-episode.schema.json`（V1）和
+`schemas/canonical-episode-v2.schema.json`（V2）；旧的
 `meta.json + steps.jsonl` 方案已废止。关节数组、FSM 事件或额外诊断字段如需加入，
 必须升级 Canonical Schema 版本，不能临时塞入 HDF5。
 
@@ -271,6 +292,7 @@ Schema 保留 `wrist_image` 键，但本版本在 Episode 元数据中固定写 
 | 字段 | 示例/类型 | 负责人 | 说明 |
 |---|---|---|---|
 | `schema_version` | `"1.0"` | A/C | 变更必须升级版本 |
+| `canonical_schema_version` | `"2.0"` | A/C | V2 专用；不得与 V1 版本键并存 |
 | `episode_id` | `"train-a-000123"` | C | 全局唯一 |
 | `scene_seed` | 整数 | C | Reset、资产和布局根 Seed |
 | `task_id` | `"pack_handoff_v1"` | A | 固定运行档案 ID |
@@ -279,6 +301,7 @@ Schema 保留 `wrist_image` 键，但本版本在 Episode 元数据中固定写 
 | `scene_config_sha256` | `sha256:<64hex>` | B/C | 指向冻结场景配置 |
 | `frequency_contract` | 120/60/30/10 | B/C | 物理/控制/渲染/模型频率 |
 | `padding_policy` | 策略 + 可选长度 | A/C | 默认不 Padding；任何 Padding 必须有 mask |
+| V2 `padding_policy` | `none/null` | A/C/E | V2 禁止任何 masked padding 行 |
 | `outcome/failure_code` | 终局 + 可空错误码 | C/F | 非成功 Episode 必须有错误码 |
 | `wrist_image` | `null` | C | 冻结场景没有腕相机 |
 | `offline_gt_included` | `false` | C/F | Canonical/在线数据不含 GT |

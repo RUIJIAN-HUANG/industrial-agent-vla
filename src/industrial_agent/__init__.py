@@ -13,6 +13,14 @@ from .contracts import (
     TaskPlan,
     TaskSchema,
 )
+from .instructions import (
+    InstructionOption,
+    MVP_INSTRUCTION_OPTIONS,
+    MVP_P01_TO_S11,
+    mvp_instruction_for_task,
+    mvp_instruction_options,
+    normalize_mvp_instruction,
+)
 from .environment import PreWriteStateStaleError
 from .executor import build_executors_from_config
 from .fsm import AgentState
@@ -70,6 +78,12 @@ __all__ = [
     "ACTION_CONTRACT_VERSION",
     "OBSERVATION_VERSION",
     "TASK_SCHEMA_VERSION",
+    "InstructionOption",
+    "MVP_INSTRUCTION_OPTIONS",
+    "MVP_P01_TO_S11",
+    "mvp_instruction_for_task",
+    "mvp_instruction_options",
+    "normalize_mvp_instruction",
     "ActionChunk",
     "ActionStep",
     "AgentState",

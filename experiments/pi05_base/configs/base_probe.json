@@ -1,0 +1,10 @@
+{
+  "schema_version": "1.0",
+  "experiment_id": "pi05-base-compatibility-probe-v1",
+  "checkpoint_uri": "gs://openpi-assets/checkpoints/pi05_base",
+  "openpi_config_name": "pi05_droid",
+  "input_profile": "droid_joint_gripper",
+  "prompt": "Pick up the red part and place it into the bin.",
+  "mock_action_horizon": 15,
+  "mock_action_dim": 32
+}

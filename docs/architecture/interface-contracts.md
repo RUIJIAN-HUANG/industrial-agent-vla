@@ -4,6 +4,11 @@
 状态：冻结基线
 适用范围：Supervisor、π0.5、OpenVLA-OFT、YOLO、Isaac Sim Adapter、离线 mAP Evaluator
 
+> 场景适用性（2026-08-18）：本文冻结指令、`single_bin_pack_handoff_v1`、
+> P01-P04 与自动交接状态机属于 V1 自动闭环兼容基线。当前
+> `single_bin_manual_industrial_v2` 人工采集场景继续复用 Canonical Episode、
+> 动作维度、图像引用和安全边界等通用合同，但不会反向改写 V1 TaskProfile。
+
 ## 1. 冻结边界
 
 本项目只有四个 Agent：

@@ -1,5 +1,10 @@
 # π0.5 / openpi Service
 
+> 场景口径（2026-08-18）：下述“抓取四个零件、2×3 料箱”是 V1
+> `single_bin_pack_handoff_v1` 的冻结 TaskProfile。当前 V2 训练域是 8 工件、2×4
+> 料箱的人工工业采集场景；V2 Canonical 数据合同和 N−9 转换 Gate 已实现，但 B
+> 侧 GUI/物理采集入口仍缺失，尚未宣称 π0.5 已自动控制该场景。
+
 负责人：E。当前状态：接口占位，真实模型尚未集成。
 
 冻结定位：π0.5 是 Arm_A 的唯一 VLA。它直接接收预设的上游自然语言、
@@ -24,6 +29,36 @@ YOLO DetectionPacket 不是推理前置条件。π0.5 必须针对这一固定�
   将 `CAM_A_TOP` 引用解析为真实 RGB；冻结场景的 `wrist_image` 必须为
   `null`。Real 模式缺图、坏 SHA 或解码失败时必须 fail-closed，禁止使用零图、
   placeholder 或自动降级 Mock。
+
+## Canonical V2 数据 Gate
+
+V2 固定 `canonical_schema_version=2.0`、场景
+`single_bin_manual_industrial_v2`、任务 `P01_TO_S11` 和训练指令
+`把P01放到S11中`。`scripts/pi05/canonical_v2.py` 在读取时复核 JSON Schema、
+HDF5 SHA、三相机/双臂 Stream、有限 `float32[N,7]` state/action、无 padding 和
+Arm_A/`pi05` 身份。
+
+不依赖 LeRobot 的只读 Preflight：
+
+```powershell
+python scripts\pi05\convert_openpi_v2.py `
+  --data-dir <CANONICAL_V2_ROOT> `
+  --split-registry <SPLIT_REGISTRY_JSON> `
+  --preflight-only
+```
+
+真实转换在固定训练环境安装 LeRobot 后执行：
+
+```powershell
+python scripts\pi05\convert_openpi_v2.py `
+  --data-dir <CANONICAL_V2_ROOT> `
+  --split-registry <SPLIT_REGISTRY_JSON> `
+  --output-dir <LEROBOT_DATASET_ROOT> `
+  --repo-id <ORG/REPO_ID>
+```
+
+动作流必须连续 10 Hz；N 条动作严格生成 N−9 个 `[10,7]` 窗口。N<10、缺失
+精确 tick 观测、padding 或任何动作数值变化都会阻止发布。
 
 仓库已提供 [`handler.py`](handler.py) 的 `build_v1_infer_handler()` 作为
 `POST /v1/infer` 强制入口核心：它先解析并校验 CAS，再把只读 RGB 数组替换进
