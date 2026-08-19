@@ -577,7 +577,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if arguments and arguments[0] == "v1":
         arguments = arguments[1:]
 
-    args = parse_args(arguments)
+    args = parse_args() if argv is None else parse_args(arguments)
     if args.push_to_hub:
         print(
             "ERROR: this data-gate batch is offline-only; --push_to_hub is disabled",
