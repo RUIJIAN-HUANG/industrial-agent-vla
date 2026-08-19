@@ -114,6 +114,16 @@ def _validate_contiguous_action_timeline(reader: CanonicalV2Reader) -> None:
             )
 
 
+def _require_succeeded_episode(reader: CanonicalV2Reader) -> None:
+    outcome = reader.manifest["metadata"].get("outcome")
+    if outcome != "SUCCEEDED":
+        raise CanonicalV2Error(
+            "training conversion requires metadata.outcome == 'SUCCEEDED'",
+            episode_id=reader.episode_id,
+            field="metadata.outcome",
+        )
+
+
 def preflight_canonical_v2_windows(
     *,
     data_dir: str | Path,
@@ -129,6 +139,7 @@ def preflight_canonical_v2_windows(
     total_windows = 0
     for episode_dir in _find_episode_dirs(data_dir):
         with CanonicalV2Reader(episode_dir) as reader:
+            _require_succeeded_episode(reader)
             assignment = split_registry.assert_episode_allowed(
                 reader.episode_id,
                 is_training=False,
@@ -391,6 +402,7 @@ def convert_canonical_v2_to_lerobot(
         )
         for output_episode_index, episode_dir in enumerate(episode_dirs):
             with CanonicalV2Reader(episode_dir) as reader:
+                _require_succeeded_episode(reader)
                 assignment = split_registry.assert_episode_allowed(
                     reader.episode_id,
                     is_training=False,
