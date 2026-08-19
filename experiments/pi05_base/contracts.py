@@ -18,9 +18,7 @@ def is_pi05_base_checkpoint(reference: str) -> bool:
     """Return whether a reference identifies the unmodified π0.5 base checkpoint."""
 
     normalized = reference.strip().replace("\\", "/").rstrip("/")
-    return normalized == CANONICAL_BASE_CHECKPOINT or normalized.endswith(
-        "/pi05_base"
-    )
+    return normalized == CANONICAL_BASE_CHECKPOINT or normalized.endswith("/pi05_base")
 
 
 def _owned_read_only_array(value: Any, *, dtype: np.dtype[Any]) -> np.ndarray:
@@ -44,7 +42,9 @@ class ExperimentObservation:
     def __post_init__(self) -> None:
         if not isinstance(self.observation_id, str) or not self.observation_id.strip():
             raise ValueError("observation_id must be a non-empty string")
-        if isinstance(self.timestamp_ns, bool) or not isinstance(self.timestamp_ns, int):
+        if isinstance(self.timestamp_ns, bool) or not isinstance(
+            self.timestamp_ns, int
+        ):
             raise ValueError("timestamp_ns must be an integer")
         if self.timestamp_ns < 0:
             raise ValueError("timestamp_ns must be non-negative")

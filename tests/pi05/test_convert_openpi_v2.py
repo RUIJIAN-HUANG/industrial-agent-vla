@@ -66,10 +66,7 @@ def _record_episode(tmp_path: Path, *, action_count: int = 10) -> Path:
         camera_id: image_cas.write_rgb(frame, camera_id=camera_id)
         for camera_id in CAMERA_IDS
     }
-    states = {
-        arm_id: [0.4, 0.0, 0.3, 0.0, 0.0, 0.0, 0.375]
-        for arm_id in ARM_IDS
-    }
+    states = {arm_id: [0.4, 0.0, 0.3, 0.0, 0.0, 0.0, 0.375] for arm_id in ARM_IDS}
     writer = V2CollectionRecorder(
         tmp_path / "canonical",
         identity,

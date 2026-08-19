@@ -74,9 +74,7 @@ def normalize_mvp_instruction(text: str) -> InstructionOption:
         return _BY_TEXT[text]
     except (KeyError, TypeError) as exc:
         expected = ", ".join(sorted(_BY_TEXT))
-        raise ValueError(
-            f"unknown MVP instruction; use one of: {expected}"
-        ) from exc
+        raise ValueError(f"unknown MVP instruction; use one of: {expected}") from exc
 
 
 __all__ = [

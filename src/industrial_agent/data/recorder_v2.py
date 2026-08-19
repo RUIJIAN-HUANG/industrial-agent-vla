@@ -52,7 +52,10 @@ class CanonicalV2EpisodeMetadata(EpisodeMetadata):
             or self.scene_seed < 0
         ):
             raise ValueError("scene_seed must be a non-negative integer")
-        if not isinstance(self.git_sha, str) or _GIT_SHA.fullmatch(self.git_sha) is None:
+        if (
+            not isinstance(self.git_sha, str)
+            or _GIT_SHA.fullmatch(self.git_sha) is None
+        ):
             raise ValueError("git_sha must contain exactly 40 hexadecimal characters")
         if (
             not isinstance(self.scene_config_sha256, str)
@@ -102,7 +105,9 @@ class CanonicalV2Recorder(CanonicalRecorder):
         self._h5.flush()
 
     @staticmethod
-    def _validate_binary_action_gripper(action_7d: Sequence[float] | np.ndarray) -> None:
+    def _validate_binary_action_gripper(
+        action_7d: Sequence[float] | np.ndarray,
+    ) -> None:
         """V2 action commands are hardware endpoints, never continuous values."""
 
         values = np.asarray(action_7d, dtype=np.float32)
@@ -127,13 +132,9 @@ class CanonicalV2Recorder(CanonicalRecorder):
         if arm_id != V2_ARM_ID:
             raise ValueError(f"Canonical V2 actions require arm_id={V2_ARM_ID!r}")
         if executor != V2_EXECUTOR:
-            raise ValueError(
-                f"Canonical V2 actions require executor={V2_EXECUTOR!r}"
-            )
+            raise ValueError(f"Canonical V2 actions require executor={V2_EXECUTOR!r}")
         if subtask_id != V2_TASK_ID:
-            raise ValueError(
-                f"Canonical V2 actions require subtask_id={V2_TASK_ID!r}"
-            )
+            raise ValueError(f"Canonical V2 actions require subtask_id={V2_TASK_ID!r}")
         return CanonicalRecorder._validate_action_metadata(
             arm_id=arm_id,
             executor=executor,

@@ -191,6 +191,8 @@ def preflight_canonical_v2_windows(
         },
         "episodes": episodes,
     }
+
+
 def _create_dataset(
     *,
     repo_id: str,
@@ -469,6 +471,7 @@ def convert_canonical_v2_to_lerobot(
         if dataset_opener is None:
             if LeRobotDataset is None:
                 raise RuntimeError(f"LeRobot is unavailable: {LEROBOT_IMPORT_ERROR}")
+
             def opener(root: Path, name: str) -> Any:
                 return LeRobotDataset(repo_id=name, root=root)
         else:

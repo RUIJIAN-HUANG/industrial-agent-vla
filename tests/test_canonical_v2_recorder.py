@@ -77,16 +77,14 @@ def _record_complete_episode(tmp_path: Path) -> Path:
             timestamp_ns=1_000_000_000,
             physics_tick=0,
             sequence_id=0,
-                action_7d=[0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            action_7d=[0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
         )
         return recorder.save_episode(outcome="SUCCEEDED")
 
 
 def test_v2_recorder_writes_reader_valid_episode(tmp_path: Path) -> None:
     episode_path = _record_complete_episode(tmp_path)
-    manifest = json.loads(
-        (episode_path / "structure.json").read_text(encoding="utf-8")
-    )
+    manifest = json.loads((episode_path / "structure.json").read_text(encoding="utf-8"))
 
     assert manifest["canonical_schema_version"] == "2.0"
     assert "schema_version" not in manifest

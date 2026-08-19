@@ -297,9 +297,7 @@ def test_real_mode_without_wrist_omits_policy_input(
 
     def fake_infer(example):
         captured.update(example)
-        return {
-            "actions": np.zeros((MOCK_CHUNK_LEN, ACTION_DIM), dtype=np.float32)
-        }
+        return {"actions": np.zeros((MOCK_CHUNK_LEN, ACTION_DIM), dtype=np.float32)}
 
     fake_policy = MagicMock()
     fake_policy.client_type = "local"
@@ -427,7 +425,8 @@ def test_action_chunking_accepts_ten_and_publishes_only_first(
         tmp_path,
         actions=np.arange(MOCK_CHUNK_LEN * ACTION_DIM, dtype=np.float32).reshape(
             MOCK_CHUNK_LEN, ACTION_DIM
-        ) * 0.0,
+        )
+        * 0.0,
     )
     chunk = ex.infer(_make_minimal_obs(step_id=3))
     assert chunk.actions.shape == (1, ACTION_DIM)

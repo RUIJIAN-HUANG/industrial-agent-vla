@@ -28,9 +28,7 @@ RENDER_HZ = 30
 MODEL_INFERENCE_HZ = 10
 ACTION_DURATION_MS = 100
 SCHEMA_PATH = (
-    Path(__file__).resolve().parents[2]
-    / "schemas"
-    / "canonical-episode-v2.schema.json"
+    Path(__file__).resolve().parents[2] / "schemas" / "canonical-episode-v2.schema.json"
 )
 
 
@@ -294,7 +292,9 @@ class CanonicalV2Reader:
             for arm_id in EXPECTED_ARM_IDS
         ]
         if not np.array_equal(arm_ticks[0], arm_ticks[1]):
-            self._fail("Arm_A and Arm_B state ticks are not synchronized", "robot_state")
+            self._fail(
+                "Arm_A and Arm_B state ticks are not synchronized", "robot_state"
+            )
 
     def _validate_cameras(self) -> None:
         for camera_id in EXPECTED_CAMERA_IDS:

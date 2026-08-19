@@ -120,8 +120,7 @@ def evaluate_fresh_gt_votes(
             }
 
     if len(set(ids)) != expected_count or any(
-        current <= previous
-        for previous, current in zip(timestamps, timestamps[1:])
+        current <= previous for previous, current in zip(timestamps, timestamps[1:])
     ):
         return {
             "pass": False,
@@ -157,7 +156,9 @@ def evaluate_terminal_hold_drift(
             "failure_codes": ["P01_TERMINAL_HOLD_TOO_SHORT"],
         }
     try:
-        points = [_finite_point(point, name="position_world") for point in positions_world]
+        points = [
+            _finite_point(point, name="position_world") for point in positions_world
+        ]
         times = [float(value) for value in timestamps_s]
     except (TypeError, ValueError) as exc:
         raise ValueError("terminal hold positions and timestamps are invalid") from exc

@@ -43,10 +43,7 @@ def _images(image_cas: ImageCas) -> dict[str, object]:
 
 
 def _states() -> dict[str, list[float]]:
-    return {
-        arm_id: [0.4, 0.0, 0.3, 0.0, 0.0, 0.0, 1.0]
-        for arm_id in ARM_IDS
-    }
+    return {arm_id: [0.4, 0.0, 0.3, 0.0, 0.0, 0.0, 1.0] for arm_id in ARM_IDS}
 
 
 def test_v2_collection_boundary_writes_reader_valid_episode(tmp_path: Path) -> None:

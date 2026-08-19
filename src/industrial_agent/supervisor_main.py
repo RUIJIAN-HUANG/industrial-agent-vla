@@ -356,6 +356,7 @@ def _argument_parser() -> argparse.ArgumentParser:
     )
     return parser
 
+
 # ============================ 进程入口 ============================
 def main(argv: Sequence[str] | None = None) -> int:
     """CLI entry point; never substitutes a mock for a missing platform host."""

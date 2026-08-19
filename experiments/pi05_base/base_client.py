@@ -15,8 +15,7 @@ from .contracts import ExperimentConfig, ExperimentObservation, PolicyOutput
 class BasePolicyClient(Protocol):
     """Small boundary shared by Windows mock tests and Linux real inference."""
 
-    def infer(self, observation: ExperimentObservation) -> PolicyOutput:
-        ...
+    def infer(self, observation: ExperimentObservation) -> PolicyOutput: ...
 
 
 class OpenPiBaseClient:
