@@ -15,6 +15,7 @@ from industrial_agent.data.recorder_v2 import (
     V2_INSTRUCTION,
     V2_TASK_ID,
 )
+from configs.pi05.constants import OPENPI_COMMIT
 from simulation.v2_collection_state import V2CollectionContract
 
 
@@ -48,6 +49,9 @@ class CollectionPreflight:
     scene_id: str
     git_sha: str
     scene_config_sha256: str
+    frozen_collection_sha: str | None
+    expected_scene_config_sha256: str | None
+    openpi_git_sha: str | None
     training_allowed: bool
     full_task_required: bool
 
@@ -83,6 +87,10 @@ def build_collection_preflight(
     headless: bool,
     git_sha: str,
     worktree_clean: bool,
+    frozen_collection_sha: str | None = None,
+    expected_scene_config_sha256: str | None = None,
+    openpi_git_sha: str | None = None,
+    openpi_worktree_clean: bool | None = None,
 ) -> CollectionPreflight:
     """Validate immutable identity before constructing any Isaac object."""
 
@@ -136,6 +144,7 @@ def build_collection_preflight(
         raise CollectionPreflightError(f"scene config does not exist: {config}")
 
     raw_config = config.read_bytes()
+    actual_scene_sha = f"sha256:{sha256(raw_config).hexdigest()}"
     try:
         payload = json.loads(raw_config.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -153,6 +162,42 @@ def build_collection_preflight(
         raise CollectionPreflightError("collection mode must be manual_keyboard")
     if collection.get("online_gt_allowed") is not False:
         raise CollectionPreflightError("online ground truth must remain disabled")
+
+    formal = normalized_split in {CollectionSplit.TRAIN, CollectionSplit.VALIDATION}
+    normalized_frozen_sha: str | None = None
+    normalized_expected_scene_sha: str | None = None
+    normalized_openpi_sha: str | None = None
+    if formal:
+        if (
+            not isinstance(frozen_collection_sha, str)
+            or _GIT_SHA.fullmatch(frozen_collection_sha) is None
+        ):
+            raise CollectionPreflightError(
+                "formal collection requires --frozen-collection-sha"
+            )
+        normalized_frozen_sha = frozen_collection_sha.lower()
+        if normalized_frozen_sha != git_sha.lower():
+            raise CollectionPreflightError(
+                "current HEAD does not equal the frozen collection commit"
+            )
+        if not isinstance(expected_scene_config_sha256, str):
+            raise CollectionPreflightError(
+                "formal collection requires --expected-scene-config-sha256"
+            )
+        normalized_expected_scene_sha = expected_scene_config_sha256.lower()
+        if not normalized_expected_scene_sha.startswith("sha256:"):
+            normalized_expected_scene_sha = "sha256:" + normalized_expected_scene_sha
+        if normalized_expected_scene_sha != actual_scene_sha:
+            raise CollectionPreflightError(
+                "scene config SHA-256 does not match the frozen value"
+            )
+        if openpi_git_sha != OPENPI_COMMIT:
+            raise CollectionPreflightError(
+                f"OpenPI HEAD must equal {OPENPI_COMMIT}"
+            )
+        if openpi_worktree_clean is not True:
+            raise CollectionPreflightError("OpenPI worktree must be clean")
+        normalized_openpi_sha = openpi_git_sha
 
     episodes = _safe_output_root(episode_root, "episode_root")
     cas = _safe_output_root(cas_root, "cas_root")
@@ -176,7 +221,10 @@ def build_collection_preflight(
         canonical_schema_version=CANONICAL_V2_VERSION,
         scene_id=contract.scene_id,
         git_sha=git_sha.lower(),
-        scene_config_sha256=f"sha256:{sha256(raw_config).hexdigest()}",
+        scene_config_sha256=actual_scene_sha,
+        frozen_collection_sha=normalized_frozen_sha,
+        expected_scene_config_sha256=normalized_expected_scene_sha,
+        openpi_git_sha=normalized_openpi_sha,
         training_allowed=normalized_split is CollectionSplit.TRAIN,
         full_task_required=normalized_split
         in {CollectionSplit.TRAIN, CollectionSplit.VALIDATION},

@@ -1,4 +1,5 @@
 import json
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
@@ -8,11 +9,13 @@ from simulation.v2_collection_preflight import (
     CollectionSplit,
     build_collection_preflight,
 )
+from configs.pi05.constants import OPENPI_COMMIT
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CONFIG = REPO_ROOT / "simulation/configs/single_bin_scene_v2.json"
 GIT_SHA = "a" * 40
+SCENE_SHA = f"sha256:{sha256(CONFIG.read_bytes()).hexdigest()}"
 
 
 def _build(tmp_path: Path, **overrides):
@@ -28,6 +31,10 @@ def _build(tmp_path: Path, **overrides):
         "headless": False,
         "git_sha": GIT_SHA,
         "worktree_clean": True,
+        "frozen_collection_sha": GIT_SHA,
+        "expected_scene_config_sha256": SCENE_SHA,
+        "openpi_git_sha": OPENPI_COMMIT,
+        "openpi_worktree_clean": True,
     }
     values.update(overrides)
     return build_collection_preflight(**values)
@@ -100,6 +107,42 @@ def test_headless_manual_collection_is_rejected(tmp_path: Path) -> None:
 def test_dirty_worktree_is_rejected(tmp_path: Path) -> None:
     with pytest.raises(CollectionPreflightError, match="worktree"):
         _build(tmp_path, worktree_clean=False)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("task_id", "p01_to_s11"),
+        ("instruction", "把 P01 放到 S11 中"),
+        ("instruction", "把P01放到S11中。"),
+    ],
+)
+def test_atomic_identity_must_match_exactly(
+    tmp_path: Path, field: str, value: str
+) -> None:
+    with pytest.raises(CollectionPreflightError, match=field):
+        _build(tmp_path, **{field: value})
+
+
+def test_formal_collection_rejects_unfrozen_provenance(tmp_path: Path) -> None:
+    with pytest.raises(CollectionPreflightError, match="frozen collection"):
+        _build(
+            tmp_path,
+            split=CollectionSplit.TRAIN,
+            frozen_collection_sha="b" * 40,
+        )
+    with pytest.raises(CollectionPreflightError, match="scene config SHA"):
+        _build(
+            tmp_path,
+            split=CollectionSplit.TRAIN,
+            expected_scene_config_sha256=f"sha256:{'0' * 64}",
+        )
+    with pytest.raises(CollectionPreflightError, match="OpenPI HEAD"):
+        _build(
+            tmp_path,
+            split=CollectionSplit.TRAIN,
+            openpi_git_sha="b" * 40,
+        )
 
 
 @pytest.mark.parametrize(

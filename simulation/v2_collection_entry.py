@@ -36,6 +36,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--task-id", required=True)
     parser.add_argument("--instruction", required=True)
     parser.add_argument("--scene-seed", type=int, required=True)
+    parser.add_argument("--frozen-collection-sha")
+    parser.add_argument("--expected-scene-config-sha256")
+    parser.add_argument("--openpi-root", type=Path)
     parser.add_argument(
         "--split",
         choices=tuple(item.value for item in CollectionSplit),
@@ -91,6 +94,10 @@ def preflight_from_args(
         )
     if not 0.0 < args.rotation_step_deg <= 5.0:
         raise ValueError("--rotation-step-deg must be in (0, 5]")
+    openpi_sha: str | None = None
+    openpi_clean: bool | None = None
+    if args.openpi_root is not None:
+        openpi_sha, openpi_clean = git_identity(args.openpi_root.expanduser().resolve())
     return build_collection_preflight(
         config_path=args.config,
         episode_root=args.episode_root,
@@ -103,6 +110,10 @@ def preflight_from_args(
         headless=args.headless,
         git_sha=git_sha,
         worktree_clean=worktree_clean,
+        frozen_collection_sha=args.frozen_collection_sha,
+        expected_scene_config_sha256=args.expected_scene_config_sha256,
+        openpi_git_sha=openpi_sha,
+        openpi_worktree_clean=openpi_clean,
     )
 
 
