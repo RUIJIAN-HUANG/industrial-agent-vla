@@ -1,0 +1,112 @@
+# V2 人工工业零件采集
+
+> 场景 ID：`single_bin_manual_industrial_v2`
+>
+> 当前状态：Canonical V2 数据合同、Recorder、Reader 和转换 Preflight 已实现；
+> B 侧场景配置、构建器、GUI/物理/IK/抓取/满载搬运尚未交付
+>
+> 计划配置真源：`simulation/configs/single_bin_scene_v2.json`（当前仓库尚不存在）
+
+## 当前仓库实现边界
+
+已存在并通过自动测试的数据链路：
+
+- `schemas/canonical-episode-v2.schema.json`：V2 落盘合同；
+- `src/industrial_agent/data/recorder_v2.py`：无 padding 的 V2 Recorder；
+- `scripts/pi05/canonical_v2.py`：Schema、HDF5、SHA 和数值级 Reader；
+- `simulation/v2_collection_recorder.py`：未来 Isaac GUI 入口使用的同步写入边界；
+- `scripts/pi05/convert_openpi_v2.py`：10 步完整窗口和 N−9 Preflight/转换。
+
+`simulation/v2_collection_recorder.py` 不是可运行的 GUI 采集入口。下表中 B 侧
+V2 场景与验收脚本当前均未出现在仓库，补齐并通过验收前禁止正式采集。
+
+## MVP 指令选项
+
+MVP 界面显示完整、易懂的自然语言，但采集后台和训练数据只保存统一的
+Canonical 指令。当前唯一选项定义在
+`configs/mvp-instruction-options.json`：
+
+| task_id | 界面显示 | Canonical/训练指令 |
+|---|---|---|
+| `P01_TO_S11` | 帮我把螺母P01放置到料箱的S11格子中。 | 把P01放到S11中 |
+
+界面不得自行改写、补充或删除文字；采集端将显示文本解析为同一
+`task_id` 后，把 Canonical 指令写入 Episode 元数据。V1 的四零件装箱指令
+仍保持独立，不得与该 MVP 选项混用。
+
+V2 是当前工业数据采集场景，与 V1 的四零件自动闭环隔离。V1 配置、构建入口、
+冻结 TaskProfile 和 P01 自动脚本继续作为兼容基线，不得因 V2 文档更新而静默改写。
+
+## 场景组成
+
+- 两台 Franka：`Arm_A`、`Arm_B`，均有显式 HOME；
+- 三台 `1280×720`、82° HFOV 固定 RGB 相机：`CAM_A_TOP`、
+  `CAM_HANDOFF`、`CAM_B_TOP`；
+- 四个轴件：P01/P02 正立，P03/P04 倒立；
+- 两颗带可见通孔的简化六角螺母：N01/N02；
+- 两把带平行手柄和开口端的简化扳手：W01/W02；
+- A/B/C/D 四个区域各 2 件；
+- 一个 `0.30×0.22×0.09 m` 的 `2×4` 料箱；
+- 固定 S11-S24 配方映射和中央提梁 `BIN_CARRY_TCP`；
+- 计划满载质量 `1.0 kg`，计划重心相对提梁投影误差 `3 mm`；
+- 在线 Observation/Canonical 字段禁止 GT，GT 只能进入离线目录。
+
+## 固定槽位映射
+
+| 槽位 | 零件 | 类型 | 槽位 | 零件 | 类型 |
+|---|---|---|---|---|---|
+| S11 | P01 | 轴件 | S21 | P02 | 轴件 |
+| S12 | P03 | 轴件 | S22 | P04 | 轴件 |
+| S13 | N01 | 螺母 | S23 | N02 | 螺母 |
+| S14 | W01 | 扳手 | S24 | W02 | 扳手 |
+
+## 入口与用途
+
+| 入口 | 用途 | 是否可作为正式场景通过证据 |
+|---|---|---|
+| `run_v2_scene_acceptance.py` | 无 Isaac Sim 的静态合同、资产和质量预算检查 | 否 |
+| `build_single_bin_scene_v2.py` | 生成 V2 USD，可用于诊断 | 否 |
+| `run_v2_gui_scene_acceptance.py` | 可见 GUI 构建、保存 USD、三相机图和总览图 | 是，限场景外观 |
+| `run_v2_home_acceptance.py` | 两臂 HOME 与控制器检查 | 是，限 HOME |
+| `run_v2_ik_reachability_acceptance.py` | V2 目标位 IK 可达性 | 是，限 IK |
+| `run_v2_dual_arm_micro_motion_acceptance.py` | 双臂微动作和共享区安全门禁 | 是，限微动作 |
+| `run_v2_keyboard_collection.py` | 可见 GUI 人工键盘采集一个 Canonical Episode | 仅在预检与数据 QA 全通过后 |
+
+## 推荐验收顺序
+
+1. 运行静态合同：
+
+   ```powershell
+   python simulation\run_v2_scene_acceptance.py `
+     --evidence-dir artifacts\v2\static
+   ```
+
+2. 使用 Isaac Sim 可见 GUI 构建场景，保存 USD、三路相机图和总览图。
+3. 验证两臂显式 HOME、IK、碰撞与交接互锁。
+4. 依次练习正立轴件、倒立轴件纠正、螺母和扳手。
+5. 验证空箱、满箱和 20 次满载搬运。
+6. 最后执行正式 Canonical Episode 采集。
+
+## Canonical→LeRobot 数据 Preflight
+
+获得至少一条正式 V2 Episode 和经过 SHA 校验的 Split Registry 后，先运行只读检查：
+
+```powershell
+python scripts\pi05\convert_openpi_v2.py `
+  --data-dir <CANONICAL_V2_ROOT> `
+  --split-registry <SPLIT_REGISTRY_JSON> `
+  --preflight-only
+```
+
+每条 Episode 必须包含连续 10 Hz 动作，N 条动作只生成 N−9 个完整 `[10,7]`
+窗口。N<10、缺 tick、padding、NaN/Inf 或错误身份一律拒绝。真实 LeRobot 转换还
+要求在固定训练环境安装 LeRobot；当前普通 CI 环境不包含该依赖。
+
+## 状态声明规则
+
+- 静态 `PASS` 只表示 JSON、程序化资产、槽位、质量和相机合同一致；
+- 没有四张 GUI 证据时，不得宣称场景视觉验收通过；
+- 没有 HOME、IK、碰撞和搬运证据时，不得宣称机器人执行通过；
+- 练习 Episode 默认不可训练；只有预检、终局、回放、GT 隔离和数据 QA 全通过，
+  才能把 Episode 标记为训练可用；
+- V2 当前是人工采集链路，不得把它描述为已完成的八件全自动 Supervisor 闭环。

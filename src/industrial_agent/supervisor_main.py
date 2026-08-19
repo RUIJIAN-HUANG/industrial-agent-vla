@@ -4,6 +4,13 @@ The platform-specific environment is injected through a factory so this module
 does not import Isaac Sim, model weights, or simulator APIs into the Supervisor
 process.  A factory may return either an ``ExecutionEnvironment`` or an
 ``EnvironmentHost`` that pumps an owner-thread runtime such as Isaac Sim.
+
+模块说明:
+    这是生产环境下"固定四 Agent 监督器"(Supervisor)的组装入口。
+    平台相关的环境(如 Isaac Sim)通过工厂函数注入,因此本模块不会
+    把模拟器/模型权重等依赖导入 Supervisor 进程。工厂返回的是
+    ``ExecutionEnvironment`` 或包装了平台主线程运行时(如 Isaac Sim)
+    的 ``EnvironmentHost``。
 """
 
 from __future__ import annotations
@@ -34,30 +41,45 @@ from .perception import PerceptionTransport, build_perception_from_config
 
 
 LOGGER = logging.getLogger(__name__)
+# 配置文件/任务文件的最大体积限制(1 MB),防止异常大文件拖垮进程
 _MAX_CONFIG_BYTES = 1024 * 1024
 _MAX_TASK_BYTES = 1024 * 1024
+# 泛型类型变量,用于 EnvironmentHost.run 返回任意类型
 _T = TypeVar("_T")
 
 
 class SupervisorShutdownRequested(BaseException):
     """Raised on SIGTERM so the active Agent executes its safe-stop path."""
 
+    # 收到 SIGTERM/SIGINT 时抛出该异常,让正在运行的 Agent
+    # 有机会执行安全停机(safe-stop)流程而不是被直接强杀。
+
 
 @runtime_checkable
 class EnvironmentHost(Protocol):
     """Own a platform environment and run Supervisor work in the correct thread."""
+
+    # 协议:持有平台环境,并确保 Supervisor 的工作在正确的线程中执行
+    # (例如 Isaac Sim 要求某些调用在渲染主线程中进行)。
 
     environment: ExecutionEnvironment
 
     def run(self, operation: Callable[[], _T]) -> _T:
         """Execute work while servicing the platform's owner-thread loop."""
 
+        # 执行 operation,同时为平台的"所有者线程"循环提供泵(心跳)服务。
+
     def close(self, reason: str) -> None:
         """Release platform resources after motion has been stopped."""
+
+        # 运动停止后,释放平台资源(退出码清理阶段调用)。
 
 
 class DirectEnvironmentHost:
     """Host for environments that do not require an owner-thread pump."""
+
+    # 面向"不需要主线程泵"的环境:直接在调用线程里同步执行操作,
+    # close 为空操作。是 EnvironmentHost 的最简单实现。
 
     def __init__(self, environment: ExecutionEnvironment) -> None:
         if not isinstance(environment, ExecutionEnvironment):
@@ -75,6 +97,11 @@ class DirectEnvironmentHost:
 
 
 def _load_json_object(path: Path, *, max_bytes: int, label: str) -> dict[str, Any]:
+    # 读取并解析 JSON 文件,统一做三类检查:
+    # 1. 文件存在性/可读性/大小上限(max_bytes);
+    # 2. 编码必须是 UTF-8 且内容为合法 JSON;
+    # 3. 根节点必须是 JSON 对象(Mapping)。
+    # 任何一步失败都抛出带 label 的明确错误信息,方便定位是哪个文件出错。
     if not isinstance(path, Path):
         raise TypeError(f"{label} path must be pathlib.Path")
     try:
@@ -109,12 +136,14 @@ def _load_json_object(path: Path, *, max_bytes: int, label: str) -> dict[str, An
 def load_agent_config(path: Path) -> dict[str, Any]:
     """Load a bounded production Agent configuration object."""
 
+    # 加载 Agent 配置(JSON 对象),体积上限 _MAX_CONFIG_BYTES。
     return _load_json_object(path, max_bytes=_MAX_CONFIG_BYTES, label="Agent config")
 
 
 def load_task(path: Path) -> TaskSchema:
     """Load and validate one immutable task contract."""
 
+    # 加载任务契约文件并转成不可变的 TaskSchema(带校验)。
     raw = _load_json_object(path, max_bytes=_MAX_TASK_BYTES, label="Task")
     return TaskSchema.from_dict(raw)
 
@@ -128,6 +157,11 @@ def build_supervisor(
 ) -> IndustrialAgent:
     """Wire both VLA adapters, YOLO, and the Supervisor from one config."""
 
+    # 从同一份配置装配出完整系统:
+    #   - build_executors_from_config: 两个 VLA 执行器(ProcessTransport);
+    #   - build_perception_from_config: YOLO 感知服务(PerceptionTransport);
+    #   - IndustrialAgent.from_config: 组装成固定四 Agent 监督器。
+    # transport_factory 可注入自定义传输工厂(便于测试替换为 mock)。
     if not isinstance(config, Mapping):
         raise TypeError("config must be a mapping")
     if transport_factory is not None and not callable(transport_factory):
@@ -137,6 +171,7 @@ def build_supervisor(
         service_name: str,
         base_url: str,
     ) -> BoundedHTTPTransport:
+        # 默认工厂:返回带连接数上限的 HTTP 传输(service_name 仅作校验用)。
         if not isinstance(service_name, str) or not service_name.strip():
             raise ValueError("service_name must be a non-empty string")
         return BoundedHTTPTransport(base_url)
@@ -154,7 +189,7 @@ def build_supervisor(
         executors,
         config,
         perception=perception,
-        require_perception=True,
+        require_perception=True,  # 感知(视觉)是硬性依赖,缺失则启动失败
     )
 
 
@@ -164,6 +199,11 @@ def resolve_environment_host(
 ) -> EnvironmentHost:
     """Resolve ``module:callable`` and validate the returned platform host."""
 
+    # 把 "module.path:callable" 形式的工厂引用解析成可调用的工厂,
+    # 调用后校验返回值的类型:
+    #   - 返回 ExecutionEnvironment -> 包一层 DirectEnvironmentHost;
+    #   - 返回 EnvironmentHost      -> 校验其 environment 字段后直接使用。
+    # 这保证 Supervisor 进程不直接 import 平台 SDK,平台接入点只有这一个。
     if not isinstance(factory_reference, str) or not factory_reference.strip():
         raise ValueError("environment factory reference must be non-empty")
     module_name, separator, attribute_name = factory_reference.partition(":")
@@ -212,6 +252,9 @@ def resolve_environment_host(
 
 
 def _json_compatible(value: Any) -> Any:
+    # 把 RunResult 递归转换为纯 JSON 兼容的数据:
+    # Enum -> 取值;dataclass -> 字段字典;Mapping/序列 -> 递归转换。
+    # 遇到无法序列化的类型直接抛 TypeError。
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
     if isinstance(value, Enum):
@@ -231,6 +274,7 @@ def _json_compatible(value: Any) -> Any:
 def run_result_to_dict(result: RunResult) -> dict[str, Any]:
     """Convert a RunResult into a stable JSON-compatible process result."""
 
+    # 运行结果转 JSON 字典,供进程退出时打印到 stdout,由外部进程读取。
     if not isinstance(result, RunResult):
         raise TypeError("result must be RunResult")
     converted = _json_compatible(result)
@@ -240,6 +284,9 @@ def run_result_to_dict(result: RunResult) -> dict[str, Any]:
 
 
 def _attempt_safe_stop(environment: ExecutionEnvironment, reason: str) -> bool:
+    # 向环境请求安全停机(先停运动再释放资源),返回是否确认成功。
+    # 失败(异常 / 回执类型不对 / 未被确认)只记录日志并返回 False,
+    # 由调用方决定退出码,不会让停机失败反过来抛异常。
     try:
         receipt = environment.safe_stop(reason)
     except (AgentError, OSError, RuntimeError, TimeoutError, ValueError) as exc:
@@ -261,11 +308,14 @@ def _attempt_safe_stop(environment: ExecutionEnvironment, reason: str) -> bool:
 
 
 def _signal_handler(signum: int, frame: Any) -> None:
+    # 信号处理器:把 SIGINT/SIGTERM 转成异常抛到主流程里,
+    # 这样"收到信号"和"普通异常"走同一套 try/finally 清理路径。
     del frame
     raise SupervisorShutdownRequested(f"received process signal {signum}")
 
 
 def _install_signal_handlers() -> dict[int, Any]:
+    # 安装 SIGINT/SIGTERM 处理器,并返回之前安装的处理器以便恢复。
     previous: dict[int, Any] = {}
     for signum in (signal.SIGINT, signal.SIGTERM):
         previous[signum] = signal.getsignal(signum)
@@ -274,11 +324,17 @@ def _install_signal_handlers() -> dict[int, Any]:
 
 
 def _restore_signal_handlers(previous: Mapping[int, Any]) -> None:
+    # 恢复安装前的信号处理器(保证被嵌入调用时不干扰宿主进程)。
     for signum, handler in previous.items():
         signal.signal(signum, handler)
 
 
 def _argument_parser() -> argparse.ArgumentParser:
+    # 命令行参数:
+    #   --config / --task            必填:配置文件和任务文件路径;
+    #   --environment-factory        平台工厂引用,可用环境变量
+    #                                INDUSTRIAL_AGENT_ENVIRONMENT_FACTORY 兜底;
+    #   --log-level                  日志级别。
     parser = argparse.ArgumentParser(
         description="Run the fixed four-Agent Supervisor against a platform host."
     )
@@ -300,10 +356,20 @@ def _argument_parser() -> argparse.ArgumentParser:
     )
     return parser
 
-
+# ============================ 进程入口 ============================
 def main(argv: Sequence[str] | None = None) -> int:
     """CLI entry point; never substitutes a mock for a missing platform host."""
 
+    # 主流程步骤:
+    #   1. 解析参数并配置日志;
+    #   2. 加载 Agent 配置与任务文件;
+    #   3. 装配监督器(两个 VLA 执行器 + YOLO 感知);
+    #   4. 解析环境工厂,取得平台 host;
+    #   5. 安装信号处理器后,在 host 的线程上下文中运行任务;
+    #   6. 任务完成后请求安全停机,把 RunResult 以 JSON 打印到 stdout;
+    #   7. 异常/中断时也尽力安全停机,最终恢复信号处理器并关闭 host。
+    # 退出码约定:0 成功 / 1 任务执行失败 / 2 启动或运行期错误 /
+    #            3 安全停机未确认 / 130 收到中断信号。
     args = _argument_parser().parse_args(argv)
     logging.basicConfig(
         level=getattr(logging, args.log_level),
@@ -323,9 +389,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         supervisor = build_supervisor(config)
         host = resolve_environment_host(args.environment_factory, config)
         previous_handlers = _install_signal_handlers()
+        # 任务在 host.run 中执行:由 host 决定是否需要在平台主线程泵里运行
         result = host.run(lambda: supervisor.run(task, host.environment))
         if not isinstance(result, RunResult):
             raise TypeError("environment host returned a non-RunResult value")
+        # 任务结束后先安全停机(撤销运动),再输出结果
         stop_confirmed = _attempt_safe_stop(
             host.environment,
             "Supervisor task completed; revoke motion before process exit",
@@ -337,6 +405,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 3
         return 0 if result.success else 1
     except (KeyboardInterrupt, SupervisorShutdownRequested) as exc:
+        # 用户/系统中断:同样走安全停机,尽量让平台回到安全状态
         LOGGER.warning("Supervisor shutdown requested: %s", exc)
         if host is None:
             return 130
@@ -354,11 +423,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         TypeError,
         ValueError,
     ) as exc:
+        # 启动或运行期错误:记录堆栈,若 host 已建立则尽力安全停机
         LOGGER.exception("Supervisor startup or execution failed: %s", exc)
         if host is not None:
             _attempt_safe_stop(host.environment, "Supervisor failed before clean exit")
         return 2
     finally:
+        # 无论成功失败:恢复信号处理器、关闭平台 host(关闭失败则抛出,
+        # 避免掩盖真实错误时保留关键日志)
         if previous_handlers:
             _restore_signal_handlers(previous_handlers)
         if host is not None:
@@ -377,4 +449,5 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    # 以脚本方式运行时调用 main,并把返回码传给系统
     sys.exit(main())

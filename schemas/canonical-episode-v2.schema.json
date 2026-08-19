@@ -1,0 +1,721 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://industrial-agent.local/schemas/canonical-episode-v2.schema.json",
+  "title": "Canonical Episode V2 Structure Manifest",
+  "description": "Offline HDF5 manifest for the frozen V2 manual industrial MVP. It does not alter online Observation or ActionChunk contracts.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "canonical_schema_version",
+    "metadata",
+    "storage",
+    "streams"
+  ],
+  "properties": {
+    "canonical_schema_version": {
+      "const": "2.0"
+    },
+    "metadata": {
+      "$ref": "#/$defs/metadata"
+    },
+    "storage": {
+      "$ref": "#/$defs/storage"
+    },
+    "streams": {
+      "$ref": "#/$defs/streams"
+    }
+  },
+  "$defs": {
+    "nonBlank": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "frequencyContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "physics_hz",
+        "control_hz",
+        "render_hz",
+        "model_inference_hz"
+      ],
+      "properties": {
+        "physics_hz": {
+          "const": 120
+        },
+        "control_hz": {
+          "const": 60
+        },
+        "render_hz": {
+          "const": 30
+        },
+        "model_inference_hz": {
+          "const": 10
+        }
+      }
+    },
+    "paddingPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "strategy",
+        "target_length"
+      ],
+      "properties": {
+        "strategy": {
+          "const": "none"
+        },
+        "target_length": {
+          "const": null
+        }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "episode_id",
+        "scene_id",
+        "task_id",
+        "instruction",
+        "scene_seed",
+        "git_sha",
+        "scene_config_sha256",
+        "created_at_utc",
+        "outcome",
+        "failure_code",
+        "wrist_image",
+        "offline_gt_included",
+        "frequency_contract",
+        "padding_policy"
+      ],
+      "properties": {
+        "episode_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]{1,128}$"
+        },
+        "scene_id": {
+          "const": "single_bin_manual_industrial_v2"
+        },
+        "task_id": {
+          "const": "P01_TO_S11"
+        },
+        "instruction": {
+          "const": "把P01放到S11中"
+        },
+        "scene_seed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "git_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "scene_config_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "created_at_utc": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "outcome": {
+          "enum": [
+            "SUCCEEDED",
+            "FAILED",
+            "SAFE_STOPPED",
+            "SAFE_STOP_FAILED"
+          ]
+        },
+        "failure_code": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "wrist_image": {
+          "const": null
+        },
+        "offline_gt_included": {
+          "const": false
+        },
+        "frequency_contract": {
+          "$ref": "#/$defs/frequencyContract"
+        },
+        "padding_policy": {
+          "$ref": "#/$defs/paddingPolicy"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "outcome": {
+                "const": "SUCCEEDED"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "failure_code": {
+                "const": null
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "failure_code": {
+                "$ref": "#/$defs/nonBlank"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "dataset1D": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "dtype",
+        "shape"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^/"
+        },
+        "dtype": {
+          "$ref": "#/$defs/nonBlank"
+        },
+        "shape": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "prefixItems": [
+            {
+              "type": "integer",
+              "minimum": 1
+            }
+          ]
+        }
+      }
+    },
+    "vector7Float32Dataset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "dtype",
+        "shape"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^/(robot_state/(Arm_A|Arm_B)/state_7d|actions/action_7d)$"
+        },
+        "dtype": {
+          "const": "float32"
+        },
+        "shape": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "prefixItems": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "const": 7
+            }
+          ]
+        }
+      }
+    },
+    "rgbDataset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "dtype",
+        "shape"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^/cameras/(CAM_A_TOP|CAM_HANDOFF|CAM_B_TOP)/rgb$"
+        },
+        "dtype": {
+          "const": "uint8"
+        },
+        "shape": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "prefixItems": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "const": 720
+            },
+            {
+              "const": 1280
+            },
+            {
+              "const": 3
+            }
+          ]
+        }
+      }
+    },
+    "uint64TimelineDataset": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/dataset1D"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "path": {
+              "pattern": "^/(cameras/(CAM_A_TOP|CAM_HANDOFF|CAM_B_TOP)|robot_state/(Arm_A|Arm_B)|actions)/(timestamp_ns|physics_tick|sequence_id)$"
+            },
+            "dtype": {
+              "const": "uint64"
+            }
+          }
+        }
+      ]
+    },
+    "cameraStream": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "count",
+        "frequency_hz",
+        "fallback_count",
+        "datasets"
+      ],
+      "properties": {
+        "count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "frequency_hz": {
+          "const": 30
+        },
+        "fallback_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "datasets": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "timestamp_ns",
+            "physics_tick",
+            "sequence_id",
+            "rgb",
+            "cas_uri",
+            "image_sha256",
+            "is_fallback",
+            "dropped_before"
+          ],
+          "properties": {
+            "timestamp_ns": {
+              "$ref": "#/$defs/uint64TimelineDataset"
+            },
+            "physics_tick": {
+              "$ref": "#/$defs/uint64TimelineDataset"
+            },
+            "sequence_id": {
+              "$ref": "#/$defs/uint64TimelineDataset"
+            },
+            "rgb": {
+              "$ref": "#/$defs/rgbDataset"
+            },
+            "cas_uri": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/dataset1D"
+                },
+                {
+                  "properties": {
+                    "path": {
+                      "pattern": "^/cameras/(CAM_A_TOP|CAM_HANDOFF|CAM_B_TOP)/cas_uri$"
+                    },
+                    "dtype": {
+                      "const": "utf-8"
+                    }
+                  }
+                }
+              ]
+            },
+            "image_sha256": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/dataset1D"
+                },
+                {
+                  "properties": {
+                    "path": {
+                      "pattern": "^/cameras/(CAM_A_TOP|CAM_HANDOFF|CAM_B_TOP)/image_sha256$"
+                    },
+                    "dtype": {
+                      "const": "utf-8"
+                    }
+                  }
+                }
+              ]
+            },
+            "is_fallback": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/dataset1D"
+                },
+                {
+                  "properties": {
+                    "path": {
+                      "pattern": "^/cameras/(CAM_A_TOP|CAM_HANDOFF|CAM_B_TOP)/is_fallback$"
+                    },
+                    "dtype": {
+                      "const": "bool"
+                    }
+                  }
+                }
+              ]
+            },
+            "dropped_before": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/dataset1D"
+                },
+                {
+                  "properties": {
+                    "path": {
+                      "pattern": "^/cameras/(CAM_A_TOP|CAM_HANDOFF|CAM_B_TOP)/dropped_before$"
+                    },
+                    "dtype": {
+                      "const": "uint32"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "stateStream": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "count",
+        "frequency_hz",
+        "datasets"
+      ],
+      "properties": {
+        "count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "frequency_hz": {
+          "const": 60
+        },
+        "datasets": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "timestamp_ns",
+            "physics_tick",
+            "sequence_id",
+            "state_7d"
+          ],
+          "properties": {
+            "timestamp_ns": {
+              "$ref": "#/$defs/uint64TimelineDataset"
+            },
+            "physics_tick": {
+              "$ref": "#/$defs/uint64TimelineDataset"
+            },
+            "sequence_id": {
+              "$ref": "#/$defs/uint64TimelineDataset"
+            },
+            "state_7d": {
+              "$ref": "#/$defs/vector7Float32Dataset"
+            }
+          }
+        }
+      }
+    },
+    "armAStateStream": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/stateStream"
+        },
+        {
+          "properties": {
+            "datasets": {
+              "properties": {
+                "state_7d": {
+                  "properties": {
+                    "path": {
+                      "const": "/robot_state/Arm_A/state_7d"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "armBStateStream": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/stateStream"
+        },
+        {
+          "properties": {
+            "datasets": {
+              "properties": {
+                "state_7d": {
+                  "properties": {
+                    "path": {
+                      "const": "/robot_state/Arm_B/state_7d"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "actionStream": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "count",
+        "frequency_hz",
+        "valid_count",
+        "datasets"
+      ],
+      "properties": {
+        "count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "frequency_hz": {
+          "const": 10
+        },
+        "valid_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "datasets": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "timestamp_ns",
+            "physics_tick",
+            "sequence_id",
+            "action_7d",
+            "duration_ms",
+            "valid_mask",
+            "arm_id",
+            "executor",
+            "subtask_id",
+            "chunk_id",
+            "chunk_position"
+          ],
+          "properties": {
+            "timestamp_ns": {
+              "$ref": "#/$defs/uint64TimelineDataset"
+            },
+            "physics_tick": {
+              "$ref": "#/$defs/uint64TimelineDataset"
+            },
+            "sequence_id": {
+              "$ref": "#/$defs/uint64TimelineDataset"
+            },
+            "action_7d": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/vector7Float32Dataset"
+                },
+                {
+                  "properties": {
+                    "path": {
+                      "const": "/actions/action_7d"
+                    }
+                  }
+                }
+              ]
+            },
+            "duration_ms": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/dataset1D"
+                },
+                {
+                  "properties": {
+                    "path": {
+                      "const": "/actions/duration_ms"
+                    },
+                    "dtype": {
+                      "const": "uint16"
+                    }
+                  }
+                }
+              ]
+            },
+            "valid_mask": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/dataset1D"
+                },
+                {
+                  "properties": {
+                    "path": {
+                      "const": "/actions/valid_mask"
+                    },
+                    "dtype": {
+                      "const": "bool"
+                    }
+                  }
+                }
+              ]
+            },
+            "arm_id": {
+              "$ref": "#/$defs/actionUtf8Dataset"
+            },
+            "executor": {
+              "$ref": "#/$defs/actionUtf8Dataset"
+            },
+            "subtask_id": {
+              "$ref": "#/$defs/actionUtf8Dataset"
+            },
+            "chunk_id": {
+              "$ref": "#/$defs/actionUtf8Dataset"
+            },
+            "chunk_position": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/dataset1D"
+                },
+                {
+                  "properties": {
+                    "path": {
+                      "const": "/actions/chunk_position"
+                    },
+                    "dtype": {
+                      "const": "uint16"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "actionUtf8Dataset": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/dataset1D"
+        },
+        {
+          "properties": {
+            "path": {
+              "pattern": "^/actions/(arm_id|executor|subtask_id|chunk_id)$"
+            },
+            "dtype": {
+              "const": "utf-8"
+            }
+          }
+        }
+      ]
+    },
+    "storage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "episode_file",
+        "structure_file",
+        "sha256"
+      ],
+      "properties": {
+        "format": {
+          "const": "hdf5"
+        },
+        "episode_file": {
+          "const": "episode.h5"
+        },
+        "structure_file": {
+          "const": "structure.json"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "streams": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cameras",
+        "robot_state",
+        "actions"
+      ],
+      "properties": {
+        "cameras": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "CAM_A_TOP",
+            "CAM_HANDOFF",
+            "CAM_B_TOP"
+          ],
+          "properties": {
+            "CAM_A_TOP": {
+              "$ref": "#/$defs/cameraStream"
+            },
+            "CAM_HANDOFF": {
+              "$ref": "#/$defs/cameraStream"
+            },
+            "CAM_B_TOP": {
+              "$ref": "#/$defs/cameraStream"
+            }
+          }
+        },
+        "robot_state": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Arm_A",
+            "Arm_B"
+          ],
+          "properties": {
+            "Arm_A": {
+              "$ref": "#/$defs/armAStateStream"
+            },
+            "Arm_B": {
+              "$ref": "#/$defs/armBStateStream"
+            }
+          }
+        },
+        "actions": {
+          "$ref": "#/$defs/actionStream"
+        }
+      }
+    }
+  }
+}

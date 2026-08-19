@@ -1,0 +1,11 @@
+{
+  "version": "1.0",
+  "scene_id": "single_bin_manual_industrial_v2",
+  "options": [
+    {
+      "task_id": "P01_TO_S11",
+      "display_instruction": "帮我把螺母P01放置到料箱的S11格子中。",
+      "canonical_instruction": "把P01放到S11中"
+    }
+  ]
+}

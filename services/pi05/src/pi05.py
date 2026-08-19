@@ -102,13 +102,15 @@ class InferenceError(ValueError):
 
 
 DIM_NAMES = ["dx", "dy", "dz", "dax", "day", "daz", "gripper"]
-MOCK_CHUNK_LEN = 10  # Mock 动作块长度（LIBERO 配置常用 10，方案书 §3.3）
+MODEL_ACTION_HORIZON = 10
+MOCK_CHUNK_LEN = MODEL_ACTION_HORIZON
 # 兼容旧 wire 字段名；它表示模型动作采样频率，Isaac 控制频率固定为 60Hz。
 CONTROL_HZ = MODEL_INFERENCE_HZ
 SOURCE_POLICY = "pi05"
 SPACE_ID = "eef_delta_xyz_axisangle_gripper_v1"
 FRAME_ID = "robot_base"
-EXPIRES_AFTER_MS = 1000  # 动作块超时丢弃（方案书 §3.4 动作过期）
+RECEDING_HORIZON_STEP_MS = 100
+EXPIRES_AFTER_MS = RECEDING_HORIZON_STEP_MS
 
 
 # ---------------------------------------------------------------------------
@@ -494,7 +496,11 @@ class Pi05Executor(BaseExecutor):
         return np.asarray(actions, dtype=np.float32)
 
     def infer(self, obs: ObsPacket) -> CanonicalActionChunk:
-        """主入口：观测 → 安全动作块（方案书 §3.3.1 Para185）。"""
+        """观测后预测 10 步，但只发布首个 100 ms 动作。
+
+        调用方必须在该动作结束后重新观测并再次调用 ``infer``。后九步只
+        是训练/预测 horizon，不进入部署执行队列，避免开环执行旧预测。
+        """
         t0 = time.time()
         self._pixel_audit_if_test(obs)
         self._current_episode_id = obs.episode_id
@@ -514,35 +520,39 @@ class Pi05Executor(BaseExecutor):
             raise InferenceError(
                 f"Policy returned invalid action shape {raw.shape}; expected [N,{ACTION_DIM}]"
             )
-        if raw.shape[0] < 1 or raw.shape[0] > 32:
+        if raw.shape[0] != MODEL_ACTION_HORIZON:
             raise InferenceError(
-                f"Policy returned {raw.shape[0]} steps; expected 1..32"
+                f"Policy returned {raw.shape[0]} steps; expected frozen horizon "
+                f"{MODEL_ACTION_HORIZON}"
             )
         actions_7 = raw
         # 反归一化由 openpi output_transform 在 policy.infer 内完成（用本项目 compute_norm_stats，
         # 满足 §3.3.1 Para185/186），适配器不再二次反归一化。
         actions_7 = self._clip_actions(actions_7)  # 安全限幅
+        first_action = np.ascontiguousarray(actions_7[:1])
 
         latency_ms = int((time.time() - t0) * 1000)
         self._last_latency_ms = latency_ms
 
         # 记录待执行动作队列（切换时清空，方案书 §3.3.1 Para186）
         with self._state_lock:
-            self._pending_chunk = actions_7.copy()
+            self._pending_chunk = first_action.copy()
             self._pending_generated_step = obs.step_id
 
         logger.info(
-            "infer episode=%s step=%d shape=%s latency=%dms mode=%s trunc=%d",
+            "infer episode=%s step=%d predicted_shape=%s published_shape=%s "
+            "latency=%dms mode=%s trunc=%d",
             obs.episode_id,
             obs.step_id,
             actions_7.shape,
+            first_action.shape,
             latency_ms,
             self.mode,
             self._last_truncation_count,
         )
 
         return CanonicalActionChunk(
-            actions=actions_7,
+            actions=first_action,
             space_id=SPACE_ID,
             frame=FRAME_ID,
             control_hz=CONTROL_HZ,
@@ -705,8 +715,8 @@ class Pi05Executor(BaseExecutor):
     ) -> ActionChunk:
         """把体系A CanonicalActionChunk 包装成体系B ActionChunk（冻结契约对齐）。
 
-        - canonical.actions[:, :7] 逐行转 tuple(float, ...)，每步恰好 7 维；
-        - ActionStep.duration_ms 默认 100（CanonicalActionChunk 无此字段）；
+        - 无论输入块长度多少，只发布第 1 步，禁止部署开环执行后续预测；
+        - ActionStep.duration_ms 固定 100 ms，随后必须重新观测和推理；
         - action_space 固定 "ee_delta_pose_gripper"，不用 canonical.space_id；
         - 构造完调 validate_contract() 自校验。
         """
@@ -719,10 +729,11 @@ class Pi05Executor(BaseExecutor):
             raise ValueError(
                 f"CanonicalActionChunk.actions step count must be 1..32, got {actions.shape[0]}"
             )
-        # duration_ms 是传输元数据（非第 8 维模型输出），schema 要求 int∈[1,10000]；
-        # 这里用固定 100ms 作为默认控制周期，与 HTTP 路径动态推导无冲突（两者都满足契约下限）。
-        steps = tuple(
-            ActionStep.from_sequence(row.tolist(), duration_ms=100) for row in actions
+        steps = (
+            ActionStep.from_sequence(
+                actions[0].tolist(),
+                duration_ms=RECEDING_HORIZON_STEP_MS,
+            ),
         )
         chunk = ActionChunk(
             contract_version=ACTION_CONTRACT_VERSION,

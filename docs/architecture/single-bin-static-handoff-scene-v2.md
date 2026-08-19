@@ -1,185 +1,147 @@
-# 单箱四零件 + 中央固定交接位：当前冻结场景 v2
+# V2 双臂单箱人工工业采集场景
 
-> 日期：2026-07-26
-> 状态：当前有效，替代此前“三箱 + 传送带”场景草案
-> 架构不变：Supervisor、π0.5、OpenVLA、YOLO 四个 Agent；双机械臂；无 NLP Agent
+> 日期：2026-08-18
+>
+> 场景 ID：`single_bin_manual_industrial_v2`
+>
+> 状态：源码和静态合同已实现；GUI/物理/IK/抓取/搬运证据待补齐
+
+本文描述当前 V2 工业场景。旧版四轴件、`2×3` 料箱和
+`single_bin_pack_handoff_v1` 自动闭环继续作为兼容基线，详见
+[场景与流程总说明](final-frozen-scene-and-flow.md)。
 
 ## 1. 场景冻结
 
-| 项目 | 当前定义 |
+| 项目 | V2 当前定义 |
 |---|---|
-| 零件 | 4 个，A/B/C/D 区数量为 `2/1/1/0` |
-| 姿态 | A 区 1 个正常、1 个倒放；其余正常 |
-| 料箱 | 仅 1 个小型 2×3 工业料箱 |
-| 装箱配方 | `BIN_01=[P01,P02,P03,P04]` |
-| 箱内最终状态 | 4/4 配方完成，2×3 格口保留 2 个空格 |
-| 初始箱位 | 蓝色工作区下方中间的 `PACK_STATION`，不靠左边缘 |
-| 中央交接 | 固定平面 `HANDOFF_CENTER`，无传送带、滑台或运动机构 |
-| 成品区 | 仅 1 个固定成品位 `FINISHED_01` |
-| 调度 | A 放箱并完全退出后，B 才能进入共享交接区 |
+| 机器人 | 两台 Franka：`Arm_A`、`Arm_B` |
+| 相机 | `CAM_A_TOP`、`CAM_HANDOFF`、`CAM_B_TOP` |
+| 零件 | 4 轴件 + 2 螺母 + 2 扳手，共 8 件 |
+| 初始姿态 | P01/P02 正立；P03/P04 倒立；N01/N02、W01/W02 平放 |
+| 区域 | A/B/C/D 各 2 件 |
+| 料箱 | 1 个 `0.30×0.22×0.09 m` 的 `2×4` 料箱 |
+| 槽位 | S11-S24 固定映射，每格 1 件 |
+| 搬运结构 | 中央提梁 `Carry_Handle`，TCP 为 `BIN_CARRY_TCP` |
+| 采集 | 可见 GUI、人工键盘、有效样本频率 `10 Hz` |
+| GT | 在线禁止；只允许离线保存和评测 |
 
-## 2. 当前图片
+## 2. 顶层布局
 
-- 仿真节点与坐标标注图：[`assets/isaac-sim-single-bin-annotated-platform-v1.png`](assets/isaac-sim-single-bin-annotated-platform-v1.png)
-- 场景效果图：[`assets/isaac-sim-single-bin-pack-position-v6.png`](assets/isaac-sim-single-bin-pack-position-v6.png)
-- 精确俯视图：[`assets/isaac-sim-single-bin-static-handoff-layout-v2.png`](assets/isaac-sim-single-bin-static-handoff-layout-v2.png)
-- 俯视图 SVG：[`assets/isaac-sim-single-bin-static-handoff-layout-v2.svg`](assets/isaac-sim-single-bin-static-handoff-layout-v2.svg)
-- 同步框架图：[`assets/four-agent-single-bin-static-handoff-framework-v3.png`](assets/four-agent-single-bin-static-handoff-framework-v3.png)
-- 框架图 SVG：[`assets/four-agent-single-bin-static-handoff-framework-v3.svg`](assets/four-agent-single-bin-static-handoff-framework-v3.svg)
+```mermaid
+flowchart LR
+    A["A 区<br/>P01 P02<br/>正立轴件"]
+    B["B 区<br/>P03 P04<br/>倒立轴件"]
+    C["C 区<br/>N01 N02<br/>六角螺母"]
+    D["D 区<br/>W01 W02<br/>开口扳手"]
+    PA["PACK_STATION<br/>Bin_01 / 2×4"]
+    H["HANDOFF_CENTER"]
+    F["FINISHED_01"]
+    AA["Arm_A / π0.5"]
+    AB["Arm_B / OpenVLA-OFT"]
 
-## 3. Isaac Sim 推荐坐标
-
-坐标系：
-
-```text
-world 原点：HANDOFF_CENTER 在台面的投影
-+X：Arm A → Arm B
-+Y：工作台前侧 → 后侧
-+Z：向上
-Stage：Z-up，metersPerUnit=1
-台面高度：z=0.750 m
+    A --> AA
+    B --> AA
+    C --> AA
+    D --> AA
+    AA --> PA --> H --> AB --> F
 ```
 
-| Prim / ROI | 中心 `(x,y,z)` m | 尺寸或说明 |
-|---|---:|---|
-| `/World/Workcell/Table` | `(0.00,0.00,0.725)` | `2.30×1.10×0.05 m` |
-| `/World/Robots/Arm_A` | `(-0.55,-0.30,0.750)` | Franka，面向 `+Y` |
-| `/World/Robots/Arm_B` | `(+0.50,-0.30,0.750)` | Franka，面向 `+Y` |
-| `/World/Stations/PACK_STATION` | `(-0.35,-0.15,0.750)` | 蓝区下方中间的初始装箱位 |
-| `/World/Bins/Bin_01` | `(-0.35,-0.15,0.785)` | 初始位于 `PACK_STATION`，`0.18×0.12×0.07 m` |
-| `/World/Stations/HANDOFF_CENTER` | `(0.00,0.00,0.785)` | 满箱交接 ROI，建议 `0.26×0.20 m` |
-| `/World/Stations/FINISHED_01` | `(+0.70,+0.10,0.785)` | 唯一成品位 |
+图只表达区域和任务方向，不替代 JSON 坐标合同，也不证明 IK 可达。
 
-按上述坐标计算的水平距离：
+## 3. 世界坐标与节点
 
-| 路径 | 距离 | 判断 |
-|---|---:|---|
-| A 基座 → 初始料箱 `PACK_STATION` | `0.25 m` | 充足 |
-| A 基座 → 最远零件 | `0.61 m` | 充足 |
-| A 基座 → `HANDOFF_CENTER` | `0.63 m` | 充足 |
-| B 基座 → `HANDOFF_CENTER` | `0.58 m` | 充足 |
-| B 基座 → `FINISHED_01` | `0.45 m` | 充足 |
+坐标单位为米，Stage 为 Z-up，工作台面高度 `0.750 m`。机器真源是
+`simulation/configs/single_bin_scene_v2.json`。
 
-全部低于 V0 规定的 `0.65 m` 常用工作半径软上限，也低于 Franka 约 `0.855 m`
-的最大工作半径。正式冻结前仍需在 Isaac Sim 中用 IK 对抓取前位、抓取位、抬升位
-和放置位逐点验证，不能只用平面距离代替可达性测试。
+| 对象 | Prim/ID | 初始位置 `(x,y,z)` |
+|---|---|---:|
+| 工作台 | `/World/Workcell/Table` | `(0.00,0.00,0.725)` |
+| Arm_A | `/World/Robots/Arm_A` | `(-0.55,-0.30,0.750)` |
+| Arm_B | `/World/Robots/Arm_B` | `(+0.50,-0.30,0.750)` |
+| Bin_01 | `/World/Bins/Bin_01` | `(-0.35,-0.15,0.795)` |
+| PACK_STATION | `/World/Stations/PACK_STATION` | `(-0.35,-0.15,0.785)` |
+| HANDOFF_CENTER | `/World/Stations/HANDOFF_CENTER` | `(0.00,0.00,0.785)` |
+| FINISHED_01 | `/World/Stations/FINISHED_01` | `(+0.70,+0.10,0.785)` |
 
-零件：
+机器人显式 HOME：
 
-| 零件 | 区域 | 初始中心 `(x,y,z)` m | 姿态 |
-|---|---|---:|---|
-| `P01` | A | `(-0.90,+0.20,0.772)` | 正常 |
-| `P02` | A | `(-0.80,+0.20,0.772)` | 倒放，`roll=π` |
-| `P03` | B | `(-0.60,+0.20,0.772)` | 正常 |
-| `P04` | C | `(-0.85,0.00,0.772)` | 正常 |
-| D 区 | D | 无 | 空区域负样本 |
+```text
+arm joints = [0.01199996, -0.56927347, 0.00000009,
+              -2.81087494, 0.00000669, 3.03692675, 0.741]
+fingers    = [0.04, 0.04] m
+```
 
-固定相机：
+## 4. 工业零件
 
-| 相机 | 位置 `(x,y,z)` m | Look-at | 使用者 |
+| 零件 | 类型 | 区域 | 初始位置 `(x,y,z)` | 初始姿态 |
+|---|---|---|---:|---|
+| P01 | 轴件 | A | `(-0.90,+0.20,0.777)` | 正立 |
+| P02 | 轴件 | A | `(-0.80,+0.20,0.777)` | 正立 |
+| P03 | 轴件 | B | `(-0.65,+0.20,0.777)` | 倒立，roll=180° |
+| P04 | 轴件 | B | `(-0.55,+0.20,0.777)` | 倒立，roll=180° |
+| N01 | 六角螺母 | C | `(-0.90,0.00,0.760)` | 平放 |
+| N02 | 六角螺母 | C | `(-0.80,0.00,0.760)` | 平放，yaw=30° |
+| W01 | 开口扳手 | D | `(-0.65,0.00,0.755)` | 沿 Y 平放 |
+| W02 | 开口扳手 | D | `(-0.55,0.00,0.755)` | 沿 Y 平放 |
+
+资产由 `v2_industrial_assets.py` 程序化生成，不依赖外部零件网格。螺母必须保留
+真实可见通孔，扳手必须保留平行手柄和开口端，不能用无语义的方块代替。
+
+## 5. 料箱、槽位与质量预算
+
+| 槽位 | 零件 | Profile | 局部中心 `(x,y,z)` |
+|---|---|---|---:|
+| S11 | P01 | shaft | `(-0.1125,+0.055,0)` |
+| S12 | P03 | shaft | `(-0.0375,+0.055,0)` |
+| S13 | N01 | nut | `(+0.0375,+0.055,0)` |
+| S14 | W01 | wrench_y | `(+0.1125,+0.055,0)` |
+| S21 | P02 | shaft | `(-0.1125,-0.055,0)` |
+| S22 | P04 | shaft | `(-0.0375,-0.055,0)` |
+| S23 | N02 | nut | `(+0.0375,-0.055,0)` |
+| S24 | W02 | wrench_y | `(+0.1125,-0.055,0)` |
+
+空箱质量 `0.5 kg`，零件总质量 `0.5 kg`，计划满载质量 `1.0 kg`；设计上限
+`1.2 kg`，硬验收上限 `1.5 kg`。计划满载重心相对 `BIN_CARRY_TCP` 的水平投影
+误差为 `3 mm`，低于 `10 mm` 合同阈值。
+
+提梁横杆尺寸 `0.016×0.08×0.016 m`，清晰可抓长度 `0.064 m`。Arm_B 的搬箱
+目标必须使用 `BIN_CARRY_TCP` 和配置中的 approach/lift offset，不能临时猜测箱体中心。
+
+## 6. 固定相机
+
+| 相机 | 位置 | Look-at | 使用者 |
 |---|---:|---:|---|
-| `CAM_A_TOP` | `(-0.65,-0.15,1.50)` | `(-0.65,+0.12,0.75)` | π0.5、YOLO |
-| `CAM_HANDOFF` | `(0.00,-0.45,1.18)` | `(0.00,0.00,0.785)` | YOLO、Verifier |
-| `CAM_B_TOP` | `(+0.60,-0.18,1.45)` | `(+0.48,+0.18,0.75)` | OpenVLA、YOLO |
+| `CAM_A_TOP` | `(-0.60,-0.02,1.90)` | `(-0.55,+0.08,0.78)` | π0.5、YOLO |
+| `CAM_HANDOFF` | `(0.00,-0.35,1.60)` | `(0.00,+0.03,0.82)` | YOLO、Verifier |
+| `CAM_B_TOP` | `(+0.45,-0.02,1.90)` | `(+0.35,+0.08,0.78)` | OpenVLA-OFT、YOLO |
 
-统一使用 `1280×720`，HFOV 建议 `65°～72°`。
-冻结 MVP 恰好只有这三台物理 RGB 相机，不设置腕部相机。两个 VLA 请求中的
-`wrist_image` 均固定为 JSON `null`。
+三台相机均为 `1280×720`、82° HFOV。当前没有腕部相机；统一 VLA 合同中的
+`wrist_image` 仍必须为 JSON `null`，不能用顶视相机伪造。
 
-## 4. 共享交接区安全规则
+## 7. 控制与采集合同
 
-```text
-HANDOFF_ZONE:
-x ∈ [-0.16,+0.16]
-y ∈ [-0.12,+0.12]
-z ∈ [0.74,1.15]
-```
+| 频率 | 当前值 |
+|---|---:|
+| 物理 | 120 Hz |
+| 控制 | 60 Hz |
+| 渲染 | 30 Hz |
+| 有效采样/模型动作 | 10 Hz |
 
-普通工作时：
+共享区令牌仍按 `A_ONLY → HANDOFF_VERIFY → B_ONLY → NONE` 定义，但 V2 当前
+提供的是人工键盘采集状态机，并不等于八件全自动 Supervisor 闭环已经完成。
+正式采集必须先通过 `v2_collection_preflight.py`，并满足：工作树/提交身份可审计、
+Episode ID 唯一、数据根目录明确、在线 GT 禁止、训练 Split 只接受完整成功任务。
 
-```text
-Arm A：x ≤ -0.16
-Arm B：x ≥ +0.16
-```
+## 8. 验收门禁
 
-只有持有交接令牌的机械臂可以进入 `HANDOFF_ZONE`，并且必须检查整条机械臂碰撞体，
-不能只检查 TCP。
+1. `run_v2_scene_acceptance.py`：静态 JSON、资产、槽位、质量与相机合同；
+2. `run_v2_gui_scene_acceptance.py`：可见 GUI、USD、三相机图与总览图；
+3. `run_v2_home_acceptance.py`：两臂 HOME；
+4. `run_v2_ik_reachability_acceptance.py`：目标位 IK；
+5. `run_v2_dual_arm_micro_motion_acceptance.py`：双臂微动作和安全互锁；
+6. 分类型练习：正立轴件、倒立轴件纠正、螺母、扳手；
+7. 空箱、满箱与 20 次满载搬运；
+8. 正式 Canonical Episode 采集和回放 QA。
 
-令牌顺序固定为：
-
-```text
-A_ONLY
-→ HANDOFF_VERIFY
-→ B_ONLY
-```
-
-禁止直接从 `A_ONLY` 切到 `B_ONLY`。
-
-进入 `HANDOFF_VERIFY` 前：
-
-1. 两臂新动作均锁定；
-2. A 臂旧 ActionChunk 已取消。
-
-Supervisor 先用当前新鲜帧做候选预检并记录 `handoff.candidate_checked`；
-该帧不计入最终投票。候选通过后锁定双臂并进入 `HANDOFF_VERIFY`。
-
-`HANDOFF_VERIFY` 期间重新采集恰好三帧，每帧按已冻结的交接条件
-（见 [agent-framework.md §10](agent-framework.md#10-交接核验)）逐帧全条件检查；
-2/3 通过时依次持久化 `handoff.verified`、`handoff.ready`。只有 durable
-`handoff.ready` 才允许把令牌切为 `B_ONLY`。自然语言中的 `handoff_ready`
-仍是业务信号名称，不是事件类型。
-
-## 5. 两个 VLA 的指令
-
-π0.5 主指令：
-
-```text
-将工作区中的四个红色零件依次装入料箱；倒放零件先调整为正向。装箱完成后，将料箱放到中央交接位并返回 HOME_A。失败时重新观察后继续。
-```
-
-OpenVLA 固定协作指令：
-
-```text
-收到 handoff_ready 后，观察中央交接位，抓稳 Bin_01 并保持水平，将其搬到 FINISHED_01，松开夹爪并返回 HOME_B。
-```
-
-以上两条代码块与 `configs/agent.default.json` 中的冻结值逐字一致，代码块内不包含
-换行符。Supervisor 不解析上述语言，只根据冻结 TaskProfile 管理生命周期。
-
-## 6. 单箱闭环
-
-```text
-RESET
-→ OBSERVE_A
-→ π0.5 依据完整 A 区图像处理 P01–P04
-→ PICK / VERIFY / PLACE
-→ 倒放件纠姿
-→ 继续装入 B、C 区零件
-→ BIN_READY（配方 4/4）
-→ A 将箱放到 HANDOFF_CENTER
-→ A 退出并回 HOME_A
-→ handoff.candidate_checked（A_ONLY 下预检，不计票）
-→ HANDOFF_VERIFY（锁臂后新采 3 帧，至少 2 帧复合 PASS）
-→ handoff.verified
-→ handoff.ready + B_ONLY
-→ OpenVLA 控制 B 抓箱
-→ 搬到 FINISHED_01
-→ VERIFY_B
-→ B 回 HOME_B
-→ TASK_SUCCEEDED
-```
-
-## 7. 最终验收
-
-| 验收项 | 标准 |
-|---|---|
-| 视觉任务 | π0.5 按冻结指令处理 P01～P04；Supervisor 不解析语言 |
-| 装箱 | P01～P04 全部进入唯一料箱 |
-| 姿态 | P02 由倒放变为正常 |
-| 交接 | A 放箱后完全退出；B 之后才进入中央区 |
-| 搬运 | B 将同一料箱放到 `FINISHED_01` |
-| 闭环 | 至少一次失败能刷新观测并有限恢复 |
-| YOLO | 对冻结完整类别表保存全部 bbox、类别、置信度与时延；不控制 VLA |
-| mAP | 冻结 GT 仅在离线评测器中计算 |
-| 安全 | 无双臂同时进入共享区、无碰撞、无无限重试 |
-| 复现 | Docker 固定 seed 连续 3 次成功 |
+任何静态 PASS 都不能替代 GUI/物理证据；任何练习数据都不能在完整数据 QA 前标记
+为可训练数据。
