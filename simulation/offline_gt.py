@@ -8,6 +8,7 @@ artifact directory; Canonical fields receive at most the final episode outcome.
 from __future__ import annotations
 
 from itertools import product
+from math import cos, radians, sqrt
 from typing import Any, Mapping, Sequence
 
 from simulation.v2_terminal_success import vertical_error_rad
@@ -84,6 +85,29 @@ def slot_interior_bounds(
     }
 
 
+def p01_s11_task_pass(
+    *,
+    nearest_slot_id: str,
+    inside_target_cell: bool,
+    upright: bool,
+    containment_axis_pass: Mapping[str, Any],
+) -> bool:
+    """Apply the atomic task semantics without an invisible wall-clearance gate.
+
+    X/Y are already constrained by membership in the S11 cell.  The complete
+    world-aligned part bound remains a useful diagnostic, but its small flange
+    overhang must not redefine "put P01 in S11".  Z containment still prevents
+    accepting a part that is above or below the bin.
+    """
+
+    return bool(
+        nearest_slot_id == "S11"
+        and inside_target_cell
+        and upright
+        and containment_axis_pass.get("z") is True
+    )
+
+
 class OfflineGtProbe:
     """Read live USD transforms without exposing them to online consumers."""
 
@@ -127,6 +151,80 @@ class OfflineGtProbe:
     def world_position(self, path: str) -> list[float]:
         translation = self._world_matrix(path).ExtractTranslation()
         return [float(value) for value in translation]
+
+    def p01_in_s11(
+        self,
+        *,
+        part_path: str,
+        bin_path: str,
+        bin_config: Mapping[str, Any],
+        upright_tolerance_deg: float = 15.0,
+    ) -> dict[str, Any]:
+        """Offline-only slot and upright label for the atomic task."""
+
+        try:
+            from pxr import Gf
+        except ImportError as exc:
+            raise RuntimeError("offline_gt requires Isaac Sim Gf bindings") from exc
+        tolerance = float(upright_tolerance_deg)
+        if tolerance <= 0.0 or tolerance > 45.0:
+            raise ValueError("upright_tolerance_deg must be in (0, 45]")
+
+        bin_inverse = self._world_matrix(bin_path).GetInverse()
+        part_matrix = self._world_matrix(part_path)
+        center = bin_inverse.Transform(part_matrix.ExtractTranslation())
+        center_local = [float(center[index]) for index in range(3)]
+        slots = {item["id"]: item for item in bin_config["slots"]}
+        target = [float(value) for value in slots["S11"]["center_local_m"]]
+        nearest = min(
+            slots.values(),
+            key=lambda item: sum(
+                (center_local[index] - float(item["center_local_m"][index])) ** 2
+                for index in (0, 1)
+            ),
+        )["id"]
+        size = [float(value) for value in bin_config["size_m"]]
+        wall = float(bin_config["wall_thickness_m"])
+        divider = float(bin_config["divider_thickness_m"])
+        columns = int(bin_config["grid"]["columns"])
+        rows = int(bin_config["grid"]["rows"])
+        half_x = (size[0] - 2.0 * wall - (columns - 1) * divider) / columns / 2.0
+        half_y = (size[1] - 2.0 * wall - (rows - 1) * divider) / rows / 2.0
+        inside_target_cell = (
+            abs(center_local[0] - target[0]) <= half_x
+            and abs(center_local[1] - target[1]) <= half_y
+        )
+
+        axis_world = part_matrix.TransformDir(Gf.Vec3d(0.0, 0.0, 1.0))
+        axis = bin_inverse.TransformDir(axis_world)
+        norm = sqrt(sum(float(axis[index]) ** 2 for index in range(3)))
+        upright_cosine = float(axis[2]) / norm if norm else -1.0
+        upright = upright_cosine >= cos(radians(tolerance))
+        contained = self.part_fully_inside_bin(
+            part_path=part_path,
+            bin_path=bin_path,
+            bin_config=bin_config,
+        )
+        task_pass = p01_s11_task_pass(
+            nearest_slot_id=str(nearest),
+            inside_target_cell=inside_target_cell,
+            upright=upright,
+            containment_axis_pass=contained["axis_pass"],
+        )
+        return {
+            "pass": task_pass,
+            "part_id": "P01",
+            "slot_id": "S11",
+            "nearest_slot_id": nearest,
+            "center_in_bin_local_m": center_local,
+            "inside_target_cell": inside_target_cell,
+            "upright": upright,
+            "upright_cosine": upright_cosine,
+            "upright_tolerance_deg": tolerance,
+            "vertical_containment": bool(contained["axis_pass"]["z"]),
+            "full_part_inside_bin_diagnostic": bool(contained["pass"]),
+            "containment": contained,
+        }
 
     def local_point_to_world(
         self,
