@@ -27,6 +27,11 @@ CONTROL_HZ = 60
 RENDER_HZ = 30
 MODEL_INFERENCE_HZ = 10
 
+# Franka's two finger joints are represented as one total opening.  The
+# calibrated fully-open width is 40 mm per finger (80 mm total); V2 State
+# stores the measured opening as a continuous normalized value.
+GRIPPER_FULLY_OPEN_WIDTH_M = 0.08
+
 
 def canonical_state_7d(
     tcp_pose_m_rad: Any,
@@ -58,6 +63,68 @@ def canonical_state_7d(
         values.append(value)
     values.append(1.0 if gripper_open else 0.0)
     return values
+
+
+def normalize_gripper_opening(
+    finger_positions_m: Any,
+    *,
+    closed_width_m: float = 0.0,
+    open_width_m: float = GRIPPER_FULLY_OPEN_WIDTH_M,
+) -> float:
+    """Normalize measured two-finger opening to the V2 continuous [0, 1] value.
+
+    ``finger_positions_m`` must contain the two measured finger joint openings.
+    The command/boolean path is deliberately not accepted here: V2 State must
+    describe sensor readback, including partially open grippers.
+    """
+
+    try:
+        if len(finger_positions_m) != 2:
+            raise ValueError("finger_positions_m must contain exactly two values")
+    except TypeError as exc:
+        raise TypeError("finger_positions_m must be a two-number sequence") from exc
+    if (
+        isinstance(closed_width_m, bool)
+        or not isinstance(closed_width_m, (int, float))
+        or not isfinite(float(closed_width_m))
+        or isinstance(open_width_m, bool)
+        or not isinstance(open_width_m, (int, float))
+        or not isfinite(float(open_width_m))
+        or float(open_width_m) <= float(closed_width_m)
+    ):
+        raise ValueError("gripper calibration widths must be finite and increasing")
+    opening_m = 0.0
+    for index, item in enumerate(finger_positions_m):
+        if isinstance(item, bool) or not isinstance(item, (int, float)):
+            raise TypeError(f"finger_positions_m[{index}] must be numeric")
+        value = float(item)
+        if not isfinite(value):
+            raise ValueError(f"finger_positions_m[{index}] must be finite")
+        opening_m += value
+    normalized = (opening_m - float(closed_width_m)) / (
+        float(open_width_m) - float(closed_width_m)
+    )
+    # Small articulation/readback overshoot is clipped at the physical bounds;
+    # NaN/Infinity were rejected above and cannot be hidden by this clamp.
+    return float(min(1.0, max(0.0, normalized)))
+
+
+def canonical_state_7d_from_opening(
+    tcp_pose_m_rad: Any,
+    gripper_opening_norm: Any,
+) -> list[float]:
+    """Build a V2 State from a measured continuous normalized gripper opening."""
+
+    if isinstance(gripper_opening_norm, bool) or not isinstance(
+        gripper_opening_norm, (int, float)
+    ):
+        raise TypeError("gripper_opening_norm must be a numeric measurement")
+    opening = float(gripper_opening_norm)
+    if not isfinite(opening) or not 0.0 <= opening <= 1.0:
+        raise ValueError("gripper_opening_norm must be finite and within [0,1]")
+    pose = canonical_state_7d(tcp_pose_m_rad, True)[:6]
+    pose.append(opening)
+    return pose
 
 
 @dataclass(frozen=True)

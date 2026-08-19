@@ -89,7 +89,7 @@ def test_canonical_v2_reader_accepts_frozen_episode(tmp_path: Path) -> None:
         ("robot_state/Arm_A/state_7d", (0, 0), np.nan, "NaN or Infinity"),
         ("robot_state/Arm_B/state_7d", (0, 6), 1.1, "state gripper"),
         ("actions/action_7d", (0, 2), np.inf, "NaN or Infinity"),
-        ("actions/action_7d", (0, 6), -1.1, "action gripper"),
+        ("actions/action_7d", (0, 6), 0.5, "action gripper"),
         ("actions/valid_mask", 0, False, "padding/masked"),
     ],
 )

@@ -102,6 +102,20 @@ class CanonicalV2Recorder(CanonicalRecorder):
         self._h5.flush()
 
     @staticmethod
+    def _validate_binary_action_gripper(action_7d: Sequence[float] | np.ndarray) -> None:
+        """V2 action commands are hardware endpoints, never continuous values."""
+
+        values = np.asarray(action_7d, dtype=np.float32)
+        if values.shape != (7,):
+            raise ValueError("V2 action_7d must have shape [7]")
+        if not np.all(np.isfinite(values)):
+            raise ValueError("V2 action_7d must contain finite values")
+        if float(values[6]) not in (0.0, 1.0):
+            raise ValueError(
+                "V2 action gripper must be exactly 0.0 (closed) or 1.0 (open)"
+            )
+
+    @staticmethod
     def _validate_action_metadata(
         *,
         arm_id: str,
@@ -145,6 +159,7 @@ class CanonicalV2Recorder(CanonicalRecorder):
     ) -> None:
         if valid is not True:
             raise ValueError("Canonical V2 forbids padded or masked action rows")
+        self._validate_binary_action_gripper(action_7d)
         super()._append_action(
             arm_id=arm_id,
             executor=executor,

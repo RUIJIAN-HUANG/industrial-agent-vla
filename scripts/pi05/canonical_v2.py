@@ -337,8 +337,11 @@ class CanonicalV2Reader:
             self._fail("action must be float32[N,7]", dataset.name)
         if not np.all(np.isfinite(values)):
             self._fail("action contains NaN or Infinity", dataset.name)
-        if np.any(values[:, 6] < -1.0) or np.any(values[:, 6] > 1.0):
-            self._fail("action gripper must be in [-1,1]", dataset.name)
+        if not np.all(np.isin(values[:, 6], np.asarray([0.0, 1.0], dtype=np.float32))):
+            self._fail(
+                "action gripper must be exactly 0.0 or 1.0",
+                dataset.name,
+            )
         if not np.all(np.asarray(group["duration_ms"][:]) == ACTION_DURATION_MS):
             self._fail("every action duration must be 100 ms", "actions.duration_ms")
         valid_mask = np.asarray(group["valid_mask"][:], dtype=np.bool_)

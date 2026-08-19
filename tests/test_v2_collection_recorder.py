@@ -69,7 +69,7 @@ def test_v2_collection_boundary_writes_reader_valid_episode(tmp_path: Path) -> N
             physics_tick=0,
             sequence_id=0,
             chunk_id="manual-p01-0",
-            action_7d=[0.01, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0],
+            action_7d=[0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
         )
         episode_path = writer.finalize(outcome="SUCCEEDED")
 
@@ -117,3 +117,32 @@ def test_v2_collection_rejects_incomplete_state_bundle(tmp_path: Path) -> None:
             sequence_id=0,
             states=states,
         )
+
+
+@pytest.mark.parametrize("gripper", [-1.0, 0.5, 0.999])
+def test_v2_collection_rejects_non_binary_action_gripper(
+    tmp_path: Path,
+    gripper: float,
+) -> None:
+    writer, image_cas = _writer(tmp_path)
+    with writer:
+        writer.record_camera_bundle(
+            timestamp_ns=1_000_000_000,
+            physics_tick=0,
+            sequence_id=0,
+            images=_images(image_cas),
+        )
+        writer.record_state_bundle(
+            timestamp_ns=1_000_000_000,
+            physics_tick=0,
+            sequence_id=0,
+            states=_states(),
+        )
+        with pytest.raises(ValueError, match="exactly 0.0 or 1.0"):
+            writer.record_action(
+                timestamp_ns=1_000_000_000,
+                physics_tick=0,
+                sequence_id=0,
+                chunk_id="manual-p01-invalid",
+                action_7d=[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, gripper],
+            )

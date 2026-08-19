@@ -67,7 +67,7 @@ def _record_complete_episode(tmp_path: Path) -> Path:
                 timestamp_ns=1_000_000_000,
                 physics_tick=0,
                 sequence_id=0,
-                state_7d=[0.4, 0.0, 0.3, 0.0, 0.0, 0.0, 1.0],
+                state_7d=[0.4, 0.0, 0.3, 0.0, 0.0, 0.0, 0.375],
             )
         recorder.add_action(
             arm_id="Arm_A",
@@ -77,7 +77,7 @@ def _record_complete_episode(tmp_path: Path) -> Path:
             timestamp_ns=1_000_000_000,
             physics_tick=0,
             sequence_id=0,
-            action_7d=[0.01, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0],
+                action_7d=[0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
         )
         return recorder.save_episode(outcome="SUCCEEDED")
 
@@ -102,6 +102,7 @@ def test_v2_recorder_writes_reader_valid_episode(tmp_path: Path) -> None:
         assert h5["actions/valid_mask"][:].tolist() == [True]
     with CanonicalV2Reader(episode_path) as reader:
         assert len(tuple(reader.iter_action_7d())) == 1
+        np.testing.assert_equal(reader.state_7d("Arm_A")[0, 6], 0.375)
 
 
 @pytest.mark.parametrize(

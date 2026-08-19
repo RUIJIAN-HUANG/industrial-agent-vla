@@ -448,7 +448,8 @@
               "$ref": "#/$defs/uint64TimelineDataset"
             },
             "state_7d": {
-              "$ref": "#/$defs/vector7Float32Dataset"
+              "$ref": "#/$defs/vector7Float32Dataset",
+              "description": "State [x,y,z,ax,ay,az,gripper_norm] in robot_base. gripper_norm is the measured continuous opening in [0,1], where 0 is fully closed and 1 is fully open. It must not be reconstructed from a boolean command."
             }
           }
         }
@@ -548,7 +549,8 @@
             "action_7d": {
               "allOf": [
                 {
-                  "$ref": "#/$defs/vector7Float32Dataset"
+                  "$ref": "#/$defs/vector7Float32Dataset",
+                  "description": "Action [dx,dy,dz,dax,day,daz,gripper] in robot_base. The gripper command is a binary hardware endpoint: exactly 0.0 (closed) or 1.0 (open)."
                 },
                 {
                   "properties": {

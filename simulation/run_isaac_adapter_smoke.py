@@ -119,10 +119,21 @@ def _arm_state(
         *(round(float(item), 8) for item in base_position),
         *(round(item, 8) for item in _quaternion_to_rotvec(base_orientation)),
     ]
-    gripper_open = bool(np.mean(positions[finger_indices]) >= 0.02)
+    # State uses measured continuous opening; retain the boolean only as a
+    # compatibility/status field for the existing online observation contract.
+    from industrial_agent.sync_contract import (
+        canonical_state_7d_from_opening,
+        normalize_gripper_opening,
+    )
+
+    gripper_opening_norm = normalize_gripper_opening(positions[finger_indices])
+    gripper_open = bool(gripper_opening_norm >= 0.5)
     return {
         "tcp_pose_m_rad": tcp_pose_m_rad,
-        "state": [*tcp_pose_m_rad, 1.0 if gripper_open else 0.0],
+        "state": canonical_state_7d_from_opening(
+            tcp_pose_m_rad,
+            gripper_opening_norm,
+        ),
         "retreated": _is_retreated(world_position, config),
         "gripper_open": gripper_open,
         "stationary": bool(

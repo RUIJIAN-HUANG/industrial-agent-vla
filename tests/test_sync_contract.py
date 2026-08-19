@@ -6,6 +6,8 @@ from industrial_agent.sync_contract import (
     FROZEN_MULTI_RATE,
     STATE_7D_ORDER,
     canonical_state_7d,
+    canonical_state_7d_from_opening,
+    normalize_gripper_opening,
 )
 
 
@@ -33,6 +35,22 @@ class FrozenStateContractTests(unittest.TestCase):
             canonical_state_7d([0.0] * 7, True)
         with self.assertRaisesRegex(TypeError, "controller-confirmed boolean"):
             canonical_state_7d([0.0] * 6, None)
+
+    def test_v2_state_preserves_continuous_measured_opening(self) -> None:
+        self.assertAlmostEqual(normalize_gripper_opening([0.015, 0.025]), 0.5)
+        self.assertEqual(
+            canonical_state_7d_from_opening(
+                [0.4, 0.1, 0.5, 0.01, -0.02, 0.03],
+                0.375,
+            )[-1],
+            0.375,
+        )
+
+    def test_v2_state_rejects_boolean_or_out_of_range_opening(self) -> None:
+        with self.assertRaisesRegex(TypeError, "numeric measurement"):
+            canonical_state_7d_from_opening([0.0] * 6, True)
+        with self.assertRaisesRegex(ValueError, r"within \[0,1\]"):
+            canonical_state_7d_from_opening([0.0] * 6, 1.01)
 
 
 class FrozenMultiRateContractTests(unittest.TestCase):

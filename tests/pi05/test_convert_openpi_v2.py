@@ -67,7 +67,7 @@ def _record_episode(tmp_path: Path, *, action_count: int = 10) -> Path:
         for camera_id in CAMERA_IDS
     }
     states = {
-        arm_id: [0.4, 0.0, 0.3, 0.0, 0.0, 0.0, 1.0]
+        arm_id: [0.4, 0.0, 0.3, 0.0, 0.0, 0.0, 0.375]
         for arm_id in ARM_IDS
     }
     writer = V2CollectionRecorder(
@@ -96,7 +96,7 @@ def _record_episode(tmp_path: Path, *, action_count: int = 10) -> Path:
                 physics_tick=physics_tick,
                 sequence_id=index,
                 chunk_id=f"manual-p01-{index}",
-                action_7d=[index / 1000.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0],
+                action_7d=[index / 1000.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
             )
         return writer.finalize(outcome="SUCCEEDED")
 
@@ -200,6 +200,7 @@ def test_canonical_v2_to_lerobot_smoke_is_lossless(
     assert len(dataset) == 1
     assert dataset[0]["actions"].shape == (10, 7)
     assert dataset[0]["actions"].dtype == np.float32
+    assert dataset[0]["state"][6] == pytest.approx(0.375)
     assert result.manifest["action_horizon"] == 10
     assert result.manifest["padding"] == "forbidden"
     assert result.manifest["window_rule"] == "N-9"

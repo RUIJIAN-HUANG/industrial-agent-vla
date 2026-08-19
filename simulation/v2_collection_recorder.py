@@ -163,6 +163,11 @@ class V2CollectionRecorder:
             raise ValueError(
                 f"no synchronized dual-arm state bundle at action tick {physics_tick}"
             )
+        values = np.asarray(action_7d, dtype=np.float32)
+        if values.shape != (7,) or not np.all(np.isfinite(values)):
+            raise ValueError("V2 action must be finite float32[7]")
+        if float(values[6]) not in (0.0, 1.0):
+            raise ValueError("V2 action gripper must be exactly 0.0 or 1.0")
         self.recorder.add_action(
             arm_id="Arm_A",
             executor="pi05",
