@@ -182,9 +182,7 @@ class PinkFrankaAdapter:
                 device=device,
                 controlled_joint_indices=indices,
             )
-            controller_tasks = getattr(
-                controller, "_variable_input_tasks", None
-            )
+            controller_tasks = getattr(controller, "_variable_input_tasks", None)
             if controller_tasks is None:
                 controller_tasks = controller.cfg.variable_input_tasks
             active_frame_tasks = [
@@ -273,16 +271,10 @@ class PinkFrankaAdapter:
         pink_model = getattr(pink_configuration, "model", None)
         if pink_model is not None:
             controlled_count = len(indices)
-            lower = np.asarray(
-                pink_model.lowerPositionLimit, dtype=float
-            ).reshape(-1)
-            upper = np.asarray(
-                pink_model.upperPositionLimit, dtype=float
-            ).reshape(-1)
+            lower = np.asarray(pink_model.lowerPositionLimit, dtype=float).reshape(-1)
+            upper = np.asarray(pink_model.upperPositionLimit, dtype=float).reshape(-1)
             if lower.size < controlled_count or upper.size < controlled_count:
-                raise RuntimeError(
-                    f"Pink joint limit vector is too short for {arm_id}"
-                )
+                raise RuntimeError(f"Pink joint limit vector is too short for {arm_id}")
 
             lower = lower[:controlled_count]
             upper = upper[:controlled_count]

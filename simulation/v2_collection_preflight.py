@@ -192,9 +192,7 @@ def build_collection_preflight(
                 "scene config SHA-256 does not match the frozen value"
             )
         if openpi_git_sha != OPENPI_COMMIT:
-            raise CollectionPreflightError(
-                f"OpenPI HEAD must equal {OPENPI_COMMIT}"
-            )
+            raise CollectionPreflightError(f"OpenPI HEAD must equal {OPENPI_COMMIT}")
         if openpi_worktree_clean is not True:
             raise CollectionPreflightError("OpenPI worktree must be clean")
         normalized_openpi_sha = openpi_git_sha

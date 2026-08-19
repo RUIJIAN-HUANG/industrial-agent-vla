@@ -833,8 +833,7 @@ class IsaacSimFrankaController:
                     raise RuntimeError("control lease was revoked during settle")
                 self._physics_tick_index += 1
                 render_due = (
-                    self._physics_tick_index
-                    % self._multi_rate.physics_ticks_per_render
+                    self._physics_tick_index % self._multi_rate.physics_ticks_per_render
                     == 0
                 )
                 self._world.step(render=render_due)
