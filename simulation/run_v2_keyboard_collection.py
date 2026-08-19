@@ -114,6 +114,28 @@ def _collect_p01_terminal_success(
     return result, report_path
 
 
+def _record_and_execute_formal_action(
+    *,
+    bridge,
+    controller,
+    action,
+    arm_id: str,
+    task_id: str,
+    episode_id: str,
+    action_index: int,
+) -> None:
+    """Record one 100 ms command and execute its real 12 physics ticks."""
+    tick = controller.physics_tick_index
+    bridge.record_action(
+        action,
+        arm_id=arm_id,
+        subtask_id=task_id,
+        chunk_id=f"{episode_id}-{action_index:06d}",
+        physics_tick=tick,
+    )
+    controller.execute_action(action, arm_id=arm_id)
+
+
 def _load_json(path: Path) -> dict[str, Any]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
@@ -432,20 +454,15 @@ def main() -> int:
                         f"REJECTED | {rejection} | actions={action_count}"
                     )
                     continue
-                tick = controller.physics_tick_index
-                bridge.record_action(
-                    command.action,
+                _record_and_execute_formal_action(
+                    bridge=bridge,
+                    controller=controller,
+                    action=command.action,
                     arm_id=active_arm,
-                    subtask_id=preflight.task_id,
-                    chunk_id=f"{preflight.episode_id}-{action_count:06d}",
-                    physics_tick=tick,
+                    task_id=preflight.task_id,
+                    episode_id=preflight.episode_id,
+                    action_index=action_count,
                 )
-
-                controller.execute_action(command.action, arm_id=active_arm)
-                # The canonical action remains exactly 100 ms. Keep its final
-                # bounded joint target active for another 0.2 s so the physical
-                # articulation can converge without generating fake actions.
-                controller.settle_current_targets(physics_ticks=24)
                 action_count += 1
                 status_label.text = (
                     f"{machine.token.value} | arm={active_arm} | "
