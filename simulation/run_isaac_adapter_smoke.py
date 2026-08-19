@@ -105,6 +105,8 @@ def _arm_state(
     arm_id: str,
     arm: Any,
     config: dict[str, Any],
+    *,
+    continuous_state: bool = False,
 ) -> dict[str, Any]:
     world_position, _ = controller.end_effector_pose(arm_id)
     base_position, base_orientation = controller.end_effector_pose_in_base(arm_id)
@@ -128,12 +130,14 @@ def _arm_state(
 
     gripper_opening_norm = normalize_gripper_opening(positions[finger_indices])
     gripper_open = bool(gripper_opening_norm >= 0.5)
+    state = (
+        canonical_state_7d_from_opening(tcp_pose_m_rad, gripper_opening_norm)
+        if continuous_state
+        else [*tcp_pose_m_rad, 1.0 if gripper_open else 0.0]
+    )
     return {
         "tcp_pose_m_rad": tcp_pose_m_rad,
-        "state": canonical_state_7d_from_opening(
-            tcp_pose_m_rad,
-            gripper_opening_norm,
-        ),
+        "state": state,
         "retreated": _is_retreated(world_position, config),
         "gripper_open": gripper_open,
         "stationary": bool(

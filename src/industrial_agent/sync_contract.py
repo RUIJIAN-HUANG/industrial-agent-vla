@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import isfinite, isclose
+from numbers import Real
 from typing import Any, Sequence
 
 
@@ -85,17 +86,17 @@ def normalize_gripper_opening(
         raise TypeError("finger_positions_m must be a two-number sequence") from exc
     if (
         isinstance(closed_width_m, bool)
-        or not isinstance(closed_width_m, (int, float))
+        or not isinstance(closed_width_m, Real)
         or not isfinite(float(closed_width_m))
         or isinstance(open_width_m, bool)
-        or not isinstance(open_width_m, (int, float))
+        or not isinstance(open_width_m, Real)
         or not isfinite(float(open_width_m))
         or float(open_width_m) <= float(closed_width_m)
     ):
         raise ValueError("gripper calibration widths must be finite and increasing")
     opening_m = 0.0
     for index, item in enumerate(finger_positions_m):
-        if isinstance(item, bool) or not isinstance(item, (int, float)):
+        if isinstance(item, bool) or not isinstance(item, Real):
             raise TypeError(f"finger_positions_m[{index}] must be numeric")
         value = float(item)
         if not isfinite(value):
@@ -116,7 +117,7 @@ def canonical_state_7d_from_opening(
     """Build a V2 State from a measured continuous normalized gripper opening."""
 
     if isinstance(gripper_opening_norm, bool) or not isinstance(
-        gripper_opening_norm, (int, float)
+        gripper_opening_norm, Real
     ):
         raise TypeError("gripper_opening_norm must be a numeric measurement")
     opening = float(gripper_opening_norm)

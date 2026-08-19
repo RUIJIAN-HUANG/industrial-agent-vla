@@ -30,7 +30,13 @@ def _state_7d(controller: Any, arms: dict[str, Any], config: dict[str, Any]):
     from simulation.run_isaac_adapter_smoke import _arm_state
 
     return {
-        arm_id: _arm_state(controller, arm_id, arms[arm_id], config)["state"]
+        arm_id: _arm_state(
+            controller,
+            arm_id,
+            arms[arm_id],
+            config,
+            continuous_state=True,
+        )["state"]
         for arm_id in ("Arm_A", "Arm_B")
     }
 
@@ -43,7 +49,13 @@ def _arm_readback(
 ) -> dict[str, Any]:
     from simulation.run_isaac_adapter_smoke import _arm_state
 
-    return _arm_state(controller, arm_id, arms[arm_id], config)
+    return _arm_state(
+        controller,
+        arm_id,
+        arms[arm_id],
+        config,
+        continuous_state=True,
+    )
 
 
 def _apply_home(world: Any, arms: dict[str, Any], config: dict[str, Any]) -> None:
