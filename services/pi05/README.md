@@ -29,6 +29,37 @@ YOLO DetectionPacket 不是推理前置条件。π0.5 必须针对这一固定�
 `POST /v1/infer` 强制入口核心：它先解析并校验 CAS，再把只读 RGB 数组替换进
 `model_input` 后调用注入的 π0.5 backend。HTTP/WebSocket 外壳不得绕过该 handler。
 
+## base/tuned 部署模式
+
+服务 real 模式支持两种配置名（`PI05_CONFIG_NAME`），环境变量互斥选择，一次只挂一种：
+
+| 配置名 | 用途 | checkpoint | norm stats |
+|---|---|---|---|
+| `pi05_industrial` | 工业微调产物（冻结原路径，行为不变） | 本地微调 checkpoint | 项目自有（`compute_norm_stats` 产物），`PI05_NORM_STATS_PATH/SHA` 双门禁 |
+| `pi05_base` | openpi 官方基础权重（base/tuned 对照的 base 半边，D24/D31 交付） | `gs://openpi-assets/checkpoints/pi05_base` 本地下载 | **自动发现 checkpoint 内 `norm_stats.json`**（缺失 fail-closed，不读项目 env） |
+
+`pi05_base` 部署 env 示例：
+
+```bash
+PI05_SERVICE_MODE=real \
+PI05_CONFIG_NAME=pi05_base \
+PI05_CHECKPOINT_DIR=/workspace/openpi/checkpoints/pi05_base \
+PI05_CHECKPOINT_SHA=sha256:<checkpoint 目录 SHA> \
+  # 可选：显式声明 norm stats SHA 时必须与 checkpoint 内 norm_stats.json 实际 SHA 一致
+PI05_NORM_STATS_SHA=sha256:<norm_stats.json SHA>
+```
+
+说明：
+
+- base 模式仍强制 checkpoint 目录存在且目录 SHA 与 `PI05_CHECKPOINT_SHA` 一致（fail-closed，不静默用错权重）；
+- openpi 原生 `pi05_base` 输出 32D，服务在形状校验前用
+  `configs.pi05.constants.project_policy_actions` 投影为 frozen 7D（单一事实源，
+  `train_config.py` 仅 re-export 同一函数）；
+- base 模式 norm stats 为 checkpoint 自带统计（非项目统计），base/tuned 对照报告
+  必须注明该差异；
+- base 权重未见过冻结中文指令与工业场景，属域外基线，成功率预期低（D18 G3 以
+  base 为对照分母）。
+
 ## Canonical v1 数据 Gate
 
 `scripts/pi05/canonical_v1.py` 是角色 E 的薄适配层，底层强制复用主线

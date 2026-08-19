@@ -56,9 +56,19 @@ from typing import Any
 import numpy as np
 
 try:
-    from configs.pi05.constants import OPENPI_COMMIT as OPENPI_COMMIT
+    from configs.pi05.constants import (
+        CANONICAL_ACTION_DIM,
+        MODEL_ACTION_DIM,
+        OPENPI_COMMIT,
+        project_policy_actions,
+    )
 except ModuleNotFoundError:  # direct ``python configs/pi05/train_config.py`` execution
-    from constants import OPENPI_COMMIT as OPENPI_COMMIT  # type: ignore[no-redef]
+    from constants import (  # type: ignore[no-redef]
+        CANONICAL_ACTION_DIM,  # noqa: F401  # 降级 re-import 模式（与 try 分支同名）
+        MODEL_ACTION_DIM,
+        OPENPI_COMMIT,  # noqa: F401
+        project_policy_actions,
+    )
 
 # ---------------------------------------------------------------------------
 # 日志
@@ -91,8 +101,9 @@ LORA_RANK: int = int(os.environ.get("PI05_LORA_RANK", "32"))
 # 冻结 Arm_A policy state：末端 6D pose + 1 gripper = 7。
 # 作为唯一真相源，供 train.py 与 compute_norm_stats.py 引用
 STATE_DIM: int = int(os.environ.get("PI05_STATE_DIM", "7"))
-MODEL_ACTION_DIM: int = 32
-CANONICAL_ACTION_DIM: int = 7
+# MODEL_ACTION_DIM / CANONICAL_ACTION_DIM / project_policy_actions 的定义已迁入
+# configs/pi05/constants.py（无副作用模块，可被服务层安全导入），此处仅 re-export，
+# 保证 ``train_config.MODEL_ACTION_DIM`` 等引用方式不变（单一事实源）。
 UNFROZEN_ACTION_HORIZON: int = 10
 
 
@@ -109,18 +120,6 @@ def require_frozen_action_horizon(action_horizon: int, *, production: bool) -> i
             "placeholder and cannot enter production training"
         )
     return action_horizon
-
-
-def project_policy_actions(actions: Any) -> np.ndarray:
-    """Project one pinned π0.5 32-D output onto the canonical seven axes."""
-
-    array = np.asarray(actions)
-    if array.ndim < 1 or array.shape[-1] != MODEL_ACTION_DIM:
-        raise ValueError(
-            "π0.5 base-compatible output must end in "
-            f"{MODEL_ACTION_DIM} action dimensions, got {array.shape}"
-        )
-    return array[..., :CANONICAL_ACTION_DIM]
 
 
 # ----------------- 训练超参数补充（C2 修复）-----------------
