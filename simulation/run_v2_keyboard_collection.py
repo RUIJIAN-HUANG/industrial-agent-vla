@@ -19,6 +19,102 @@ REPOSITORY_ROOT = SCRIPT_DIR.parent
 SOURCE_DIR = REPOSITORY_ROOT / "src"
 
 
+def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(path)
+
+
+def _collect_p01_terminal_success(
+    *,
+    controller: Any,
+    probe: Any,
+    config: dict[str, Any],
+    artifact_dir: Path,
+) -> tuple[Any, Path]:
+    """Run ten real 100 ms hold actions and evaluate the frozen GT gates."""
+
+    from industrial_agent.contracts import ActionStep
+    from industrial_agent.sync_contract import FROZEN_MULTI_RATE
+    from simulation.v2_terminal_success import (
+        P01_MAX_VERTICAL_ERROR_RAD,
+        evaluate_p01_terminal_success,
+    )
+
+    part_path = "/World/Parts/P01"
+    bin_path = "/World/Bins/Bin_01"
+    hold_action = ActionStep.from_sequence(
+        (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0),
+        duration_ms=100,
+    )
+    positions = [probe.world_position(part_path)]
+    initial_orientation_error = probe.part_vertical_error_rad(
+        part_path=part_path,
+        bin_path=bin_path,
+    )
+    timestamps_s = [
+        float(controller.physics_tick_index) / FROZEN_MULTI_RATE.physics_hz
+    ]
+    vote_reports: list[dict[str, Any]] = []
+    vote_steps = {1, 5, 10}
+    for step in range(1, 11):
+        controller.execute_action(hold_action, arm_id="Arm_B")
+        physics_tick = int(controller.physics_tick_index)
+        positions.append(probe.world_position(part_path))
+        timestamps_s.append(float(physics_tick) / FROZEN_MULTI_RATE.physics_hz)
+        if step not in vote_steps:
+            continue
+        orientation_error = probe.part_vertical_error_rad(
+            part_path=part_path,
+            bin_path=bin_path,
+        )
+        containment = probe.part_fully_inside_bin(
+            part_path=part_path,
+            bin_path=bin_path,
+            bin_config=config["bin"],
+        )
+        vote_reports.append(
+            {
+                "observation_id": f"physics-{physics_tick}",
+                "timestamp_s": timestamps_s[-1],
+                "physics_tick": physics_tick,
+                "orientation_error_rad": orientation_error,
+                "containment": containment,
+                "pass": bool(
+                    containment["pass"]
+                    and orientation_error <= P01_MAX_VERTICAL_ERROR_RAD
+                ),
+            }
+        )
+
+    result = evaluate_p01_terminal_success(
+        orientation_error_rad=initial_orientation_error,
+        vote_reports=vote_reports,
+        positions_world=positions,
+        timestamps_s=timestamps_s,
+    )
+    payload = result.to_dict()
+    payload.update(
+        {
+            "scene_id": config["scene_id"],
+            "task_id": "P01_TO_S11",
+            "part_path": part_path,
+            "bin_path": bin_path,
+            "position_samples_world": positions,
+            "timestamp_samples_s": timestamps_s,
+            "vote_reports": vote_reports,
+            "isolation": "offline_gt_only",
+        }
+    )
+    report_path = artifact_dir / "offline_gt" / "p01_terminal_success.json"
+    _write_json_atomic(report_path, payload)
+    return result, report_path
+
+
 def _load_json(path: Path) -> dict[str, Any]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
@@ -124,6 +220,10 @@ def main() -> int:
     controller = None
     bridge = None
     machine = None
+    offline_gt_probe = None
+    terminal_hold_requested = False
+    terminal_success_report = None
+    terminal_success_path: Path | None = None
     action_count = 0
     phase = "launch"
     episode_path: Path | None = None
@@ -133,6 +233,7 @@ def main() -> int:
         from simulation.isaac_gui_keyboard import IsaacGuiKeyboardSource
         from simulation.isaac_rgb_pipeline import IsaacRgbObservationPipeline
         from simulation.keyboard_teleop import KeyboardTeleopMapper
+        from simulation.offline_gt import OfflineGtProbe
         from simulation.rgb_cas_bridge import IsaacRgbCasPublisher
         from simulation.v2_collection_state import (
             EpisodeOutcome,
@@ -162,6 +263,7 @@ def main() -> int:
             franka_asset_path=franka_asset,
             include_robots=True,
         )
+        offline_gt_probe = OfflineGtProbe(stage)
         isaac_compat.wait_for_stage_loading(simulation_app, timeout_seconds=180.0)
         scene_file = isaac_compat.save_stage_checked(args.output_scene)
 
@@ -323,6 +425,7 @@ def main() -> int:
                         arm_b_clear=arm_b["retreated"],
                     )
                     print("HUMAN CONFIRMED FULL TASK COMPLETE")
+                    terminal_hold_requested = True
                     running = False
                     continue
                 if command.action is None:
@@ -359,6 +462,22 @@ def main() -> int:
             except BaseException:
                 running = False
                 raise
+
+        if terminal_hold_requested and machine.outcome is EpisodeOutcome.SUCCEEDED:
+            phase = "terminal_hold_offline_gt"
+            terminal_success_report, terminal_success_path = (
+                _collect_p01_terminal_success(
+                    controller=controller,
+                    probe=offline_gt_probe,
+                    config=config,
+                    artifact_dir=artifact_dir,
+                )
+            )
+            if not terminal_success_report.passed:
+                from simulation.v2_collection_state import V2FailureCode
+
+                code = terminal_success_report.failure_codes[0]
+                machine.fail_offline_gt(V2FailureCode(code))
 
         phase = "safe_stop"
         receipt = controller.safe_stop("V2 keyboard collection finished")
@@ -397,6 +516,16 @@ def main() -> int:
                 "safe_stop": asdict(receipt),
                 "training_allowed": preflight.training_allowed,
                 "offline_gt_included": False,
+                "offline_gt_path": (
+                    str(terminal_success_path)
+                    if terminal_success_path is not None
+                    else None
+                ),
+                "terminal_success": (
+                    terminal_success_report.to_dict()
+                    if terminal_success_report is not None
+                    else None
+                ),
             }
         )
         return 0
@@ -425,6 +554,12 @@ def main() -> int:
         )
         return 1
     finally:
+        if terminal_success_path is not None:
+            result.setdefault("offline_gt_path", str(terminal_success_path))
+        if terminal_success_report is not None:
+            result.setdefault(
+                "terminal_success", terminal_success_report.to_dict()
+            )
         result["finished_at_local"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
         write_result(result_path, result)
         print(json.dumps(result, indent=2, ensure_ascii=False, default=str))

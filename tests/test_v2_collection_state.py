@@ -183,6 +183,23 @@ def test_success_requires_stable_finished_bin_and_arm_b_clear() -> None:
     assert machine.failure_code is None
 
 
+def test_offline_gt_can_gate_provisional_success() -> None:
+    machine = _machine()
+    _enter_b_only(machine)
+    machine.complete(
+        bin_at_finished=True,
+        bin_stable=True,
+        arm_b_gripper_open=True,
+        arm_b_clear=True,
+    )
+
+    machine.fail_offline_gt(V2FailureCode.P01_TERMINAL_DRIFT_EXCEEDED)
+
+    assert machine.outcome is EpisodeOutcome.FAILED
+    assert machine.failure_code is V2FailureCode.P01_TERMINAL_DRIFT_EXCEEDED
+    assert machine.token is ControlToken.NONE
+
+
 @pytest.mark.parametrize(
     ("confirmed", "outcome", "failure_code"),
     [

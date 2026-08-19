@@ -10,6 +10,8 @@ from __future__ import annotations
 from itertools import product
 from typing import Any, Mapping, Sequence
 
+from simulation.v2_terminal_success import vertical_error_rad
+
 
 class OfflineGtProbe:
     """Read live USD transforms without exposing them to online consumers."""
@@ -70,6 +72,38 @@ class OfflineGtProbe:
             Gf.Vec3d(*(float(value) for value in local_point))
         )
         return [float(value) for value in transformed]
+
+    def world_direction(
+        self,
+        path: str,
+        local_direction: Sequence[float],
+    ) -> list[float]:
+        """Transform a local direction into world space without translation."""
+
+        if len(local_direction) != 3:
+            raise ValueError("local direction must contain three values")
+        try:
+            from pxr import Gf
+        except ImportError as exc:
+            raise RuntimeError("offline_gt requires Isaac Sim Gf bindings") from exc
+        direction = Gf.Vec3d(*(float(value) for value in local_direction))
+        transformed = self._world_matrix(path).TransformDir(direction)
+        return [float(value) for value in transformed]
+
+    def part_vertical_error_rad(
+        self,
+        *,
+        part_path: str,
+        bin_path: str,
+        part_axis_local: Sequence[float] = (0.0, 0.0, 1.0),
+        bin_vertical_local: Sequence[float] = (0.0, 0.0, 1.0),
+    ) -> float:
+        """Measure the directed P01 axis error against the bin vertical."""
+
+        return vertical_error_rad(
+            self.world_direction(part_path, part_axis_local),
+            self.world_direction(bin_path, bin_vertical_local),
+        )
 
     def part_fully_inside_bin(
         self,

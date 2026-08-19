@@ -35,6 +35,12 @@ class V2FailureCode(str, Enum):
     FINISH_PRECONDITION_FAILED = "V2_COLLECTION_FINISH_PRECONDITION_FAILED"
     USER_SAFE_STOP = "V2_COLLECTION_USER_SAFE_STOP"
     SAFE_STOP_CONFIRMATION_FAILED = "V2_COLLECTION_SAFE_STOP_CONFIRMATION_FAILED"
+    P01_ORIENTATION_EXCEEDED = "P01_ORIENTATION_EXCEEDED"
+    P01_GT_NOT_FRESH = "P01_GT_NOT_FRESH"
+    P01_GT_VOTE_INSUFFICIENT = "P01_GT_VOTE_INSUFFICIENT"
+    P01_TERMINAL_HOLD_TOO_SHORT = "P01_TERMINAL_HOLD_TOO_SHORT"
+    P01_TERMINAL_DRIFT_EXCEEDED = "P01_TERMINAL_DRIFT_EXCEEDED"
+    P01_OFFLINE_GT_UNAVAILABLE = "P01_OFFLINE_GT_UNAVAILABLE"
 
 
 class CollectionStateError(RuntimeError):
@@ -292,3 +298,14 @@ class V2ManualCollectionStateMachine:
         else:
             self.outcome = EpisodeOutcome.SAFE_STOP_FAILED
             self.failure_code = V2FailureCode.SAFE_STOP_CONFIRMATION_FAILED
+
+    def fail_offline_gt(self, code: V2FailureCode) -> None:
+        """Convert a provisional workflow success into a failed GT gate."""
+
+        if self.outcome is not EpisodeOutcome.SUCCEEDED:
+            raise RuntimeError("offline GT can only gate a provisional success")
+        if not isinstance(code, V2FailureCode):
+            raise TypeError("offline GT failure code must be V2FailureCode")
+        self.outcome = EpisodeOutcome.FAILED
+        self.failure_code = code
+        self.token = ControlToken.NONE

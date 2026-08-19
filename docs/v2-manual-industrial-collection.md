@@ -118,6 +118,23 @@ python scripts\pi05\convert_openpi_v2.py `
 窗口。N<10、缺 tick、padding、NaN/Inf 或错误身份一律拒绝。真实 LeRobot 转换还
 要求在固定训练环境安装 LeRobot；当前普通 CI 环境不包含该依赖。
 
+## P01_TO_S11 离线成功门禁
+
+Episode 只有同时满足以下三个离线 GT 条件，才允许将 Canonical
+`metadata.outcome` 写为 `SUCCEEDED`：
+
+1. P01 的有向本体轴与料箱局部竖直轴的夹角不超过 15°；
+2. 终端保持期间执行 3 个不同 physics tick 的新鲜 GT 观测，完整 GT
+   判定至少 2 个通过；
+3. 真实执行 10 个连续 100 ms 保持动作，保持跨度至少 1.0 s，P01 参考点
+   相对保持起点的最大位置漂移不超过 1 mm。
+
+判定实现位于 `simulation/v2_terminal_success.py`，Isaac 读取位于
+`simulation/offline_gt.py`。详细角度、位置、时间戳和投票只写入
+`offline_gt/p01_terminal_success.json`；Canonical 始终保持
+`offline_gt_included=false`。失败时使用明确的 P01 GT failure code，不能降级
+为 `SUCCEEDED`。
+
 ## 状态声明规则
 
 - 静态 `PASS` 只表示 JSON、程序化资产、槽位、质量和相机合同一致；
