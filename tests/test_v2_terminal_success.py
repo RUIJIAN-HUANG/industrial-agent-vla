@@ -3,6 +3,7 @@ import math
 import pytest
 
 from simulation.run_v2_keyboard_collection import _collect_p01_terminal_success
+from simulation.offline_gt import slot_interior_bounds
 from simulation.v2_terminal_success import (
     P01_MAX_VERTICAL_ERROR_RAD,
     evaluate_fresh_gt_votes,
@@ -30,8 +31,15 @@ class _FakeProbe:
     def part_vertical_error_rad(self, *, part_path: str, bin_path: str) -> float:
         return math.radians(5.0)
 
-    def part_fully_inside_bin(self, *, part_path: str, bin_path: str, bin_config):
-        return {"pass": True, "part_path": part_path, "bin_path": bin_path}
+    def part_fully_inside_slot(
+        self, *, part_path: str, bin_path: str, bin_config, slot_id: str
+    ):
+        return {
+            "pass": True,
+            "part_path": part_path,
+            "bin_path": bin_path,
+            "slot_id": slot_id,
+        }
 
 
 def _votes(*passed: bool) -> list[dict[str, object]]:
@@ -111,7 +119,29 @@ def test_all_three_gates_are_required_and_gt_is_not_canonical() -> None:
     assert "P01_ORIENTATION_EXCEEDED" in failed.failure_codes
 
 
-def test_terminal_collection_runs_ten_real_hold_actions_and_writes_sidecar(tmp_path) -> None:
+def test_s11_bounds_exclude_neighbor_slots_and_dividers() -> None:
+    config = {
+        "size_m": [0.3, 0.22, 0.09],
+        "wall_thickness_m": 0.006,
+        "divider_thickness_m": 0.004,
+        "bottom_thickness_m": 0.006,
+        "slots": [
+            {"id": "S11", "center_local_m": [-0.1125, 0.055, 0.0]},
+            {"id": "S12", "center_local_m": [-0.0375, 0.055, 0.0]},
+            {"id": "S21", "center_local_m": [-0.1125, -0.055, 0.0]},
+            {"id": "S22", "center_local_m": [-0.0375, -0.055, 0.0]},
+        ],
+    }
+
+    bounds = slot_interior_bounds(config, "S11")
+
+    assert bounds["min"] == pytest.approx([-0.144, 0.002, -0.039])
+    assert bounds["max"] == pytest.approx([-0.077, 0.104, 0.045])
+
+
+def test_terminal_collection_runs_ten_real_hold_actions_and_writes_sidecar(
+    tmp_path,
+) -> None:
     controller = _FakeController()
     result, report_path = _collect_p01_terminal_success(
         controller=controller,
@@ -122,6 +152,16 @@ def test_terminal_collection_runs_ten_real_hold_actions_and_writes_sidecar(tmp_p
 
     assert result.passed is True
     assert len(controller.actions) == 10
+    assert {arm_id for _, arm_id in controller.actions} == {"Arm_A"}
+    assert (
+        _FakeProbe().part_fully_inside_slot(
+            part_path="/World/Parts/P01",
+            bin_path="/World/Bins/Bin_01",
+            bin_config={},
+            slot_id="S11",
+        )["slot_id"]
+        == "S11"
+    )
     assert report_path.is_file()
     payload = report_path.read_text(encoding="utf-8")
     assert '"canonical_included": false' in payload

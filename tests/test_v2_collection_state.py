@@ -7,6 +7,7 @@ from simulation.v2_collection_state import (
     CollectionStateError,
     ControlToken,
     EpisodeOutcome,
+    P01ToS11CollectionStateMachine,
     V2CollectionContract,
     V2FailureCode,
     V2ManualCollectionStateMachine,
@@ -46,6 +47,11 @@ def _config() -> dict:
 def _machine() -> V2ManualCollectionStateMachine:
     contract = V2CollectionContract.from_config(_config())
     return V2ManualCollectionStateMachine(contract)
+
+
+def _p01_machine() -> P01ToS11CollectionStateMachine:
+    contract = V2CollectionContract.from_config(_config())
+    return P01ToS11CollectionStateMachine(contract)
 
 
 def _place_all(machine: V2ManualCollectionStateMachine) -> None:
@@ -227,3 +233,39 @@ def test_safe_stop_outcome_is_truthful(
     assert machine.token is ControlToken.NONE
     assert machine.outcome is outcome
     assert machine.failure_code is failure_code
+
+
+def test_p01_profile_ends_after_arm_a_without_handoff() -> None:
+    machine = _p01_machine()
+
+    machine.require_arm_action("Arm_A")
+    machine.record_part_placement(part_id="P01", slot_id="S11", stable=True)
+    machine.complete_p01(arm_a_gripper_open=True, arm_a_clear=True)
+
+    assert machine.placed_parts == ("P01",)
+    assert machine.next_part_id is None
+    assert machine.token is ControlToken.NONE
+    assert machine.outcome is EpisodeOutcome.SUCCEEDED
+
+
+def test_p01_profile_rejects_arm_b_and_other_parts() -> None:
+    machine = _p01_machine()
+    with pytest.raises(CollectionStateError) as caught:
+        machine.require_arm_action("Arm_B")
+    assert caught.value.code is V2FailureCode.INACTIVE_ARM_ACTION
+
+    machine = _p01_machine()
+    with pytest.raises(CollectionStateError) as caught:
+        machine.record_part_placement(part_id="P02", slot_id="S21", stable=True)
+    assert caught.value.code is V2FailureCode.PART_ORDER_VIOLATION
+
+
+def test_p01_profile_requires_release_and_clearance() -> None:
+    machine = _p01_machine()
+    machine.record_part_placement(part_id="P01", slot_id="S11", stable=True)
+
+    with pytest.raises(CollectionStateError) as caught:
+        machine.complete_p01(arm_a_gripper_open=False, arm_a_clear=True)
+
+    assert caught.value.code is V2FailureCode.FINISH_PRECONDITION_FAILED
+    assert machine.outcome is EpisodeOutcome.FAILED

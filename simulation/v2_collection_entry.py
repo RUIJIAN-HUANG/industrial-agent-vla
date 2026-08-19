@@ -9,7 +9,7 @@ from pathlib import Path
 import subprocess
 from typing import Any
 
-from industrial_agent.data import CanonicalRecorder, EpisodeMetadata
+from industrial_agent.data import CanonicalV2EpisodeMetadata, CanonicalV2Recorder
 from industrial_agent.image_cas import ImageCas, ImageCasConfig
 from simulation.v2_collection_preflight import (
     CollectionPreflight,
@@ -108,10 +108,10 @@ def preflight_from_args(
 
 def create_recorder(
     preflight: CollectionPreflight,
-) -> tuple[ImageCas, CanonicalRecorder]:
+) -> tuple[ImageCas, CanonicalV2Recorder]:
     image_cas = ImageCas(ImageCasConfig(root=preflight.cas_root))
     image_cas.assert_ready(writable=True)
-    metadata = EpisodeMetadata(
+    metadata = CanonicalV2EpisodeMetadata(
         episode_id=preflight.episode_id,
         task_id=preflight.task_id,
         instruction=preflight.instruction,
@@ -120,7 +120,7 @@ def create_recorder(
         scene_config_sha256=preflight.scene_config_sha256,
         scene_id=preflight.scene_id,
     )
-    return image_cas, CanonicalRecorder(
+    return image_cas, CanonicalV2Recorder(
         preflight.episode_root,
         metadata,
         image_cas=image_cas,

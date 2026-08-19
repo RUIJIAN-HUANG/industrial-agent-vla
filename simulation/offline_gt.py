@@ -13,6 +13,77 @@ from typing import Any, Mapping, Sequence
 from simulation.v2_terminal_success import vertical_error_rad
 
 
+def slot_interior_bounds(
+    bin_config: Mapping[str, Any],
+    slot_id: str,
+) -> dict[str, list[float]]:
+    """Return one slot's usable XYZ bounds in the bin-local frame."""
+
+    size = [float(value) for value in bin_config["size_m"]]
+    if len(size) != 3:
+        raise ValueError("bin size must contain three values")
+    wall = float(bin_config["wall_thickness_m"])
+    divider = float(bin_config["divider_thickness_m"])
+    bottom = float(bin_config["bottom_thickness_m"])
+    slots = bin_config.get("slots")
+    if not isinstance(slots, list):
+        raise ValueError("bin slots must be a list")
+
+    centers: dict[str, tuple[float, float]] = {}
+    for slot in slots:
+        if not isinstance(slot, Mapping):
+            raise ValueError("each bin slot must be an object")
+        center = slot.get("center_local_m")
+        if not isinstance(center, Sequence) or isinstance(center, (str, bytes)):
+            raise ValueError("each bin slot requires center_local_m")
+        if len(center) != 3:
+            raise ValueError("slot center_local_m must contain three values")
+        identifier = str(slot.get("id", ""))
+        if not identifier or identifier in centers:
+            raise ValueError("bin slot ids must be non-empty and unique")
+        centers[identifier] = (float(center[0]), float(center[1]))
+    if slot_id not in centers:
+        raise ValueError(f"unknown bin slot: {slot_id}")
+
+    x_centers = sorted({center[0] for center in centers.values()})
+    y_centers = sorted({center[1] for center in centers.values()})
+    target_x, target_y = centers[slot_id]
+
+    def _axis_bounds(
+        center: float,
+        axis_centers: list[float],
+        outer_min: float,
+        outer_max: float,
+    ) -> tuple[float, float]:
+        index = axis_centers.index(center)
+        lower = outer_min
+        upper = outer_max
+        if index > 0:
+            lower = (axis_centers[index - 1] + center) / 2.0 + divider / 2.0
+        if index + 1 < len(axis_centers):
+            upper = (center + axis_centers[index + 1]) / 2.0 - divider / 2.0
+        if lower >= upper:
+            raise ValueError("slot interior is empty")
+        return lower, upper
+
+    x_min, x_max = _axis_bounds(
+        target_x,
+        x_centers,
+        -size[0] / 2.0 + wall,
+        size[0] / 2.0 - wall,
+    )
+    y_min, y_max = _axis_bounds(
+        target_y,
+        y_centers,
+        -size[1] / 2.0 + wall,
+        size[1] / 2.0 - wall,
+    )
+    return {
+        "min": [x_min, y_min, -size[2] / 2.0 + bottom],
+        "max": [x_max, y_max, size[2] / 2.0],
+    }
+
+
 class OfflineGtProbe:
     """Read live USD transforms without exposing them to online consumers."""
 
@@ -161,6 +232,58 @@ class OfflineGtProbe:
             "bin_path": bin_path,
             "part_bound_in_bin_local_m": {"min": local_min, "max": local_max},
             "allowed_bin_interior_m": {"min": allowed_min, "max": allowed_max},
+            "axis_pass": {"x": axis_pass[0], "y": axis_pass[1], "z": axis_pass[2]},
+            "numerical_tolerance_m": tolerance,
+        }
+
+    def part_fully_inside_slot(
+        self,
+        *,
+        part_path: str,
+        bin_path: str,
+        bin_config: Mapping[str, Any],
+        slot_id: str,
+        numerical_tolerance_m: float = 0.001,
+    ) -> dict[str, Any]:
+        """Require the complete part bound inside one configured bin slot."""
+
+        tolerance = float(numerical_tolerance_m)
+        if tolerance < 0.0 or tolerance > 0.001:
+            raise ValueError("numerical tolerance must be in [0, 0.001] m")
+        allowed = slot_interior_bounds(bin_config, slot_id)
+
+        world_range = self._world_aligned_range(part_path)
+        world_min = world_range.GetMin()
+        world_max = world_range.GetMax()
+        bin_inverse = self._world_matrix(bin_path).GetInverse()
+        try:
+            from pxr import Gf
+        except ImportError as exc:
+            raise RuntimeError("offline_gt requires Isaac Sim Gf bindings") from exc
+
+        local_corners: list[list[float]] = []
+        for x, y, z in product(
+            (float(world_min[0]), float(world_max[0])),
+            (float(world_min[1]), float(world_max[1])),
+            (float(world_min[2]), float(world_max[2])),
+        ):
+            point = bin_inverse.Transform(Gf.Vec3d(x, y, z))
+            local_corners.append([float(value) for value in point])
+
+        local_min = [min(corner[axis] for corner in local_corners) for axis in range(3)]
+        local_max = [max(corner[axis] for corner in local_corners) for axis in range(3)]
+        axis_pass = [
+            local_min[axis] >= allowed["min"][axis] - tolerance
+            and local_max[axis] <= allowed["max"][axis] + tolerance
+            for axis in range(3)
+        ]
+        return {
+            "pass": all(axis_pass),
+            "part_path": part_path,
+            "bin_path": bin_path,
+            "slot_id": slot_id,
+            "part_bound_in_bin_local_m": {"min": local_min, "max": local_max},
+            "allowed_slot_interior_m": allowed,
             "axis_pass": {"x": axis_pass[0], "y": axis_pass[1], "z": axis_pass[2]},
             "numerical_tolerance_m": tolerance,
         }

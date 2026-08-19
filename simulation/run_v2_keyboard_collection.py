@@ -36,7 +36,7 @@ def _collect_p01_terminal_success(
     config: dict[str, Any],
     artifact_dir: Path,
 ) -> tuple[Any, Path]:
-    """Run ten real 100 ms hold actions and evaluate the frozen GT gates."""
+    """Run ten real 100 ms Arm_A hold actions and evaluate frozen GT gates."""
 
     from industrial_agent.contracts import ActionStep
     from industrial_agent.sync_contract import FROZEN_MULTI_RATE
@@ -56,13 +56,11 @@ def _collect_p01_terminal_success(
         part_path=part_path,
         bin_path=bin_path,
     )
-    timestamps_s = [
-        float(controller.physics_tick_index) / FROZEN_MULTI_RATE.physics_hz
-    ]
+    timestamps_s = [float(controller.physics_tick_index) / FROZEN_MULTI_RATE.physics_hz]
     vote_reports: list[dict[str, Any]] = []
     vote_steps = {1, 5, 10}
     for step in range(1, 11):
-        controller.execute_action(hold_action, arm_id="Arm_B")
+        controller.execute_action(hold_action, arm_id="Arm_A")
         physics_tick = int(controller.physics_tick_index)
         positions.append(probe.world_position(part_path))
         timestamps_s.append(float(physics_tick) / FROZEN_MULTI_RATE.physics_hz)
@@ -72,10 +70,11 @@ def _collect_p01_terminal_success(
             part_path=part_path,
             bin_path=bin_path,
         )
-        containment = probe.part_fully_inside_bin(
+        containment = probe.part_fully_inside_slot(
             part_path=part_path,
             bin_path=bin_path,
             bin_config=config["bin"],
+            slot_id="S11",
         )
         vote_reports.append(
             {
@@ -237,15 +236,15 @@ def main() -> int:
         from simulation.rgb_cas_bridge import IsaacRgbCasPublisher
         from simulation.v2_collection_state import (
             EpisodeOutcome,
+            P01ToS11CollectionStateMachine,
             V2CollectionContract,
-            V2ManualCollectionStateMachine,
         )
         from simulation.v2_scene_contract import require_valid_config
 
         config = _load_json(preflight.config_path)
         require_valid_config(config)
         contract = V2CollectionContract.from_config(config)
-        machine = V2ManualCollectionStateMachine(contract)
+        machine = P01ToS11CollectionStateMachine(contract)
 
         _preload_pink_runtime(args.ik_backend)
         simulation_app = isaac_compat.launch_simulation_app(headless=False)
@@ -342,8 +341,8 @@ def main() -> int:
                 ui.Label(
                     f"IK backend: {controller.ik_backend.upper()} + null-space posture"
                 )
-                ui.Label("Z confirm next part | V verify handoff | B activate Arm_B")
-                ui.Label("C complete full task | P checkpoint | X safe-stop")
+                ui.Label("Z confirm P01 in S11 | C complete P01 task")
+                ui.Label("P checkpoint | X safe-stop | V/B disabled for this task")
                 ui.Label("Tap keys once. Do not hold. Formal actions are recorded.")
                 status_label = ui.Label("READY | A_ONLY | next=P01")
 
@@ -401,30 +400,20 @@ def main() -> int:
                     )
                     continue
                 if command.kind == "handoff_verify":
+                    raise RuntimeError(
+                        "P01_TO_S11 ends before handoff; V is not allowed"
+                    )
+                if command.kind == "activate_b":
+                    raise RuntimeError(
+                        "P01_TO_S11 permits Arm_A only; B is not allowed"
+                    )
+                if command.kind == "complete":
                     arm_a = _arm_readback(controller, arms, config, "Arm_A")
-                    machine.enter_handoff_verify(
-                        bin_at_handoff_center=True,
-                        bin_stable=True,
+                    machine.complete_p01(
                         arm_a_gripper_open=arm_a["gripper_open"],
                         arm_a_clear=arm_a["retreated"],
                     )
-                    print("HUMAN CONFIRMED HANDOFF_VERIFY")
-                    continue
-                if command.kind == "activate_b":
-                    machine.activate_b_only()
-                    active_arm = "Arm_B"
-                    mapper.set_gripper_open(True)
-                    print("TOKEN=B_ONLY active_arm=Arm_B")
-                    continue
-                if command.kind == "complete":
-                    arm_b = _arm_readback(controller, arms, config, "Arm_B")
-                    machine.complete(
-                        bin_at_finished=True,
-                        bin_stable=True,
-                        arm_b_gripper_open=arm_b["gripper_open"],
-                        arm_b_clear=arm_b["retreated"],
-                    )
-                    print("HUMAN CONFIRMED FULL TASK COMPLETE")
+                    print("HUMAN CONFIRMED P01_TO_S11 COMPLETE")
                     terminal_hold_requested = True
                     running = False
                     continue
@@ -557,9 +546,7 @@ def main() -> int:
         if terminal_success_path is not None:
             result.setdefault("offline_gt_path", str(terminal_success_path))
         if terminal_success_report is not None:
-            result.setdefault(
-                "terminal_success", terminal_success_report.to_dict()
-            )
+            result.setdefault("terminal_success", terminal_success_report.to_dict())
         result["finished_at_local"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
         write_result(result_path, result)
         print(json.dumps(result, indent=2, ensure_ascii=False, default=str))

@@ -309,3 +309,121 @@ class V2ManualCollectionStateMachine:
         self.outcome = EpisodeOutcome.FAILED
         self.failure_code = code
         self.token = ControlToken.NONE
+
+
+class P01ToS11CollectionStateMachine:
+    """Single-skill state machine for one Arm_A P01-to-S11 Episode.
+
+    The complete eight-part/Arm_B workflow remains available through
+    :class:`V2ManualCollectionStateMachine`; this profile deliberately ends
+    before handoff so its actions remain compatible with the frozen
+    ``Arm_A/pi05/P01_TO_S11`` Canonical V2 identity.
+    """
+
+    TASK_ID = "P01_TO_S11"
+    PART_ID = "P01"
+    SLOT_ID = "S11"
+
+    def __init__(self, contract: V2CollectionContract):
+        if contract.part_to_slot.get(self.PART_ID) != self.SLOT_ID:
+            raise ValueError("V2 scene must map P01 to S11")
+        self.contract = contract
+        self.token = ControlToken.A_ONLY
+        self.outcome: EpisodeOutcome | None = None
+        self.failure_code: V2FailureCode | None = None
+        self._placed = False
+
+    @property
+    def placed_parts(self) -> tuple[str, ...]:
+        return (self.PART_ID,) if self._placed else ()
+
+    @property
+    def next_part_id(self) -> str | None:
+        return None if self._placed else self.PART_ID
+
+    def _require_active(self) -> None:
+        if self.outcome is not None or self.token is ControlToken.NONE:
+            raise RuntimeError("P01 collection attempt is already terminal")
+
+    def _reject(self, code: V2FailureCode, message: str) -> None:
+        self.failure_code = code
+        self.outcome = EpisodeOutcome.FAILED
+        self.token = ControlToken.NONE
+        raise CollectionStateError(code, message)
+
+    def require_arm_action(self, arm_id: str) -> None:
+        self._require_active()
+        if arm_id != "Arm_A":
+            self._reject(
+                V2FailureCode.INACTIVE_ARM_ACTION,
+                "P01_TO_S11 permits Arm_A actions only",
+            )
+
+    def record_part_placement(
+        self,
+        *,
+        part_id: str,
+        slot_id: str,
+        stable: bool,
+    ) -> None:
+        self._require_active()
+        if self._placed or part_id != self.PART_ID:
+            self._reject(
+                V2FailureCode.PART_ORDER_VIOLATION,
+                f"P01_TO_S11 requires exactly one {self.PART_ID} placement",
+            )
+        if slot_id != self.SLOT_ID:
+            self._reject(
+                V2FailureCode.SLOT_MISMATCH,
+                f"{self.PART_ID} must be placed in {self.SLOT_ID}",
+            )
+        if stable is not True:
+            self._reject(
+                V2FailureCode.PART_UNSTABLE,
+                f"{self.PART_ID} is not stable in {self.SLOT_ID}",
+            )
+        self._placed = True
+
+    def complete_p01(
+        self,
+        *,
+        arm_a_gripper_open: bool,
+        arm_a_clear: bool,
+    ) -> None:
+        """Provisionally finish; the isolated offline GT gate runs next."""
+
+        self._require_active()
+        if not all(
+            (
+                self._placed,
+                arm_a_gripper_open is True,
+                arm_a_clear is True,
+            )
+        ):
+            self._reject(
+                V2FailureCode.FINISH_PRECONDITION_FAILED,
+                "P01 completion requires confirmed S11 placement, open gripper, "
+                "and Arm_A clear",
+            )
+        self.token = ControlToken.NONE
+        self.outcome = EpisodeOutcome.SUCCEEDED
+        self.failure_code = None
+
+    def safe_stop(self, *, confirmed: bool) -> None:
+        self._require_active()
+        self.token = ControlToken.NONE
+        if confirmed:
+            self.outcome = EpisodeOutcome.SAFE_STOPPED
+            self.failure_code = V2FailureCode.USER_SAFE_STOP
+        else:
+            self.outcome = EpisodeOutcome.SAFE_STOP_FAILED
+            self.failure_code = V2FailureCode.SAFE_STOP_CONFIRMATION_FAILED
+
+    def fail_offline_gt(self, code: V2FailureCode) -> None:
+        if self.outcome is not EpisodeOutcome.SUCCEEDED:
+            raise RuntimeError("offline GT can only gate a provisional success")
+        if not isinstance(code, V2FailureCode):
+            raise TypeError("offline GT failure code must be V2FailureCode")
+        self.outcome = EpisodeOutcome.FAILED
+        self.failure_code = code
+        self.token = ControlToken.NONE

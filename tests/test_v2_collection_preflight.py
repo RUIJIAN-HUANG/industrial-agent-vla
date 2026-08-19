@@ -21,8 +21,8 @@ def _build(tmp_path: Path, **overrides):
         "episode_root": tmp_path / "episodes",
         "cas_root": tmp_path / "cas",
         "episode_id": "v2-manual-20260812-130000-seed007-run001",
-        "task_id": "v2-practice-grasp-upright-shaft",
-        "instruction": "使用 Arm_A 将 P01 放入 S11",
+        "task_id": "P01_TO_S11",
+        "instruction": "把P01放到S11中",
         "scene_seed": 7,
         "split": CollectionSplit.PRACTICE,
         "headless": False,
@@ -37,7 +37,9 @@ def test_valid_practice_preflight_uses_real_v2_identity(tmp_path: Path) -> None:
     result = _build(tmp_path)
 
     assert result.scene_id == "single_bin_manual_industrial_v2"
-    assert result.schema_version == "1.0"
+    assert result.canonical_schema_version == "2.0"
+    assert result.task_id == "P01_TO_S11"
+    assert result.instruction == "把P01放到S11中"
     assert result.split is CollectionSplit.PRACTICE
     assert result.training_allowed is False
     assert result.full_task_required is False
@@ -50,6 +52,23 @@ def test_valid_practice_preflight_uses_real_v2_identity(tmp_path: Path) -> None:
             tmp_path / "episodes" / "v2-manual-20260812-130000-seed007-run001"
         ).resolve()
     )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("task_id", "v2-practice-grasp-upright-shaft", "task_id must equal"),
+        ("instruction", "使用 Arm_A 将 P01 放入 S11", "instruction must equal"),
+    ],
+)
+def test_non_frozen_v2_identity_is_rejected(
+    tmp_path: Path,
+    field: str,
+    value: str,
+    message: str,
+) -> None:
+    with pytest.raises(CollectionPreflightError, match=message):
+        _build(tmp_path, **{field: value})
 
 
 @pytest.mark.parametrize(

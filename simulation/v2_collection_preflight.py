@@ -10,10 +10,14 @@ from pathlib import Path
 import re
 from typing import Any
 
+from industrial_agent.data.recorder_v2 import (
+    CANONICAL_V2_VERSION,
+    V2_INSTRUCTION,
+    V2_TASK_ID,
+)
 from simulation.v2_collection_state import V2CollectionContract
 
 
-_CANONICAL_SCHEMA_VERSION = "1.0"
 _SAFE_EPISODE_ID = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 _GIT_SHA = re.compile(r"^[0-9a-fA-F]{40}$")
 
@@ -40,7 +44,7 @@ class CollectionPreflight:
     instruction: str
     scene_seed: int
     split: CollectionSplit
-    schema_version: str
+    canonical_schema_version: str
     scene_id: str
     git_sha: str
     scene_config_sha256: str
@@ -108,6 +112,15 @@ def build_collection_preflight(
     ):
         raise CollectionPreflightError("scene_seed must be a non-negative integer")
 
+    if task_id != V2_TASK_ID:
+        raise CollectionPreflightError(
+            f"task_id must equal the frozen V2 identity {V2_TASK_ID!r}"
+        )
+    if instruction != V2_INSTRUCTION:
+        raise CollectionPreflightError(
+            f"instruction must equal the frozen V2 text {V2_INSTRUCTION!r}"
+        )
+
     try:
         normalized_split = CollectionSplit(split)
     except ValueError as exc:
@@ -160,7 +173,7 @@ def build_collection_preflight(
         instruction=_non_blank(instruction, "instruction"),
         scene_seed=scene_seed,
         split=normalized_split,
-        schema_version=_CANONICAL_SCHEMA_VERSION,
+        canonical_schema_version=CANONICAL_V2_VERSION,
         scene_id=contract.scene_id,
         git_sha=git_sha.lower(),
         scene_config_sha256=f"sha256:{sha256(raw_config).hexdigest()}",
