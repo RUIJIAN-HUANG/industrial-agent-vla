@@ -1,4 +1,5 @@
 import math
+import json
 
 import pytest
 
@@ -55,14 +56,17 @@ class _FakeProbe:
     def part_vertical_error_rad(self, *, part_path: str, bin_path: str) -> float:
         return math.radians(5.0)
 
-    def part_fully_inside_slot(
-        self, *, part_path: str, bin_path: str, bin_config, slot_id: str
-    ):
-        return {
-            "pass": True,
+    def p01_in_s11(self, *, part_path: str, bin_path: str, bin_config):
+        containment = {
+            "pass": False,
             "part_path": part_path,
             "bin_path": bin_path,
-            "slot_id": slot_id,
+            "slot_id": "S11",
+        }
+        return {
+            "pass": True,
+            "slot_id": "S11",
+            "containment": containment,
         }
 
 
@@ -163,7 +167,7 @@ def test_s11_bounds_exclude_neighbor_slots_and_dividers() -> None:
     assert bounds["max"] == pytest.approx([-0.077, 0.104, 0.045])
 
 
-def test_terminal_collection_runs_ten_real_hold_actions_and_writes_sidecar(
+def test_terminal_collection_uses_task_semantics_and_preserves_diagnostic_sidecar(
     tmp_path,
 ) -> None:
     controller = _FakeController()
@@ -190,17 +194,20 @@ def test_terminal_collection_runs_ten_real_hold_actions_and_writes_sidecar(
     assert {record["subtask_id"] for record in bridge.records} == {"P01_TO_S11"}
     assert {arm_id for _, arm_id in controller.actions} == {"Arm_A"}
     assert (
-        _FakeProbe().part_fully_inside_slot(
+        _FakeProbe().p01_in_s11(
             part_path="/World/Parts/P01",
             bin_path="/World/Bins/Bin_01",
             bin_config={},
-            slot_id="S11",
         )["slot_id"]
         == "S11"
     )
     assert report_path.is_file()
-    payload = report_path.read_text(encoding="utf-8")
-    assert '"canonical_included": false' in payload
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    assert payload["canonical_included"] is False
+    assert all(report["pass"] for report in payload["vote_reports"])
+    assert all(
+        report["containment"]["pass"] is False for report in payload["vote_reports"]
+    )
 
 
 def test_terminal_collection_rejects_hold_actions_over_max_actions(tmp_path) -> None:

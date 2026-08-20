@@ -89,11 +89,10 @@ def _collect_p01_terminal_success(
             part_path=part_path,
             bin_path=bin_path,
         )
-        containment = probe.part_fully_inside_slot(
+        placement = probe.p01_in_s11(
             part_path=part_path,
             bin_path=bin_path,
             bin_config=config["bin"],
-            slot_id="S11",
         )
         vote_reports.append(
             {
@@ -101,9 +100,9 @@ def _collect_p01_terminal_success(
                 "timestamp_s": timestamps_s[-1],
                 "physics_tick": physics_tick,
                 "orientation_error_rad": orientation_error,
-                "containment": containment,
+                "containment": placement["containment"],
                 "pass": bool(
-                    containment["pass"]
+                    placement["pass"]
                     and orientation_error <= P01_MAX_VERTICAL_ERROR_RAD
                 ),
             }
