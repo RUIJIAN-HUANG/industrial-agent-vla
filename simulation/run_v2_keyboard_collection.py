@@ -31,11 +31,15 @@ def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
 
 def _collect_p01_terminal_success(
     *,
+    bridge: Any,
     controller: Any,
     probe: Any,
     config: dict[str, Any],
     artifact_dir: Path,
-) -> tuple[Any, Path]:
+    task_id: str,
+    episode_id: str,
+    action_count: int,
+) -> tuple[Any, Path, int]:
     """Run ten real 100 ms Arm_A hold actions and evaluate frozen GT gates."""
 
     from industrial_agent.contracts import ActionStep
@@ -60,7 +64,16 @@ def _collect_p01_terminal_success(
     vote_reports: list[dict[str, Any]] = []
     vote_steps = {1, 5, 10}
     for step in range(1, 11):
-        controller.execute_action(hold_action, arm_id="Arm_A")
+        _record_and_execute_formal_action(
+            bridge=bridge,
+            controller=controller,
+            action=hold_action,
+            arm_id="Arm_A",
+            task_id=task_id,
+            episode_id=episode_id,
+            action_index=action_count,
+        )
+        action_count += 1
         physics_tick = int(controller.physics_tick_index)
         positions.append(probe.world_position(part_path))
         timestamps_s.append(float(physics_tick) / FROZEN_MULTI_RATE.physics_hz)
@@ -111,7 +124,7 @@ def _collect_p01_terminal_success(
     )
     report_path = artifact_dir / "offline_gt" / "p01_terminal_success.json"
     _write_json_atomic(report_path, payload)
-    return result, report_path
+    return result, report_path, action_count
 
 
 def _record_and_execute_formal_action(
@@ -475,12 +488,16 @@ def main() -> int:
 
         if terminal_hold_requested and machine.outcome is EpisodeOutcome.SUCCEEDED:
             phase = "terminal_hold_offline_gt"
-            terminal_success_report, terminal_success_path = (
+            terminal_success_report, terminal_success_path, action_count = (
                 _collect_p01_terminal_success(
+                    bridge=bridge,
                     controller=controller,
                     probe=offline_gt_probe,
                     config=config,
                     artifact_dir=artifact_dir,
+                    task_id=preflight.task_id,
+                    episode_id=preflight.episode_id,
+                    action_count=action_count,
                 )
             )
             if not terminal_success_report.passed:

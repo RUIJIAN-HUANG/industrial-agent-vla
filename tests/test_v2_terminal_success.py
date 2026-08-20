@@ -24,6 +24,30 @@ class _FakeController:
         self.physics_tick_index += 12
 
 
+class _FakeBridge:
+    def __init__(self) -> None:
+        self.records = []
+
+    def record_action(
+        self,
+        action,
+        *,
+        arm_id: str,
+        subtask_id: str,
+        chunk_id: str,
+        physics_tick: int,
+    ) -> None:
+        self.records.append(
+            {
+                "action": action,
+                "arm_id": arm_id,
+                "subtask_id": subtask_id,
+                "chunk_id": chunk_id,
+                "physics_tick": physics_tick,
+            }
+        )
+
+
 class _FakeProbe:
     def world_position(self, path: str) -> list[float]:
         return [0.0, 0.0, 0.0]
@@ -143,15 +167,27 @@ def test_terminal_collection_runs_ten_real_hold_actions_and_writes_sidecar(
     tmp_path,
 ) -> None:
     controller = _FakeController()
-    result, report_path = _collect_p01_terminal_success(
+    bridge = _FakeBridge()
+    result, report_path, action_count = _collect_p01_terminal_success(
+        bridge=bridge,
         controller=controller,
         probe=_FakeProbe(),
         config={"scene_id": "single_bin_manual_industrial_v2", "bin": {}},
         artifact_dir=tmp_path,
+        task_id="P01_TO_S11",
+        episode_id="terminal-hold-test",
+        action_count=0,
     )
 
     assert result.passed is True
     assert len(controller.actions) == 10
+    assert action_count == 10
+    assert len(bridge.records) == 10
+    assert [record["physics_tick"] for record in bridge.records] == list(
+        range(0, 120, 12)
+    )
+    assert {record["arm_id"] for record in bridge.records} == {"Arm_A"}
+    assert {record["subtask_id"] for record in bridge.records} == {"P01_TO_S11"}
     assert {arm_id for _, arm_id in controller.actions} == {"Arm_A"}
     assert (
         _FakeProbe().part_fully_inside_slot(
