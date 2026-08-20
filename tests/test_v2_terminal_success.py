@@ -1,4 +1,5 @@
 import math
+import json
 
 import pytest
 
@@ -166,7 +167,7 @@ def test_s11_bounds_exclude_neighbor_slots_and_dividers() -> None:
     assert bounds["max"] == pytest.approx([-0.077, 0.104, 0.045])
 
 
-def test_terminal_collection_runs_ten_real_hold_actions_and_writes_sidecar(
+def test_terminal_collection_uses_task_semantics_and_preserves_diagnostic_sidecar(
     tmp_path,
 ) -> None:
     controller = _FakeController()
@@ -201,8 +202,12 @@ def test_terminal_collection_runs_ten_real_hold_actions_and_writes_sidecar(
         == "S11"
     )
     assert report_path.is_file()
-    payload = report_path.read_text(encoding="utf-8")
-    assert '"canonical_included": false' in payload
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    assert payload["canonical_included"] is False
+    assert all(report["pass"] for report in payload["vote_reports"])
+    assert all(
+        report["containment"]["pass"] is False for report in payload["vote_reports"]
+    )
 
 
 def test_terminal_collection_rejects_hold_actions_over_max_actions(tmp_path) -> None:
