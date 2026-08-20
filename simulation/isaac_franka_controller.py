@@ -807,6 +807,43 @@ class IsaacSimFrankaController:
             self._action_idle.set()
             self._action_lock.release()
 
+    def settle_current_targets(self, *, physics_ticks: int) -> None:
+        """Advance physics while retaining the final bounded joint targets."""
+        self._require_owner_thread()
+        if (
+            isinstance(physics_ticks, bool)
+            or not isinstance(physics_ticks, int)
+            or physics_ticks < 1
+            or physics_ticks % self._multi_rate.physics_ticks_per_model_step
+        ):
+            raise ValueError(
+                "settle physics_ticks must be a positive 10 Hz grid multiple"
+            )
+        if not self._action_lock.acquire(blocking=False):
+            raise RuntimeError("Isaac Franka controller rejected concurrent settle")
+        self._action_idle.clear()
+        try:
+            if self._stop_requested.is_set():
+                raise RuntimeError("controller rejected settle after safe-stop")
+            play = getattr(self._world, "play", None)
+            if callable(play):
+                play()
+            for _ in range(physics_ticks):
+                if self._stop_requested.is_set():
+                    raise RuntimeError("control lease was revoked during settle")
+                self._physics_tick_index += 1
+                render_due = (
+                    self._physics_tick_index % self._multi_rate.physics_ticks_per_render
+                    == 0
+                )
+                self._world.step(render=render_due)
+                observer = getattr(self, "_tick_observer", None)
+                if observer is not None:
+                    observer(self._physics_tick_index, render_due)
+        finally:
+            self._action_idle.set()
+            self._action_lock.release()
+
     def request_stop(self, reason: str) -> str:
         """Thread-safely revoke motion without entering an Isaac API."""
 

@@ -28,6 +28,7 @@ if __package__ in {None, ""}:
 from configs.pi05.constants import OPENPI_COMMIT
 from industrial_agent.data import SplitRegistry
 from industrial_agent.sync_contract import MODEL_INFERENCE_HZ
+from scripts.pi05.convert_openpi_v2 import main as convert_canonical_v2_main
 from scripts.pi05.provenance_context import (
     LEROBOT_PROVENANCE_MANIFEST_TYPE,
     ProvenanceContext,
@@ -545,7 +546,7 @@ def convert_canonical_to_lerobot(
     )
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Convert strict Canonical v1 PI05 Episodes to LeRobot",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -566,11 +567,17 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--robot_type", default=DEFAULT_ROBOT_TYPE)
     parser.add_argument("--push_to_hub", action="store_true")
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
-def main() -> int:
-    args = parse_args()
+def main(argv: Sequence[str] | None = None) -> int:
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments and arguments[0] == "v2":
+        return convert_canonical_v2_main(arguments[1:])
+    if arguments and arguments[0] == "v1":
+        arguments = arguments[1:]
+
+    args = parse_args() if argv is None else parse_args(arguments)
     if args.push_to_hub:
         print(
             "ERROR: this data-gate batch is offline-only; --push_to_hub is disabled",

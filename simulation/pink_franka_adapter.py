@@ -182,8 +182,23 @@ class PinkFrankaAdapter:
                 device=device,
                 controlled_joint_indices=indices,
             )
+            controller_tasks = getattr(controller, "_variable_input_tasks", None)
+            if controller_tasks is None:
+                controller_tasks = controller.cfg.variable_input_tasks
+            active_frame_tasks = [
+                task
+                for task in controller_tasks
+                if isinstance(task, FrameTask)
+                and getattr(task, "frame", None) == control_frame_name
+            ]
+            if len(active_frame_tasks) != 1:
+                raise RuntimeError(
+                    f"Pink controller has {len(active_frame_tasks)} active "
+                    f"tasks for frame {control_frame_name!r}"
+                )
+
             self._controllers[arm_id] = controller
-            self._frame_tasks[arm_id] = frame_task
+            self._frame_tasks[arm_id] = active_frame_tasks[0]
             self._controlled_indices[arm_id] = indices
             self._diagnostics[arm_id] = {
                 "backend": "pink",
@@ -239,13 +254,81 @@ class PinkFrankaAdapter:
         )
         self._frame_tasks[arm_id].set_target(target)
 
+        controller = self._controllers[arm_id]
         predicted = current.copy()
+
+        # Keep live and predicted configurations inside Pink/Pinocchio limits.
+        # A small margin prevents physics overshoot and floating-point noise from
+        # leaving the next QP with an invalid starting configuration.
+        joint_limit_margin_rad = 0.02
+        joint_limit_recovery_tolerance_rad = 1e-3
+        joint_limit_state_recovered = False
+        joint_limit_target_clamped = False
+        safe_lower = None
+        safe_upper = None
+
+        pink_configuration = getattr(controller, "pink_configuration", None)
+        pink_model = getattr(pink_configuration, "model", None)
+        if pink_model is not None:
+            controlled_count = len(indices)
+            lower = np.asarray(pink_model.lowerPositionLimit, dtype=float).reshape(-1)
+            upper = np.asarray(pink_model.upperPositionLimit, dtype=float).reshape(-1)
+            if lower.size < controlled_count or upper.size < controlled_count:
+                raise RuntimeError(f"Pink joint limit vector is too short for {arm_id}")
+
+            lower = lower[:controlled_count]
+            upper = upper[:controlled_count]
+            finite_limits = (
+                np.isfinite(lower)
+                & np.isfinite(upper)
+                & ((upper - lower) > 2.0 * joint_limit_margin_rad)
+            )
+            controlled_current = predicted[indices].copy()
+            violation = np.where(
+                finite_limits,
+                np.maximum(
+                    np.maximum(
+                        lower - controlled_current,
+                        controlled_current - upper,
+                    ),
+                    0.0,
+                ),
+                0.0,
+            )
+            if float(np.max(violation)) > joint_limit_recovery_tolerance_rad:
+                raise RuntimeError(
+                    f"{arm_id} exceeds Pink joint limits beyond recovery tolerance"
+                )
+
+            safe_lower = np.where(
+                finite_limits,
+                lower + joint_limit_margin_rad,
+                -np.inf,
+            )
+            safe_upper = np.where(
+                finite_limits,
+                upper - joint_limit_margin_rad,
+                np.inf,
+            )
+            recovered = np.clip(
+                controlled_current,
+                safe_lower,
+                safe_upper,
+            )
+            joint_limit_state_recovered = not np.allclose(
+                recovered,
+                controlled_current,
+                rtol=0.0,
+                atol=1e-12,
+            )
+            predicted[indices] = recovered
+
         initial_controlled = predicted[indices].copy()
         iterations = 0
         last_step_rad = float("inf")
         targets = initial_controlled
         for iterations in range(1, _ROLLOUT_MAX_ITERATIONS + 1):
-            result = self._controllers[arm_id].compute(predicted, dt_s)
+            result = controller.compute(predicted, dt_s)
             if hasattr(result, "detach"):
                 result = result.detach()
             if hasattr(result, "cpu"):
@@ -253,6 +336,19 @@ class PinkFrankaAdapter:
             targets = np.asarray(result, dtype=float)
             if targets.shape != (7,) or not np.all(np.isfinite(targets)):
                 raise RuntimeError(f"Pink returned invalid joint targets for {arm_id}")
+
+            if safe_lower is not None and safe_upper is not None:
+                bounded_targets = np.clip(targets, safe_lower, safe_upper)
+                joint_limit_target_clamped = (
+                    joint_limit_target_clamped
+                    or not np.allclose(
+                        bounded_targets,
+                        targets,
+                        rtol=0.0,
+                        atol=1e-12,
+                    )
+                )
+                targets = bounded_targets
 
             last_step_rad = float(np.max(np.abs(targets - predicted[indices])))
             predicted[indices] = targets
@@ -271,6 +367,9 @@ class PinkFrankaAdapter:
             )
         self._diagnostics[arm_id].update(
             {
+                "joint_limit_margin_rad": joint_limit_margin_rad,
+                "joint_limit_state_recovered": joint_limit_state_recovered,
+                "joint_limit_target_clamped": joint_limit_target_clamped,
                 "rollout_clamped": rollout_clamped,
                 "rollout_cumulative_delta_rad": cumulative_max_rad,
                 "rollout_action_joint_limit_rad": _MAX_ACTION_JOINT_DELTA_RAD,

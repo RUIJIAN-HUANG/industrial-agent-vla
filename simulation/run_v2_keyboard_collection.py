@@ -31,12 +31,22 @@ def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
 
 def _collect_p01_terminal_success(
     *,
+    bridge: Any,
     controller: Any,
     probe: Any,
     config: dict[str, Any],
     artifact_dir: Path,
-) -> tuple[Any, Path]:
+    task_id: str,
+    episode_id: str,
+    action_count: int,
+    max_actions: int | None = None,
+) -> tuple[Any, Path, int]:
     """Run ten real 100 ms Arm_A hold actions and evaluate frozen GT gates."""
+
+    if max_actions is not None and action_count + 10 > max_actions:
+        raise RuntimeError(
+            "terminal hold actions exceed the --max-actions safety limit"
+        )
 
     from industrial_agent.contracts import ActionStep
     from industrial_agent.sync_contract import FROZEN_MULTI_RATE
@@ -60,7 +70,16 @@ def _collect_p01_terminal_success(
     vote_reports: list[dict[str, Any]] = []
     vote_steps = {1, 5, 10}
     for step in range(1, 11):
-        controller.execute_action(hold_action, arm_id="Arm_A")
+        _record_and_execute_formal_action(
+            bridge=bridge,
+            controller=controller,
+            action=hold_action,
+            arm_id="Arm_A",
+            task_id=task_id,
+            episode_id=episode_id,
+            action_index=action_count,
+        )
+        action_count += 1
         physics_tick = int(controller.physics_tick_index)
         positions.append(probe.world_position(part_path))
         timestamps_s.append(float(physics_tick) / FROZEN_MULTI_RATE.physics_hz)
@@ -111,7 +130,29 @@ def _collect_p01_terminal_success(
     )
     report_path = artifact_dir / "offline_gt" / "p01_terminal_success.json"
     _write_json_atomic(report_path, payload)
-    return result, report_path
+    return result, report_path, action_count
+
+
+def _record_and_execute_formal_action(
+    *,
+    bridge,
+    controller,
+    action,
+    arm_id: str,
+    task_id: str,
+    episode_id: str,
+    action_index: int,
+) -> None:
+    """Record one 100 ms command and execute its real 12 physics ticks."""
+    tick = controller.physics_tick_index
+    bridge.record_action(
+        action,
+        arm_id=arm_id,
+        subtask_id=task_id,
+        chunk_id=f"{episode_id}-{action_index:06d}",
+        physics_tick=tick,
+    )
+    controller.execute_action(action, arm_id=arm_id)
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -432,16 +473,15 @@ def main() -> int:
                         f"REJECTED | {rejection} | actions={action_count}"
                     )
                     continue
-                tick = controller.physics_tick_index
-                bridge.record_action(
-                    command.action,
+                _record_and_execute_formal_action(
+                    bridge=bridge,
+                    controller=controller,
+                    action=command.action,
                     arm_id=active_arm,
-                    subtask_id=preflight.task_id,
-                    chunk_id=f"{preflight.episode_id}-{action_count:06d}",
-                    physics_tick=tick,
+                    task_id=preflight.task_id,
+                    episode_id=preflight.episode_id,
+                    action_index=action_count,
                 )
-
-                controller.execute_action(command.action, arm_id=active_arm)
                 action_count += 1
                 status_label.text = (
                     f"{machine.token.value} | arm={active_arm} | "
@@ -454,12 +494,17 @@ def main() -> int:
 
         if terminal_hold_requested and machine.outcome is EpisodeOutcome.SUCCEEDED:
             phase = "terminal_hold_offline_gt"
-            terminal_success_report, terminal_success_path = (
+            terminal_success_report, terminal_success_path, action_count = (
                 _collect_p01_terminal_success(
+                    bridge=bridge,
                     controller=controller,
                     probe=offline_gt_probe,
                     config=config,
                     artifact_dir=artifact_dir,
+                    task_id=preflight.task_id,
+                    episode_id=preflight.episode_id,
+                    action_count=action_count,
+                    max_actions=args.max_actions,
                 )
             )
             if not terminal_success_report.passed:

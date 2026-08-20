@@ -8,6 +8,8 @@ import pytest
 
 from industrial_agent.data import SplitRegistry
 from industrial_agent.image_cas import ImageCas, ImageCasConfig
+from scripts.pi05.canonical_v2 import CanonicalV2Error
+from scripts.pi05.convert_openpi import main as convert_openpi_main
 from scripts.pi05.convert_openpi_v2 import (
     ACTION_HORIZON,
     build_complete_action_windows,
@@ -52,7 +54,12 @@ class FakeLeRobotDataset:
         return self.frames[index]
 
 
-def _record_episode(tmp_path: Path, *, action_count: int = 10) -> Path:
+def _record_episode(
+    tmp_path: Path,
+    *,
+    action_count: int = 10,
+    outcome: str = "SUCCEEDED",
+) -> Path:
     image_cas = ImageCas(ImageCasConfig(root=tmp_path / "cas"))
     identity = V2CollectionIdentity(
         episode_id="v2-convert-000001",
@@ -95,7 +102,8 @@ def _record_episode(tmp_path: Path, *, action_count: int = 10) -> Path:
                 chunk_id=f"manual-p01-{index}",
                 action_7d=[index / 1000.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
             )
-        return writer.finalize(outcome="SUCCEEDED")
+        failure_code = None if outcome == "SUCCEEDED" else "TEST_FAILURE"
+        return writer.finalize(outcome=outcome, failure_code=failure_code)
 
 
 def _registry(episode_id: str) -> SplitRegistry:
@@ -140,6 +148,44 @@ def test_complete_windows_reject_short_episode_without_padding() -> None:
 def test_complete_windows_reject_invalid_action_contract(actions: np.ndarray) -> None:
     with pytest.raises(ValueError, match="float32|NaN"):
         build_complete_action_windows(actions)
+
+
+@pytest.mark.parametrize("outcome", ["FAILED", "SAFE_STOPPED", "SAFE_STOP_FAILED"])
+def test_v2_preflight_rejects_non_succeeded_episode(
+    tmp_path: Path,
+    outcome: str,
+) -> None:
+    episode_path = _record_episode(tmp_path, outcome=outcome)
+
+    with pytest.raises(CanonicalV2Error, match="metadata.outcome.*SUCCEEDED"):
+        preflight_canonical_v2_windows(
+            data_dir=episode_path.parent,
+            split_registry=_registry("v2-convert-000001"),
+        )
+
+
+def test_v2_conversion_rejects_failed_episode_before_dataset_creation(
+    tmp_path: Path,
+) -> None:
+    episode_path = _record_episode(tmp_path, outcome="FAILED")
+    factory_called = False
+
+    def factory(**_: Any) -> FakeLeRobotDataset:
+        nonlocal factory_called
+        factory_called = True
+        raise AssertionError("dataset must not be created for a failed Episode")
+
+    with pytest.raises(CanonicalV2Error, match="metadata.outcome.*SUCCEEDED"):
+        convert_canonical_v2_to_lerobot(
+            data_dir=episode_path.parent,
+            output_dir=tmp_path / "must-not-exist",
+            repo_id="test/pi05-v2-reject-failed",
+            split_registry=_registry("v2-convert-000001"),
+            dataset_factory=factory,
+        )
+
+    assert factory_called is False
+    assert not (tmp_path / "must-not-exist").exists()
 
 
 def test_canonical_v2_to_lerobot_smoke_is_lossless(
@@ -213,3 +259,30 @@ def test_canonical_v2_to_lerobot_smoke_is_lossless(
     result.manifest_path.write_text("{}\n", encoding="utf-8")
     with pytest.raises(ValueError, match="SHA-256 mismatch"):
         verify_conversion_manifest(result.manifest_path)
+
+
+def test_formal_converter_entry_dispatches_v2_reader_and_preflight(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    episode_path = _record_episode(tmp_path)
+    registry_path = _registry("v2-convert-000001").save(
+        tmp_path / "split-registry-dispatch.json"
+    )
+
+    assert (
+        convert_openpi_main(
+            [
+                "v2",
+                "--data-dir",
+                str(episode_path.parent),
+                "--split-registry",
+                str(registry_path),
+                "--preflight-only",
+            ]
+        )
+        == 0
+    )
+    report = capsys.readouterr().out
+    assert '"source_format": "canonical_hdf5_v2"' in report
+    assert '"windows": 1' in report
