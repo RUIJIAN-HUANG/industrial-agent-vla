@@ -17,6 +17,7 @@ from typing import Any
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPOSITORY_ROOT = SCRIPT_DIR.parent
 SOURCE_DIR = REPOSITORY_ROOT / "src"
+TERMINAL_HOLD_ACTION_COUNT = 10
 
 
 def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
@@ -27,6 +28,45 @@ def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
         encoding="utf-8",
     )
     temporary.replace(path)
+
+
+def _replay_task_actions_from_rows(rows: list[Any]) -> list[Any]:
+    """Convert validated rows while removing the frozen terminal hold suffix."""
+
+    import numpy as np
+
+    from industrial_agent.contracts import ActionStep
+
+    if len(rows) <= TERMINAL_HOLD_ACTION_COUNT:
+        raise ValueError(
+            "--replay-episode contains no task actions before terminal hold"
+        )
+    expected_hold = np.asarray([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0], dtype=np.float32)
+    terminal_rows = rows[-TERMINAL_HOLD_ACTION_COUNT:]
+    if any(not np.array_equal(row, expected_hold) for row in terminal_rows):
+        raise ValueError(
+            "--replay-episode must end with exactly ten canonical open-gripper "
+            "hold actions"
+        )
+    actions = [
+        ActionStep.from_sequence(row.tolist(), duration_ms=100)
+        for row in rows[:-TERMINAL_HOLD_ACTION_COUNT]
+    ]
+    return actions
+
+
+def _load_replay_task_actions(episode_dir: Path) -> tuple[str, list[Any]]:
+    """Load validated task actions, excluding the frozen terminal hold suffix."""
+
+    from scripts.pi05.canonical_v2 import CanonicalV2Reader
+
+    with CanonicalV2Reader(episode_dir) as reader:
+        metadata = reader.manifest["metadata"]
+        if metadata["outcome"] != "SUCCEEDED":
+            raise ValueError("--replay-episode must have outcome SUCCEEDED")
+        rows = list(reader.iter_action_7d())
+        source_episode_id = reader.episode_id
+    return source_episode_id, _replay_task_actions_from_rows(rows)
 
 
 def _collect_p01_terminal_success(
@@ -264,6 +304,8 @@ def main() -> int:
     terminal_success_report = None
     terminal_success_path: Path | None = None
     action_count = 0
+    replay_source_episode_id: str | None = None
+    replay_actions: list[Any] | None = None
     phase = "launch"
     episode_path: Path | None = None
     try:
@@ -285,6 +327,25 @@ def main() -> int:
         require_valid_config(config)
         contract = V2CollectionContract.from_config(config)
         machine = P01ToS11CollectionStateMachine(contract)
+
+        if args.replay_episode is not None:
+            phase = "load_replay_episode"
+            replay_path = args.replay_episode.expanduser().resolve()
+            replay_source_episode_id, replay_actions = _load_replay_task_actions(
+                replay_path
+            )
+            if len(replay_actions) + TERMINAL_HOLD_ACTION_COUNT > args.max_actions:
+                raise RuntimeError(
+                    "replayed task actions plus terminal holds exceed "
+                    "the --max-actions safety limit"
+                )
+            result.update(
+                {
+                    "replay_source_episode_id": replay_source_episode_id,
+                    "replay_source_path": str(replay_path),
+                    "replay_task_action_count": len(replay_actions),
+                }
+            )
 
         _preload_pink_runtime(args.ik_backend)
         simulation_app = isaac_compat.launch_simulation_app(headless=False)
@@ -353,143 +414,186 @@ def main() -> int:
         bridge.record_initial(physics_tick=0)
         controller.set_tick_observer(bridge.observe_physics_tick)
         active_arm = "Arm_A"
-        mapper = KeyboardTeleopMapper(
-            translation_step_m=args.translation_step_m,
-            fine_translation_step_m=args.fine_translation_step_m,
-            rotation_step_rad=radians(args.rotation_step_deg),
-            duration_ms=100,
-            gripper_open=True,
-        )
-        command_queue: Queue[str] = Queue()
-        gui_keyboard = IsaacGuiKeyboardSource.from_isaac(command_queue)
-        gui_keyboard.start()
-
-        from omni import ui  # type: ignore[import-not-found]
-
-        status_window = ui.Window(
-            "V2 Canonical Keyboard Collection", width=760, height=250
-        )
-        with status_window.frame:
-            with ui.VStack(spacing=5):
-                ui.Label("W/S X | A/D Y | Q/E Z | I/K J/L U/O rotation | G gripper")
-                ui.Label(
-                    f"F toggles COARSE/FINE translation "
-                    f"({args.translation_step_m * 1000:.0f} mm / "
-                    f"{args.fine_translation_step_m * 1000:.0f} mm)"
-                )
-                ui.Label("P01 target: S11 = bin back row, left-most slot")
-                ui.Label(
-                    f"IK backend: {controller.ik_backend.upper()} + null-space posture"
-                )
-                ui.Label("Z confirm P01 in S11 | C complete P01 task")
-                ui.Label("P checkpoint | X safe-stop | V/B disabled for this task")
-                ui.Label("Tap keys once. Do not hold. Formal actions are recorded.")
-                status_label = ui.Label("READY | A_ONLY | next=P01")
-
-        print("V2 canonical keyboard collection READY")
-        print(mapper.help_text())
-        phase = "interactive"
-        running = True
-        while running and simulation_app.is_running():
-            try:
-                raw_key = command_queue.get_nowait()
-            except Empty:
-                simulation_app.update()
-                continue
-            try:
-                command = mapper.parse(raw_key)
-                if command.kind == "help":
-                    print(mapper.help_text())
-                    continue
-                if command.kind == "quit":
-                    running = False
-                    continue
-                if command.kind == "reset":
-                    raise RuntimeError(
-                        "reset is forbidden inside a formal episode; safe-stop instead"
-                    )
-                if command.kind == "checkpoint":
-                    print(
-                        f"CHECKPOINT token={machine.token.value} "
-                        f"next={machine.next_part_id} actions={action_count}"
-                    )
-                    continue
-                if command.kind == "toggle_precision":
-                    mode = mapper.toggle_precision()
-                    print(
-                        f"PRECISION={mode} "
-                        f"step_mm={mapper.translation_step_m * 1000:.1f}"
-                    )
-                    status_label.text = (
-                        f"{machine.token.value} | {mode} "
-                        f"{mapper.translation_step_m * 1000:.0f}mm | "
-                        f"arm={active_arm} | actions={action_count}"
-                    )
-                    continue
-                if command.kind == "part_placed":
-                    part_id = machine.next_part_id
-                    if part_id is None:
-                        raise RuntimeError("all formal parts are already confirmed")
-                    machine.record_part_placement(
-                        part_id=part_id,
-                        slot_id=contract.part_to_slot[part_id],
-                        stable=True,
-                    )
-                    print(
-                        f"HUMAN CONFIRMED {part_id}->{contract.part_to_slot[part_id]}"
-                    )
-                    continue
-                if command.kind == "handoff_verify":
-                    raise RuntimeError(
-                        "P01_TO_S11 ends before handoff; V is not allowed"
-                    )
-                if command.kind == "activate_b":
-                    raise RuntimeError(
-                        "P01_TO_S11 permits Arm_A only; B is not allowed"
-                    )
-                if command.kind == "complete":
-                    arm_a = _arm_readback(controller, arms, config, "Arm_A")
-                    machine.complete_p01(
-                        arm_a_gripper_open=arm_a["gripper_open"],
-                        arm_a_clear=arm_a["retreated"],
-                    )
-                    print("HUMAN CONFIRMED P01_TO_S11 COMPLETE")
-                    terminal_hold_requested = True
-                    running = False
-                    continue
-                if command.action is None:
-                    raise RuntimeError("action command contains no ActionStep")
-                if action_count >= args.max_actions:
-                    raise RuntimeError("max-actions safety limit reached")
+        if replay_actions is not None:
+            phase = "replay_actions"
+            print(
+                f"V2 REPLAY READY source={replay_source_episode_id} "
+                f"task_actions={len(replay_actions)}"
+            )
+            for action in replay_actions:
                 machine.require_arm_action(active_arm)
                 rejection = controller.action_rejection_reason(
-                    command.action,
+                    action,
                     arm_id=active_arm,
                 )
                 if rejection is not None:
-                    print(f"ACTION REJECTED: {rejection}; choose another direction")
-                    status_label.text = (
-                        f"REJECTED | {rejection} | actions={action_count}"
+                    raise RuntimeError(
+                        f"replay action {action_count} rejected: {rejection}"
                     )
-                    continue
                 _record_and_execute_formal_action(
                     bridge=bridge,
                     controller=controller,
-                    action=command.action,
+                    action=action,
                     arm_id=active_arm,
                     task_id=preflight.task_id,
                     episode_id=preflight.episode_id,
                     action_index=action_count,
                 )
                 action_count += 1
-                status_label.text = (
-                    f"{machine.token.value} | arm={active_arm} | "
-                    f"next={machine.next_part_id} | actions={action_count}"
-                )
-                print(f"ACTION {action_count} {active_arm}: {command.description}")
-            except BaseException:
-                running = False
-                raise
+                print(f"REPLAY ACTION {action_count}/{len(replay_actions)} Arm_A")
+            machine.record_part_placement(
+                part_id="P01",
+                slot_id=contract.part_to_slot["P01"],
+                stable=True,
+            )
+            arm_a = _arm_readback(controller, arms, config, "Arm_A")
+            machine.complete_p01(
+                arm_a_gripper_open=arm_a["gripper_open"],
+                arm_a_clear=arm_a["retreated"],
+            )
+            terminal_hold_requested = True
+            print("REPLAY COMPLETED P01_TO_S11; starting terminal validation")
+        else:
+            mapper = KeyboardTeleopMapper(
+                translation_step_m=args.translation_step_m,
+                fine_translation_step_m=args.fine_translation_step_m,
+                rotation_step_rad=radians(args.rotation_step_deg),
+                duration_ms=100,
+                gripper_open=True,
+            )
+            command_queue: Queue[str] = Queue()
+            gui_keyboard = IsaacGuiKeyboardSource.from_isaac(command_queue)
+            gui_keyboard.start()
+
+            from omni import ui  # type: ignore[import-not-found]
+
+            status_window = ui.Window(
+                "V2 Canonical Keyboard Collection", width=760, height=250
+            )
+            with status_window.frame:
+                with ui.VStack(spacing=5):
+                    ui.Label("W/S X | A/D Y | Q/E Z | I/K J/L U/O rotation | G gripper")
+                    ui.Label(
+                        f"F toggles COARSE/FINE translation "
+                        f"({args.translation_step_m * 1000:.0f} mm / "
+                        f"{args.fine_translation_step_m * 1000:.0f} mm)"
+                    )
+                    ui.Label("P01 target: S11 = bin back row, left-most slot")
+                    ui.Label(
+                        f"IK backend: {controller.ik_backend.upper()} + "
+                        "null-space posture"
+                    )
+                    ui.Label("Z confirm P01 in S11 | C complete P01 task")
+                    ui.Label("P checkpoint | X safe-stop | V/B disabled for this task")
+                    ui.Label("Tap keys once. Do not hold. Formal actions are recorded.")
+                    status_label = ui.Label("READY | A_ONLY | next=P01")
+
+            print("V2 canonical keyboard collection READY")
+            print(mapper.help_text())
+            phase = "interactive"
+            running = True
+            while running and simulation_app.is_running():
+                try:
+                    raw_key = command_queue.get_nowait()
+                except Empty:
+                    simulation_app.update()
+                    continue
+                try:
+                    command = mapper.parse(raw_key)
+                    if command.kind == "help":
+                        print(mapper.help_text())
+                        continue
+                    if command.kind == "quit":
+                        running = False
+                        continue
+                    if command.kind == "reset":
+                        raise RuntimeError(
+                            "reset is forbidden inside a formal episode; "
+                            "safe-stop instead"
+                        )
+                    if command.kind == "checkpoint":
+                        print(
+                            f"CHECKPOINT token={machine.token.value} "
+                            f"next={machine.next_part_id} actions={action_count}"
+                        )
+                        continue
+                    if command.kind == "toggle_precision":
+                        mode = mapper.toggle_precision()
+                        print(
+                            f"PRECISION={mode} "
+                            f"step_mm={mapper.translation_step_m * 1000:.1f}"
+                        )
+                        status_label.text = (
+                            f"{machine.token.value} | {mode} "
+                            f"{mapper.translation_step_m * 1000:.0f}mm | "
+                            f"arm={active_arm} | actions={action_count}"
+                        )
+                        continue
+                    if command.kind == "part_placed":
+                        part_id = machine.next_part_id
+                        if part_id is None:
+                            raise RuntimeError("all formal parts are already confirmed")
+                        machine.record_part_placement(
+                            part_id=part_id,
+                            slot_id=contract.part_to_slot[part_id],
+                            stable=True,
+                        )
+                        print(
+                            f"HUMAN CONFIRMED {part_id}->"
+                            f"{contract.part_to_slot[part_id]}"
+                        )
+                        continue
+                    if command.kind == "handoff_verify":
+                        raise RuntimeError(
+                            "P01_TO_S11 ends before handoff; V is not allowed"
+                        )
+                    if command.kind == "activate_b":
+                        raise RuntimeError(
+                            "P01_TO_S11 permits Arm_A only; B is not allowed"
+                        )
+                    if command.kind == "complete":
+                        arm_a = _arm_readback(controller, arms, config, "Arm_A")
+                        machine.complete_p01(
+                            arm_a_gripper_open=arm_a["gripper_open"],
+                            arm_a_clear=arm_a["retreated"],
+                        )
+                        print("HUMAN CONFIRMED P01_TO_S11 COMPLETE")
+                        terminal_hold_requested = True
+                        running = False
+                        continue
+                    if command.action is None:
+                        raise RuntimeError("action command contains no ActionStep")
+                    if action_count >= args.max_actions:
+                        raise RuntimeError("max-actions safety limit reached")
+                    machine.require_arm_action(active_arm)
+                    rejection = controller.action_rejection_reason(
+                        command.action,
+                        arm_id=active_arm,
+                    )
+                    if rejection is not None:
+                        print(f"ACTION REJECTED: {rejection}; choose another direction")
+                        status_label.text = (
+                            f"REJECTED | {rejection} | actions={action_count}"
+                        )
+                        continue
+                    _record_and_execute_formal_action(
+                        bridge=bridge,
+                        controller=controller,
+                        action=command.action,
+                        arm_id=active_arm,
+                        task_id=preflight.task_id,
+                        episode_id=preflight.episode_id,
+                        action_index=action_count,
+                    )
+                    action_count += 1
+                    status_label.text = (
+                        f"{machine.token.value} | arm={active_arm} | "
+                        f"next={machine.next_part_id} | actions={action_count}"
+                    )
+                    print(f"ACTION {action_count} {active_arm}: {command.description}")
+                except BaseException:
+                    running = False
+                    raise
 
         if terminal_hold_requested and machine.outcome is EpisodeOutcome.SUCCEEDED:
             phase = "terminal_hold_offline_gt"
@@ -513,7 +617,7 @@ def main() -> int:
                 machine.fail_offline_gt(V2FailureCode(code))
 
         phase = "safe_stop"
-        receipt = controller.safe_stop("V2 keyboard collection finished")
+        receipt = controller.safe_stop("V2 collection finished")
         confirmed = bool(receipt.confirmed)
         if machine.outcome is None:
             machine.safe_stop(confirmed=confirmed)

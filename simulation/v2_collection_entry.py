@@ -50,6 +50,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fine-translation-step-m", type=float, default=0.005)
     parser.add_argument("--rotation-step-deg", type=float, default=2.0)
     parser.add_argument(
+        "--replay-episode",
+        type=Path,
+        help=(
+            "Strict Canonical V2 episode used as the action source. "
+            "When set, keyboard input is disabled and the recorded task actions "
+            "are replayed automatically."
+        ),
+    )
+    parser.add_argument(
         "--ik-backend",
         choices=("pink", "lula"),
         default="pink",

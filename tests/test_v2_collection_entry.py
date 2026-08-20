@@ -58,6 +58,38 @@ def test_cli_builds_visible_practice_preflight(tmp_path: Path) -> None:
     assert result.full_task_required is False
 
 
+def test_cli_accepts_optional_replay_episode(tmp_path: Path) -> None:
+    args = _args(tmp_path)
+    assert args.replay_episode is None
+
+    replay_dir = tmp_path / "golden-episode"
+    parsed = build_parser().parse_args(
+        [
+            "--episode-root",
+            str(tmp_path / "episodes"),
+            "--cas-root",
+            str(tmp_path / "cas"),
+            "--artifact-dir",
+            str(tmp_path / "artifacts"),
+            "--output-scene",
+            str(tmp_path / "scene.usda"),
+            "--episode-id",
+            "v2-replay-001",
+            "--task-id",
+            "P01_TO_S11",
+            "--instruction",
+            "把P01放到S11中",
+            "--scene-seed",
+            "7",
+            "--split",
+            "practice",
+            "--replay-episode",
+            str(replay_dir),
+        ]
+    )
+    assert parsed.replay_episode == replay_dir
+
+
 def test_cli_creates_canonical_v2_recorder(tmp_path: Path) -> None:
     preflight = preflight_from_args(
         _args(tmp_path),
