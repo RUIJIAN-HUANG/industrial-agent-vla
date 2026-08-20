@@ -201,3 +201,18 @@ def test_terminal_collection_runs_ten_real_hold_actions_and_writes_sidecar(
     assert report_path.is_file()
     payload = report_path.read_text(encoding="utf-8")
     assert '"canonical_included": false' in payload
+
+
+def test_terminal_collection_rejects_hold_actions_over_max_actions(tmp_path) -> None:
+    with pytest.raises(RuntimeError, match="max-actions"):
+        _collect_p01_terminal_success(
+            bridge=_FakeBridge(),
+            controller=_FakeController(),
+            probe=_FakeProbe(),
+            config={"scene_id": "single_bin_manual_industrial_v2", "bin": {}},
+            artifact_dir=tmp_path,
+            task_id="P01_TO_S11",
+            episode_id="terminal-hold-limit-test",
+            action_count=1,
+            max_actions=10,
+        )

@@ -39,8 +39,14 @@ def _collect_p01_terminal_success(
     task_id: str,
     episode_id: str,
     action_count: int,
+    max_actions: int | None = None,
 ) -> tuple[Any, Path, int]:
     """Run ten real 100 ms Arm_A hold actions and evaluate frozen GT gates."""
+
+    if max_actions is not None and action_count + 10 > max_actions:
+        raise RuntimeError(
+            "terminal hold actions exceed the --max-actions safety limit"
+        )
 
     from industrial_agent.contracts import ActionStep
     from industrial_agent.sync_contract import FROZEN_MULTI_RATE
@@ -498,6 +504,7 @@ def main() -> int:
                     task_id=preflight.task_id,
                     episode_id=preflight.episode_id,
                     action_count=action_count,
+                    max_actions=args.max_actions,
                 )
             )
             if not terminal_success_report.passed:

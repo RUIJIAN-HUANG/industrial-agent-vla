@@ -13,6 +13,7 @@ from industrial_agent.image_cas import ImageCas, ImageCasConfig
 from scripts.pi05.convert_openpi_v2 import preflight_canonical_v2_windows
 from simulation.canonical_recorder_bridge import CanonicalRecorderBridge
 from simulation.run_v2_keyboard_collection import (
+    _collect_p01_terminal_success,
     _record_and_execute_formal_action,
 )
 
@@ -53,7 +54,25 @@ class _LiveController:
             )
 
 
-def test_formal_keyboard_actions_remain_exactly_12_ticks_and_pass_v2_preflight(
+class _TerminalProbe:
+    def world_position(self, path: str) -> list[float]:
+        return [0.0, 0.0, 0.0]
+
+    def part_vertical_error_rad(self, *, part_path: str, bin_path: str) -> float:
+        return float(np.deg2rad(5.0))
+
+    def part_fully_inside_slot(
+        self,
+        *,
+        part_path: str,
+        bin_path: str,
+        bin_config,
+        slot_id: str,
+    ) -> dict[str, object]:
+        return {"pass": True, "slot_id": slot_id}
+
+
+def test_formal_keyboard_actions_and_terminal_holds_remain_exactly_12_ticks_and_pass_v2_preflight(
     tmp_path: Path,
 ) -> None:
     episode_id = "v2-live-timing-000001"
@@ -102,15 +121,37 @@ def test_formal_keyboard_actions_remain_exactly_12_ticks_and_pass_v2_preflight(
             action_index=index,
         )
 
+    terminal_result, _, action_count = _collect_p01_terminal_success(
+        bridge=bridge,
+        controller=controller,
+        probe=_TerminalProbe(),
+        config={"scene_id": "single_bin_manual_industrial_v2", "bin": {}},
+        artifact_dir=tmp_path,
+        task_id="P01_TO_S11",
+        episode_id=episode_id,
+        action_count=10,
+        max_actions=50,
+    )
+    assert terminal_result.passed is True
+    assert action_count == 20
+
     episode_path = bridge.save(outcome="SUCCEEDED")
 
     with h5py.File(episode_path / "episode.h5", "r") as episode:
         physics_ticks = np.asarray(episode["actions/physics_tick"][:], dtype=np.int64)
         timestamps_ns = np.asarray(episode["actions/timestamp_ns"][:], dtype=np.int64)
+        actions = np.asarray(episode["actions/action_7d"][:], dtype=np.float32)
 
-    assert physics_ticks.tolist() == list(range(0, 120, 12))
+    assert physics_ticks.tolist() == list(range(0, 240, 12))
     assert np.all(np.diff(physics_ticks) == 12)
     assert np.all(np.diff(timestamps_ns) == 100_000_000)
+    np.testing.assert_array_equal(
+        actions[-10:],
+        np.tile(
+            np.asarray([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0], dtype=np.float32),
+            (10, 1),
+        ),
+    )
 
     registry = SplitRegistry()
     registry.assign_episode(
@@ -126,5 +167,5 @@ def test_formal_keyboard_actions_remain_exactly_12_ticks_and_pass_v2_preflight(
         data_dir=episode_path.parent,
         split_registry=registry,
     )
-    assert report["counts"]["actions"] == 10
-    assert report["counts"]["windows"] == 1
+    assert report["counts"]["actions"] == 20
+    assert report["counts"]["windows"] == 11
