@@ -55,7 +55,25 @@ def _replay_task_actions_from_rows(rows: list[Any]) -> list[Any]:
     return actions
 
 
-def _load_replay_task_actions(episode_dir: Path) -> tuple[str, list[Any]]:
+def _validate_replay_source_metadata(
+    metadata: dict[str, Any],
+    *,
+    expected_scene_config_sha256: str,
+) -> None:
+    """Reject replay data produced from a different frozen scene config."""
+
+    if metadata["scene_config_sha256"] != expected_scene_config_sha256:
+        raise ValueError(
+            "--replay-episode scene config SHA-256 does not match the current "
+            "collection config"
+        )
+
+
+def _load_replay_task_actions(
+    episode_dir: Path,
+    *,
+    expected_scene_config_sha256: str,
+) -> tuple[str, list[Any]]:
     """Load validated task actions, excluding the frozen terminal hold suffix."""
 
     from scripts.pi05.canonical_v2 import CanonicalV2Reader
@@ -64,6 +82,10 @@ def _load_replay_task_actions(episode_dir: Path) -> tuple[str, list[Any]]:
         metadata = reader.manifest["metadata"]
         if metadata["outcome"] != "SUCCEEDED":
             raise ValueError("--replay-episode must have outcome SUCCEEDED")
+        _validate_replay_source_metadata(
+            metadata,
+            expected_scene_config_sha256=expected_scene_config_sha256,
+        )
         rows = list(reader.iter_action_7d())
         source_episode_id = reader.episode_id
     return source_episode_id, _replay_task_actions_from_rows(rows)
@@ -332,7 +354,8 @@ def main() -> int:
             phase = "load_replay_episode"
             replay_path = args.replay_episode.expanduser().resolve()
             replay_source_episode_id, replay_actions = _load_replay_task_actions(
-                replay_path
+                replay_path,
+                expected_scene_config_sha256=preflight.scene_config_sha256,
             )
             if len(replay_actions) + TERMINAL_HOLD_ACTION_COUNT > args.max_actions:
                 raise RuntimeError(

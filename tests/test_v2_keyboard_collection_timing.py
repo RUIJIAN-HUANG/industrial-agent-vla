@@ -15,6 +15,7 @@ from simulation.canonical_recorder_bridge import CanonicalRecorderBridge
 from simulation.run_v2_keyboard_collection import (
     _collect_p01_terminal_success,
     _record_and_execute_formal_action,
+    _validate_replay_source_metadata,
     _replay_task_actions_from_rows,
 )
 
@@ -90,6 +91,14 @@ def test_replay_rejects_noncanonical_terminal_suffix() -> None:
     bad_hold = np.asarray([0.001, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0], dtype=np.float32)
     with np.testing.assert_raises_regex(ValueError, "exactly ten canonical"):
         _replay_task_actions_from_rows([task_row] + [bad_hold] * 10)
+
+
+def test_replay_rejects_scene_config_mismatch() -> None:
+    with np.testing.assert_raises_regex(ValueError, "scene config SHA-256"):
+        _validate_replay_source_metadata(
+            {"scene_config_sha256": "sha256:" + "a" * 64},
+            expected_scene_config_sha256="sha256:" + "b" * 64,
+        )
 
 
 def test_formal_keyboard_actions_and_terminal_holds_remain_exactly_12_ticks_and_pass_v2_preflight(
