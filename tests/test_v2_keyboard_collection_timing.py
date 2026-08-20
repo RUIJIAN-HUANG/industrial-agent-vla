@@ -61,15 +61,19 @@ class _TerminalProbe:
     def part_vertical_error_rad(self, *, part_path: str, bin_path: str) -> float:
         return float(np.deg2rad(5.0))
 
-    def part_fully_inside_slot(
+    def p01_in_s11(
         self,
         *,
         part_path: str,
         bin_path: str,
         bin_config,
-        slot_id: str,
     ) -> dict[str, object]:
-        return {"pass": True, "slot_id": slot_id}
+        containment = {"pass": True, "slot_id": "S11"}
+        return {
+            "pass": True,
+            "slot_id": "S11",
+            "containment": containment,
+        }
 
 
 def test_formal_keyboard_actions_and_terminal_holds_remain_exactly_12_ticks_and_pass_v2_preflight(
