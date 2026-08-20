@@ -37,18 +37,23 @@ V2 与 V1/P01 保底场景隔离。V1 配置、构建入口、冻结 TaskProfile
 代码存在不等于目标环境验收通过。没有 GUI、HOME、IK、碰撞、抓取和满载搬运
 证据时，不得开始正式采集。
 
-## MVP 指令选项
+## 冻结指令目录
 
-MVP 界面显示完整、易懂的自然语言，但采集后台和训练数据只保存统一的
-Canonical 指令。当前唯一选项定义在 `configs/mvp-instruction-options.json`：
+以下五条是当前冻结的指令目录，机器真源为
+`configs/mvp-instruction-options.json`。界面、采集后台和训练数据必须使用这里的
+精确文本，不得自行改写、补充或删除：
 
 | task_id | 界面显示 | Canonical/训练指令 |
 |---|---|---|
-| `P01_TO_S11` | 帮我把螺母P01放置到料箱的S11格子中。 | 把P01放到S11中 |
+| `P01_TO_S11` | 把P01放到S11中 | 把P01放到S11中 |
+| `W01_TO_S14` | 把W01放到S14中 | 把W01放到S14中 |
+| `P03_UPRIGHT_TO_S12` | 把倒立的P03翻正后放到S12中 | 把倒立的P03翻正后放到S12中 |
+| `BIN01_TO_FINISHED01` | 把Bin_01搬到FINISHED_01 | 把Bin_01搬到FINISHED_01 |
+| `PACK_ALL_AND_FINISH` | 把所有零件装入Bin_01，再把Bin_01搬到FINISHED_01 | 把所有零件装入Bin_01，再把Bin_01搬到FINISHED_01 |
 
-界面不得自行改写、补充或删除文字；采集端将显示文本解析为同一 `task_id` 后，
-把 Canonical 指令写入 Episode 元数据。V1 的四零件装箱指令仍保持独立，不得与
-该 MVP 选项混用。
+当前 Canonical V2 正式采集入口和 Episode Schema 仍只实现
+`P01_TO_S11`；其余四条先完成指令冻结，必须在各自任务合同和采集入口完成后，
+才能作为对应任务的正式训练数据采集。不得把它们伪装成 P01 Episode。
 
 ## 场景组成
 

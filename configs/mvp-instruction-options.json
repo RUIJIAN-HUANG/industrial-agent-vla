@@ -1,16 +1,31 @@
 {
-  "version": "1.0",
+  "version": "1.1",
   "scene_id": "single_bin_manual_industrial_v2",
   "options": [
     {
       "task_id": "P01_TO_S11",
-      "display_instruction": "帮我把螺母P01放置到料箱的S11格子中。",
+      "display_instruction": "把P01放到S11中",
       "canonical_instruction": "把P01放到S11中"
     },
     {
       "task_id": "W01_TO_S14",
-      "display_instruction": "帮我把扳手W01放置到料箱的S14格子中。",
+      "display_instruction": "把W01放到S14中",
       "canonical_instruction": "把W01放到S14中"
+    },
+    {
+      "task_id": "P03_UPRIGHT_TO_S12",
+      "display_instruction": "把倒立的P03翻正后放到S12中",
+      "canonical_instruction": "把倒立的P03翻正后放到S12中"
+    },
+    {
+      "task_id": "BIN01_TO_FINISHED01",
+      "display_instruction": "把Bin_01搬到FINISHED_01",
+      "canonical_instruction": "把Bin_01搬到FINISHED_01"
+    },
+    {
+      "task_id": "PACK_ALL_AND_FINISH",
+      "display_instruction": "把所有零件装入Bin_01，再把Bin_01搬到FINISHED_01",
+      "canonical_instruction": "把所有零件装入Bin_01，再把Bin_01搬到FINISHED_01"
     }
   ]
 }

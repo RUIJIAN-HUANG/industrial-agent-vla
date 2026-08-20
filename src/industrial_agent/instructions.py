@@ -31,23 +31,40 @@ class InstructionOption:
                 raise ValueError(f"{field_name} must not have surrounding whitespace")
 
 
-# The first manual-collection task.  The final full stop is part of the UI
-# display string; the canonical training string intentionally has no full stop.
+# Frozen instruction catalog.  The display and canonical strings are identical
+# because the requested frozen wording does not define separate UI prose.
 MVP_P01_TO_S11 = InstructionOption(
     task_id="P01_TO_S11",
-    display_instruction="帮我把螺母P01放置到料箱的S11格子中。",
+    display_instruction="把P01放到S11中",
     canonical_instruction="把P01放到S11中",
 )
-
 MVP_W01_TO_S14 = InstructionOption(
     task_id="W01_TO_S14",
-    display_instruction="帮我把扳手W01放置到料箱的S14格子中。",
+    display_instruction="把W01放到S14中",
     canonical_instruction="把W01放到S14中",
+)
+MVP_P03_UPRIGHT_TO_S12 = InstructionOption(
+    task_id="P03_UPRIGHT_TO_S12",
+    display_instruction="把倒立的P03翻正后放到S12中",
+    canonical_instruction="把倒立的P03翻正后放到S12中",
+)
+MVP_BIN01_TO_FINISHED01 = InstructionOption(
+    task_id="BIN01_TO_FINISHED01",
+    display_instruction="把Bin_01搬到FINISHED_01",
+    canonical_instruction="把Bin_01搬到FINISHED_01",
+)
+MVP_PACK_ALL_AND_FINISH = InstructionOption(
+    task_id="PACK_ALL_AND_FINISH",
+    display_instruction="把所有零件装入Bin_01，再把Bin_01搬到FINISHED_01",
+    canonical_instruction="把所有零件装入Bin_01，再把Bin_01搬到FINISHED_01",
 )
 
 MVP_INSTRUCTION_OPTIONS: tuple[InstructionOption, ...] = (
     MVP_P01_TO_S11,
     MVP_W01_TO_S14,
+    MVP_P03_UPRIGHT_TO_S12,
+    MVP_BIN01_TO_FINISHED01,
+    MVP_PACK_ALL_AND_FINISH,
 )
 _BY_TASK_ID = {option.task_id: option for option in MVP_INSTRUCTION_OPTIONS}
 _BY_TEXT = {
@@ -89,7 +106,10 @@ def normalize_mvp_instruction(text: str) -> InstructionOption:
 __all__ = [
     "InstructionOption",
     "MVP_INSTRUCTION_OPTIONS",
+    "MVP_BIN01_TO_FINISHED01",
     "MVP_P01_TO_S11",
+    "MVP_P03_UPRIGHT_TO_S12",
+    "MVP_PACK_ALL_AND_FINISH",
     "MVP_W01_TO_S14",
     "mvp_instruction_for_task",
     "mvp_instruction_options",
