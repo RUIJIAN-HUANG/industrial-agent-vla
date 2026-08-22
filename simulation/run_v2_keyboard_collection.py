@@ -18,6 +18,13 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPOSITORY_ROOT = SCRIPT_DIR.parent
 SOURCE_DIR = REPOSITORY_ROOT / "src"
 TERMINAL_HOLD_ACTION_COUNT = 10
+GRIPPER_SETTLE_ACTION_COUNT = 5
+
+
+def _interactive_action_repeat_count(command: Any) -> int:
+    """Give a gripper toggle enough recorded 100 ms actions to reach target."""
+
+    return GRIPPER_SETTLE_ACTION_COUNT if command.key == "g" else 1
 
 
 def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
@@ -588,7 +595,10 @@ def main() -> int:
             )
             with status_window.frame:
                 with ui.VStack(spacing=5):
-                    ui.Label("W/S X | A/D Y | Q/E Z | I/K J/L U/O rotation | G gripper")
+                    ui.Label(
+                        "W/S X | A/D Y | Q/E Z | I/K J/L U/O rotation | "
+                        "G gripper (0.5 s settle)"
+                    )
                     ui.Label(
                         f"F toggles COARSE/FINE translation "
                         f"({args.translation_step_m * 1000:.0f} mm / "
@@ -684,7 +694,8 @@ def main() -> int:
                         continue
                     if command.action is None:
                         raise RuntimeError("action command contains no ActionStep")
-                    if action_count >= args.max_actions:
+                    repeat_count = _interactive_action_repeat_count(command)
+                    if action_count + repeat_count > args.max_actions:
                         raise RuntimeError("max-actions safety limit reached")
                     machine.require_arm_action(active_arm)
                     rejection = controller.action_rejection_reason(
@@ -697,16 +708,22 @@ def main() -> int:
                             f"REJECTED | {rejection} | actions={action_count}"
                         )
                         continue
-                    _record_and_execute_formal_action(
-                        bridge=bridge,
-                        controller=controller,
-                        action=command.action,
-                        arm_id=active_arm,
-                        task_id=preflight.task_id,
-                        episode_id=preflight.episode_id,
-                        action_index=action_count,
-                    )
-                    action_count += 1
+                    for repeat_index in range(repeat_count):
+                        _record_and_execute_formal_action(
+                            bridge=bridge,
+                            controller=controller,
+                            action=command.action,
+                            arm_id=active_arm,
+                            task_id=preflight.task_id,
+                            episode_id=preflight.episode_id,
+                            action_index=action_count,
+                        )
+                        action_count += 1
+                        if repeat_count > 1:
+                            print(
+                                f"GRIPPER SETTLE {repeat_index + 1}/{repeat_count} "
+                                f"actions={action_count}"
+                            )
                     status_label.text = (
                         f"{machine.token.value} | arm={active_arm} | "
                         f"next={machine.next_part_id} | actions={action_count}"
