@@ -216,7 +216,7 @@ def build_scene(
     shared._create_environment(stage, config)
     shared._create_markers(stage, config)
     materials = _create_materials(stage, config)
-    create_parts(stage, config["parts"])
+    create_parts(stage, config["parts"], physics_materials=materials)
     stage.DefinePrim("/World/Bins", "Xform")
     _create_bin(stage, config["bin"], materials)
     shared._create_cameras(stage, config["cameras"])

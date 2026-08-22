@@ -9,6 +9,12 @@ from typing import Any, Mapping
 SUPPORTED_PART_TYPES = {"shaft", "nut", "wrench"}
 
 
+def physics_material_key(part: Mapping[str, Any]) -> str:
+    """Use the configured high-friction grip material for slender wrenches."""
+
+    return "carry_grip" if part.get("part_type") == "wrench" else "ordinary"
+
+
 def validate_part_spec(part: Mapping[str, Any]) -> list[str]:
     """Validate one asset without importing Isaac Sim or USD bindings."""
 
@@ -302,7 +308,26 @@ def create_part(stage: Any, part: Mapping[str, Any]) -> Any:
     return root
 
 
-def create_parts(stage: Any, parts: list[Mapping[str, Any]]) -> None:
+def create_parts(
+    stage: Any,
+    parts: list[Mapping[str, Any]],
+    *,
+    physics_materials: Mapping[str, Any] | None = None,
+) -> None:
     stage.DefinePrim("/World/Parts", "Xform")
     for part in parts:
-        create_part(stage, part)
+        root = create_part(stage, part)
+        if physics_materials is None:
+            continue
+        material_key = physics_material_key(part)
+        try:
+            material = physics_materials[material_key]
+        except KeyError as exc:
+            raise ValueError(f"missing physics material: {material_key}") from exc
+        from pxr import UsdShade
+
+        UsdShade.MaterialBindingAPI.Apply(root).Bind(
+            material,
+            bindingStrength=UsdShade.Tokens.strongerThanDescendants,
+            materialPurpose="physics",
+        )
