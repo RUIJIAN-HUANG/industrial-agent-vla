@@ -41,6 +41,8 @@ class V2FailureCode(str, Enum):
     P01_TERMINAL_HOLD_TOO_SHORT = "P01_TERMINAL_HOLD_TOO_SHORT"
     P01_TERMINAL_DRIFT_EXCEEDED = "P01_TERMINAL_DRIFT_EXCEEDED"
     P01_OFFLINE_GT_UNAVAILABLE = "P01_OFFLINE_GT_UNAVAILABLE"
+    # Legacy reports may contain this code. New W01 runs keep orientation as
+    # a diagnostic and no longer emit it as a terminal failure.
     W01_ORIENTATION_EXCEEDED = "W01_ORIENTATION_EXCEEDED"
     W01_GT_NOT_FRESH = "W01_GT_NOT_FRESH"
     W01_GT_VOTE_INSUFFICIENT = "W01_GT_VOTE_INSUFFICIENT"

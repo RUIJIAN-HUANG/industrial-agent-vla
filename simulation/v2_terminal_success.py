@@ -274,6 +274,7 @@ class W01TerminalSuccess:
             "flat_error_rad": self.flat_error_rad,
             "heading_error_rad": self.heading_error_rad,
             "orientation_threshold_rad": P01_MAX_VERTICAL_ERROR_RAD,
+            "orientation_required": False,
             "fresh_vote_pass": self.fresh_vote_pass,
             "fresh_vote": dict(self.fresh_vote),
             "hold_drift_pass": self.hold_drift_pass,
@@ -297,16 +298,15 @@ def evaluate_w01_terminal_success(
     if any(not math.isfinite(value) or value < 0.0 for value in angles):
         raise ValueError("W01 orientation errors must be finite and non-negative")
     orientation_pass = all(value <= P01_MAX_VERTICAL_ERROR_RAD for value in angles)
-    orientation_codes = [] if orientation_pass else ["W01_ORIENTATION_EXCEEDED"]
     vote = evaluate_fresh_gt_votes(vote_reports, failure_prefix="W01")
     drift = evaluate_terminal_hold_drift(
         positions_world, timestamps_s, failure_prefix="W01"
     )
     failure_codes = tuple(dict.fromkeys(
-        orientation_codes + list(vote["failure_codes"]) + list(drift["failure_codes"])
+        list(vote["failure_codes"]) + list(drift["failure_codes"])
     ))
     return W01TerminalSuccess(
-        passed=orientation_pass and vote["pass"] and drift["pass"],
+        passed=vote["pass"] and drift["pass"],
         orientation_pass=orientation_pass,
         flat_error_rad=angles[0],
         heading_error_rad=angles[1],

@@ -108,6 +108,17 @@ def p01_s11_task_pass(
     )
 
 
+def w01_s14_task_pass(
+    *, nearest_slot_id: str, center_inside_target_cell: bool
+) -> bool:
+    """Apply the group-lead contract: W01 is stably inside S14.
+
+    Final orientation and full-bound containment remain diagnostics only.
+    """
+
+    return bool(nearest_slot_id == "S14" and center_inside_target_cell)
+
+
 class OfflineGtProbe:
     """Read live USD transforms without exposing them to online consumers."""
 
@@ -259,12 +270,38 @@ class OfflineGtProbe:
         bin_config: Mapping[str, Any],
         orientation_tolerance_deg: float = 15.0,
     ) -> dict[str, Any]:
-        """Offline-only containment and ``wrench_y`` orientation label."""
+        """Accept a stable W01 whose center is inside the S14 cell.
+
+        ``flat_y``/``wrench_y`` describe the frozen initial scene and slot
+        geometry.  They are retained as diagnostics, not as terminal task
+        requirements for the instruction "把W01放到S14中".
+        """
 
         tolerance = radians(float(orientation_tolerance_deg))
         if tolerance <= 0.0 or tolerance > radians(45.0):
             raise ValueError("orientation_tolerance_deg must be in (0, 45]")
-        contained = self.part_fully_inside_slot(
+        bin_inverse = self._world_matrix(bin_path).GetInverse()
+        part_matrix = self._world_matrix(part_path)
+        center = bin_inverse.Transform(part_matrix.ExtractTranslation())
+        center_local = [float(center[index]) for index in range(3)]
+        allowed = slot_interior_bounds(bin_config, "S14")
+        center_inside_target_cell = all(
+            allowed["min"][axis] <= center_local[axis] <= allowed["max"][axis]
+            for axis in range(3)
+        )
+        slots = {item["id"]: item for item in bin_config["slots"]}
+        nearest = min(
+            slots.values(),
+            key=lambda item: sum(
+                (
+                    center_local[index]
+                    - float(item["center_local_m"][index])
+                )
+                ** 2
+                for index in (0, 1)
+            ),
+        )["id"]
+        full_containment_diagnostic = self.part_fully_inside_slot(
             part_path=part_path,
             bin_path=bin_path,
             bin_config=bin_config,
@@ -273,16 +310,28 @@ class OfflineGtProbe:
         flat_error, heading_error = self.w01_orientation_errors(
             part_path=part_path, bin_path=bin_path
         )
-        orientation_pass = flat_error <= tolerance and heading_error <= tolerance
+        orientation_diagnostic_pass = (
+            flat_error <= tolerance and heading_error <= tolerance
+        )
         return {
-            "pass": bool(contained["pass"] and orientation_pass),
+            "pass": w01_s14_task_pass(
+                nearest_slot_id=str(nearest),
+                center_inside_target_cell=center_inside_target_cell,
+            ),
             "part_id": "W01",
             "slot_id": "S14",
+            "nearest_slot_id": nearest,
+            "center_in_bin_local_m": center_local,
+            "center_inside_target_cell": center_inside_target_cell,
             "flat_error_rad": flat_error,
             "heading_error_rad": heading_error,
             "orientation_tolerance_deg": float(orientation_tolerance_deg),
-            "orientation_pass": orientation_pass,
-            "containment": contained,
+            "orientation_required": False,
+            "orientation_diagnostic_pass": orientation_diagnostic_pass,
+            "full_part_inside_slot_diagnostic": bool(
+                full_containment_diagnostic["pass"]
+            ),
+            "containment": full_containment_diagnostic,
         }
 
     def local_point_to_world(

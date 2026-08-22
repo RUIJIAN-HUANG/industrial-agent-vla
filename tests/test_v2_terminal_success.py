@@ -160,6 +160,20 @@ def test_w01_terminal_success_accepts_flat_y_stable_votes() -> None:
     assert result.failure_codes == ()
 
 
+def test_w01_orientation_is_diagnostic_not_a_success_gate() -> None:
+    result = evaluate_w01_terminal_success(
+        flat_error_rad=math.radians(90),
+        heading_error_rad=math.radians(30),
+        vote_reports=_votes(True, True, True),
+        positions_world=[[0, 0, 0], [0.0005, 0, 0]],
+        timestamps_s=[0, 1],
+    )
+    assert result.passed is True
+    assert result.orientation_pass is False
+    assert result.to_dict()["orientation_required"] is False
+    assert result.failure_codes == ()
+
+
 def test_s11_bounds_exclude_neighbor_slots_and_dividers() -> None:
     config = {
         "size_m": [0.3, 0.22, 0.09],
