@@ -41,6 +41,11 @@ class V2FailureCode(str, Enum):
     P01_TERMINAL_HOLD_TOO_SHORT = "P01_TERMINAL_HOLD_TOO_SHORT"
     P01_TERMINAL_DRIFT_EXCEEDED = "P01_TERMINAL_DRIFT_EXCEEDED"
     P01_OFFLINE_GT_UNAVAILABLE = "P01_OFFLINE_GT_UNAVAILABLE"
+    W01_ORIENTATION_EXCEEDED = "W01_ORIENTATION_EXCEEDED"
+    W01_GT_NOT_FRESH = "W01_GT_NOT_FRESH"
+    W01_GT_VOTE_INSUFFICIENT = "W01_GT_VOTE_INSUFFICIENT"
+    W01_TERMINAL_HOLD_TOO_SHORT = "W01_TERMINAL_HOLD_TOO_SHORT"
+    W01_TERMINAL_DRIFT_EXCEEDED = "W01_TERMINAL_DRIFT_EXCEEDED"
 
 
 class CollectionStateError(RuntimeError):
@@ -311,8 +316,8 @@ class V2ManualCollectionStateMachine:
         self.token = ControlToken.NONE
 
 
-class P01ToS11CollectionStateMachine:
-    """Single-skill state machine for one Arm_A P01-to-S11 Episode.
+class SinglePartToSlotCollectionStateMachine:
+    """Fail-closed state machine for one Arm_A part-to-slot Episode.
 
     The complete eight-part/Arm_B workflow remains available through
     :class:`V2ManualCollectionStateMachine`; this profile deliberately ends
@@ -320,13 +325,15 @@ class P01ToS11CollectionStateMachine:
     ``Arm_A/pi05/P01_TO_S11`` Canonical V2 identity.
     """
 
-    TASK_ID = "P01_TO_S11"
-    PART_ID = "P01"
-    SLOT_ID = "S11"
+    TASK_ID = ""
+    PART_ID = ""
+    SLOT_ID = ""
 
     def __init__(self, contract: V2CollectionContract):
         if contract.part_to_slot.get(self.PART_ID) != self.SLOT_ID:
-            raise ValueError("V2 scene must map P01 to S11")
+            raise ValueError(
+                f"V2 scene must map {self.PART_ID} to {self.SLOT_ID}"
+            )
         self.contract = contract
         self.token = ControlToken.A_ONLY
         self.outcome: EpisodeOutcome | None = None
@@ -343,7 +350,7 @@ class P01ToS11CollectionStateMachine:
 
     def _require_active(self) -> None:
         if self.outcome is not None or self.token is ControlToken.NONE:
-            raise RuntimeError("P01 collection attempt is already terminal")
+            raise RuntimeError(f"{self.TASK_ID} collection attempt is already terminal")
 
     def _reject(self, code: V2FailureCode, message: str) -> None:
         self.failure_code = code
@@ -356,7 +363,7 @@ class P01ToS11CollectionStateMachine:
         if arm_id != "Arm_A":
             self._reject(
                 V2FailureCode.INACTIVE_ARM_ACTION,
-                "P01_TO_S11 permits Arm_A actions only",
+                f"{self.TASK_ID} permits Arm_A actions only",
             )
 
     def record_part_placement(
@@ -370,7 +377,7 @@ class P01ToS11CollectionStateMachine:
         if self._placed or part_id != self.PART_ID:
             self._reject(
                 V2FailureCode.PART_ORDER_VIOLATION,
-                f"P01_TO_S11 requires exactly one {self.PART_ID} placement",
+                f"{self.TASK_ID} requires exactly one {self.PART_ID} placement",
             )
         if slot_id != self.SLOT_ID:
             self._reject(
@@ -384,7 +391,7 @@ class P01ToS11CollectionStateMachine:
             )
         self._placed = True
 
-    def complete_p01(
+    def complete(
         self,
         *,
         arm_a_gripper_open: bool,
@@ -402,8 +409,8 @@ class P01ToS11CollectionStateMachine:
         ):
             self._reject(
                 V2FailureCode.FINISH_PRECONDITION_FAILED,
-                "P01 completion requires confirmed S11 placement, open gripper, "
-                "and Arm_A clear",
+                f"{self.PART_ID} completion requires confirmed {self.SLOT_ID} "
+                "placement, open gripper, and Arm_A clear",
             )
         self.token = ControlToken.NONE
         self.outcome = EpisodeOutcome.SUCCEEDED
@@ -427,3 +434,21 @@ class P01ToS11CollectionStateMachine:
         self.outcome = EpisodeOutcome.FAILED
         self.failure_code = code
         self.token = ControlToken.NONE
+
+
+class P01ToS11CollectionStateMachine(SinglePartToSlotCollectionStateMachine):
+    TASK_ID = "P01_TO_S11"
+    PART_ID = "P01"
+    SLOT_ID = "S11"
+
+    def complete_p01(self, *, arm_a_gripper_open: bool, arm_a_clear: bool) -> None:
+        self.complete(
+            arm_a_gripper_open=arm_a_gripper_open,
+            arm_a_clear=arm_a_clear,
+        )
+
+
+class W01ToS14CollectionStateMachine(SinglePartToSlotCollectionStateMachine):
+    TASK_ID = "W01_TO_S14"
+    PART_ID = "W01"
+    SLOT_ID = "S14"

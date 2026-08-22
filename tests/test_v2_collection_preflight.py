@@ -47,6 +47,18 @@ def test_valid_practice_preflight_uses_real_v2_identity(tmp_path: Path) -> None:
     assert result.canonical_schema_version == "2.0"
     assert result.task_id == "P01_TO_S11"
     assert result.instruction == "把P01放到S11中"
+
+
+def test_w01_s14_practice_preflight_uses_second_frozen_identity(
+    tmp_path: Path,
+) -> None:
+    result = _build(
+        tmp_path,
+        task_id="W01_TO_S14",
+        instruction="把W01放到S14中",
+    )
+    assert result.task_id == "W01_TO_S14"
+    assert result.instruction == "把W01放到S14中"
     assert result.split is CollectionSplit.PRACTICE
     assert result.training_allowed is False
     assert result.full_task_required is False

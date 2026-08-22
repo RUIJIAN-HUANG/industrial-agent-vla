@@ -39,7 +39,16 @@ MVP_P01_TO_S11 = InstructionOption(
     canonical_instruction="把P01放到S11中",
 )
 
-MVP_INSTRUCTION_OPTIONS: tuple[InstructionOption, ...] = (MVP_P01_TO_S11,)
+MVP_W01_TO_S14 = InstructionOption(
+    task_id="W01_TO_S14",
+    display_instruction="帮我把扳手W01放置到料箱的S14格子中。",
+    canonical_instruction="把W01放到S14中",
+)
+
+MVP_INSTRUCTION_OPTIONS: tuple[InstructionOption, ...] = (
+    MVP_P01_TO_S11,
+    MVP_W01_TO_S14,
+)
 _BY_TASK_ID = {option.task_id: option for option in MVP_INSTRUCTION_OPTIONS}
 _BY_TEXT = {
     text: option
@@ -81,6 +90,7 @@ __all__ = [
     "InstructionOption",
     "MVP_INSTRUCTION_OPTIONS",
     "MVP_P01_TO_S11",
+    "MVP_W01_TO_S14",
     "mvp_instruction_for_task",
     "mvp_instruction_options",
     "normalize_mvp_instruction",

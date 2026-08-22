@@ -8,7 +8,7 @@ artifact directory; Canonical fields receive at most the final episode outcome.
 from __future__ import annotations
 
 from itertools import product
-from math import cos, radians, sqrt
+from math import acos, cos, radians, sqrt
 from typing import Any, Mapping, Sequence
 
 from simulation.v2_terminal_success import vertical_error_rad
@@ -223,6 +223,65 @@ class OfflineGtProbe:
             "upright_tolerance_deg": tolerance,
             "vertical_containment": bool(contained["axis_pass"]["z"]),
             "full_part_inside_bin_diagnostic": bool(contained["pass"]),
+            "containment": contained,
+        }
+
+    def w01_orientation_errors(
+        self, *, part_path: str, bin_path: str
+    ) -> tuple[float, float]:
+        """Return flatness and unsigned long-axis error for a ``wrench_y`` slot."""
+
+        def angle(left: Sequence[float], right: Sequence[float], *, unsigned: bool) -> float:
+            left_norm = sqrt(sum(float(value) ** 2 for value in left))
+            right_norm = sqrt(sum(float(value) ** 2 for value in right))
+            if not left_norm or not right_norm:
+                raise ValueError("orientation direction must not be zero")
+            dot = sum(float(a) * float(b) for a, b in zip(left, right)) / (
+                left_norm * right_norm
+            )
+            if unsigned:
+                dot = abs(dot)
+            return acos(max(-1.0, min(1.0, dot)))
+
+        part_up = self.world_direction(part_path, (0.0, 0.0, 1.0))
+        part_long = self.world_direction(part_path, (1.0, 0.0, 0.0))
+        bin_up = self.world_direction(bin_path, (0.0, 0.0, 1.0))
+        bin_y = self.world_direction(bin_path, (0.0, 1.0, 0.0))
+        return angle(part_up, bin_up, unsigned=False), angle(
+            part_long, bin_y, unsigned=True
+        )
+
+    def w01_in_s14(
+        self,
+        *,
+        part_path: str,
+        bin_path: str,
+        bin_config: Mapping[str, Any],
+        orientation_tolerance_deg: float = 15.0,
+    ) -> dict[str, Any]:
+        """Offline-only containment and ``wrench_y`` orientation label."""
+
+        tolerance = radians(float(orientation_tolerance_deg))
+        if tolerance <= 0.0 or tolerance > radians(45.0):
+            raise ValueError("orientation_tolerance_deg must be in (0, 45]")
+        contained = self.part_fully_inside_slot(
+            part_path=part_path,
+            bin_path=bin_path,
+            bin_config=bin_config,
+            slot_id="S14",
+        )
+        flat_error, heading_error = self.w01_orientation_errors(
+            part_path=part_path, bin_path=bin_path
+        )
+        orientation_pass = flat_error <= tolerance and heading_error <= tolerance
+        return {
+            "pass": bool(contained["pass"] and orientation_pass),
+            "part_id": "W01",
+            "slot_id": "S14",
+            "flat_error_rad": flat_error,
+            "heading_error_rad": heading_error,
+            "orientation_tolerance_deg": float(orientation_tolerance_deg),
+            "orientation_pass": orientation_pass,
             "containment": contained,
         }
 

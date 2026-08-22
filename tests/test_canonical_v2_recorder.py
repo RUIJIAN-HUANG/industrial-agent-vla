@@ -34,18 +34,27 @@ def _metadata(**overrides: object) -> CanonicalV2EpisodeMetadata:
     return CanonicalV2EpisodeMetadata(**values)  # type: ignore[arg-type]
 
 
-def _recorder(tmp_path: Path) -> tuple[CanonicalV2Recorder, ImageCas]:
+def _recorder(
+    tmp_path: Path, **metadata_overrides: object
+) -> tuple[CanonicalV2Recorder, ImageCas]:
     image_cas = ImageCas(ImageCasConfig(root=tmp_path / "cas"))
     recorder = CanonicalV2Recorder(
         tmp_path / "episodes",
-        _metadata(),
+        _metadata(**metadata_overrides),
         image_cas=image_cas,
     )
     return recorder, image_cas
 
 
-def _record_complete_episode(tmp_path: Path) -> Path:
-    recorder, image_cas = _recorder(tmp_path)
+def _record_complete_episode(
+    tmp_path: Path,
+    *,
+    task_id: str = "P01_TO_S11",
+    instruction: str = "把P01放到S11中",
+) -> Path:
+    recorder, image_cas = _recorder(
+        tmp_path, task_id=task_id, instruction=instruction
+    )
     frame = np.zeros((720, 1280, 3), dtype=np.uint8)
     frame[20:30, 40:50] = (10, 20, 30)
     references = {
@@ -72,7 +81,7 @@ def _record_complete_episode(tmp_path: Path) -> Path:
         recorder.add_action(
             arm_id="Arm_A",
             executor="pi05",
-            subtask_id="P01_TO_S11",
+            subtask_id=task_id,
             chunk_id="manual-p01-000001",
             timestamp_ns=1_000_000_000,
             physics_tick=0,
@@ -101,6 +110,17 @@ def test_v2_recorder_writes_reader_valid_episode(tmp_path: Path) -> None:
     with CanonicalV2Reader(episode_path) as reader:
         assert len(tuple(reader.iter_action_7d())) == 1
         np.testing.assert_equal(reader.state_7d("Arm_A")[0, 6], 0.375)
+
+
+def test_w01_v2_recorder_writes_reader_valid_episode(tmp_path: Path) -> None:
+    episode_path = _record_complete_episode(
+        tmp_path,
+        task_id="W01_TO_S14",
+        instruction="把W01放到S14中",
+    )
+    with CanonicalV2Reader(episode_path) as reader:
+        assert reader.manifest["metadata"]["task_id"] == "W01_TO_S14"
+        assert len(tuple(reader.iter_action_7d())) == 1
 
 
 @pytest.mark.parametrize(

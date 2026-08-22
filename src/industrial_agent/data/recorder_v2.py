@@ -19,6 +19,10 @@ CANONICAL_V2_VERSION = "2.0"
 V2_SCENE_ID = "single_bin_manual_industrial_v2"
 V2_TASK_ID = "P01_TO_S11"
 V2_INSTRUCTION = "把P01放到S11中"
+V2_TASK_INSTRUCTIONS = {
+    V2_TASK_ID: V2_INSTRUCTION,
+    "W01_TO_S14": "把W01放到S14中",
+}
 V2_ARM_ID = "Arm_A"
 V2_EXECUTOR = "pi05"
 _SAFE_EPISODE_ID = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
@@ -42,10 +46,13 @@ class CanonicalV2EpisodeMetadata(EpisodeMetadata):
             )
         if self.scene_id != V2_SCENE_ID:
             raise ValueError(f"scene_id must equal {V2_SCENE_ID!r}")
-        if self.task_id != V2_TASK_ID:
-            raise ValueError(f"task_id must equal {V2_TASK_ID!r}")
-        if self.instruction != V2_INSTRUCTION:
-            raise ValueError(f"instruction must equal {V2_INSTRUCTION!r}")
+        if self.task_id not in V2_TASK_INSTRUCTIONS:
+            raise ValueError(f"unsupported V2 task_id: {self.task_id!r}")
+        expected_instruction = V2_TASK_INSTRUCTIONS[self.task_id]
+        if self.instruction != expected_instruction:
+            raise ValueError(
+                f"instruction for {self.task_id} must equal {expected_instruction!r}"
+            )
         if (
             isinstance(self.scene_seed, bool)
             or not isinstance(self.scene_seed, int)
@@ -120,8 +127,8 @@ class CanonicalV2Recorder(CanonicalRecorder):
                 "V2 action gripper must be exactly 0.0 (closed) or 1.0 (open)"
             )
 
-    @staticmethod
     def _validate_action_metadata(
+        self,
         *,
         arm_id: str,
         executor: str,
@@ -133,8 +140,11 @@ class CanonicalV2Recorder(CanonicalRecorder):
             raise ValueError(f"Canonical V2 actions require arm_id={V2_ARM_ID!r}")
         if executor != V2_EXECUTOR:
             raise ValueError(f"Canonical V2 actions require executor={V2_EXECUTOR!r}")
-        if subtask_id != V2_TASK_ID:
-            raise ValueError(f"Canonical V2 actions require subtask_id={V2_TASK_ID!r}")
+        if subtask_id != self.metadata.task_id:
+            raise ValueError(
+                "Canonical V2 actions require subtask_id="
+                f"{self.metadata.task_id!r}"
+            )
         return CanonicalRecorder._validate_action_metadata(
             arm_id=arm_id,
             executor=executor,
@@ -235,4 +245,5 @@ __all__ = [
     "V2_INSTRUCTION",
     "V2_SCENE_ID",
     "V2_TASK_ID",
+    "V2_TASK_INSTRUCTIONS",
 ]

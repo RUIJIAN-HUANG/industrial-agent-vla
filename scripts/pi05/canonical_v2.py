@@ -16,6 +16,10 @@ CANONICAL_SCHEMA_VERSION = "2.0"
 EXPECTED_SCENE_ID = "single_bin_manual_industrial_v2"
 EXPECTED_TASK_ID = "P01_TO_S11"
 EXPECTED_INSTRUCTION = "把P01放到S11中"
+EXPECTED_TASK_INSTRUCTIONS = {
+    EXPECTED_TASK_ID: EXPECTED_INSTRUCTION,
+    "W01_TO_S14": "把W01放到S14中",
+}
 EXPECTED_ARM_ID = "Arm_A"
 EXPECTED_EXECUTOR = "pi05"
 EXPECTED_CAMERA_IDS = ("CAM_A_TOP", "CAM_HANDOFF", "CAM_B_TOP")
@@ -159,12 +163,16 @@ class CanonicalV2Reader:
                 "episode.h5.groups",
             )
         metadata = self.manifest["metadata"]
+        task_id = str(metadata["task_id"])
+        instruction = str(metadata["instruction"])
+        if EXPECTED_TASK_INSTRUCTIONS.get(task_id) != instruction:
+            self._fail("unsupported task/instruction pair", "metadata.task_id")
         expected_attributes = {
             "canonical_schema_version": CANONICAL_SCHEMA_VERSION,
             "episode_id": self.episode_id,
             "scene_id": EXPECTED_SCENE_ID,
-            "task_id": EXPECTED_TASK_ID,
-            "instruction": EXPECTED_INSTRUCTION,
+            "task_id": task_id,
+            "instruction": instruction,
             "scene_seed": metadata["scene_seed"],
             "git_sha": metadata["git_sha"],
             "scene_config_sha256": metadata["scene_config_sha256"],
@@ -354,7 +362,7 @@ class CanonicalV2Reader:
         identities = {
             "arm_id": EXPECTED_ARM_ID,
             "executor": EXPECTED_EXECUTOR,
-            "subtask_id": EXPECTED_TASK_ID,
+            "subtask_id": str(self.manifest["metadata"]["task_id"]),
         }
         for field, expected in identities.items():
             values_text = _decoded_strings(group[field])
@@ -406,6 +414,7 @@ __all__ = [
     "EXPECTED_INSTRUCTION",
     "EXPECTED_SCENE_ID",
     "EXPECTED_TASK_ID",
+    "EXPECTED_TASK_INSTRUCTIONS",
     "STATE_DIM",
     "read_canonical_v2_episode",
 ]
