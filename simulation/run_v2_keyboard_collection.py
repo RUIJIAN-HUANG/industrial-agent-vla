@@ -838,6 +838,19 @@ def main() -> int:
             result.setdefault("offline_gt_path", str(terminal_success_path))
         if terminal_success_report is not None:
             result.setdefault("terminal_success", terminal_success_report.to_dict())
+        if controller is not None:
+            try:
+                result.setdefault(
+                    "controller_diagnostics",
+                    {
+                        arm_id: controller.diagnostics(arm_id)
+                        for arm_id in ("Arm_A", "Arm_B")
+                    },
+                )
+            except BaseException as diagnostics_exc:
+                result.setdefault(
+                    "controller_diagnostics_error", repr(diagnostics_exc)
+                )
         result["finished_at_local"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
         write_result(result_path, result)
         print(json.dumps(result, indent=2, ensure_ascii=False, default=str))

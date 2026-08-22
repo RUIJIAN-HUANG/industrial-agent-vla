@@ -21,11 +21,34 @@ from simulation.isaac_franka_controller import (
     _quaternion_to_rotvec,
     _rotate_vector,
     _rotation_matrix_to_quaternion,
+    _translation_tracking_diagnostic,
     _virtual_tcp_world_position,
 )
 
 
 class IsaacFrankaControllerMathTests(unittest.TestCase):
+    def test_translation_tracking_accepts_forward_progress(self):
+        diagnostic = _translation_tracking_diagnostic(
+            np.asarray([0.005, 0.0, 0.0]),
+            np.asarray([0.003, 0.0002, 0.0]),
+        )
+        self.assertTrue(diagnostic["pass"])
+
+    def test_translation_tracking_rejects_perpendicular_motion(self):
+        diagnostic = _translation_tracking_diagnostic(
+            np.asarray([0.005, 0.0, 0.0]),
+            np.asarray([0.0, 0.0, -0.003]),
+        )
+        self.assertFalse(diagnostic["pass"])
+        self.assertEqual(diagnostic["forward_progress_m"], 0.0)
+
+    def test_translation_tracking_rejects_no_progress(self):
+        diagnostic = _translation_tracking_diagnostic(
+            np.asarray([0.005, 0.0, 0.0]),
+            np.zeros(3),
+        )
+        self.assertFalse(diagnostic["pass"])
+
     def test_identity_rotation_matrix_becomes_identity_quaternion(self):
         quaternion = _rotation_matrix_to_quaternion(np.eye(3))
         np.testing.assert_allclose(quaternion, [1.0, 0.0, 0.0, 0.0])
