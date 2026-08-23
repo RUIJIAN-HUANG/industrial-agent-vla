@@ -92,6 +92,13 @@ def test_approach_curve_is_bounded_to_guard_safe_amplitude() -> None:
     assert displacement[1] <= 0.0005 + 1e-12
     assert displacement[2] == 0.0
     assert [a.values[6] for a in varied] == [a.values[6] for a in source]
+    for original, changed in zip(source, varied):
+        original_xyz = np.asarray(original.values[:3], dtype=float)
+        changed_xyz = np.asarray(changed.values[:3], dtype=float)
+        if np.linalg.norm(original_xyz) > 1e-12:
+            assert np.linalg.norm(changed_xyz - original_xyz) <= (
+                0.1 * np.linalg.norm(original_xyz) + 1e-12
+            )
 
 
 def test_generate_w01_batch_writes_hashed_configs_manifest_and_commands(
