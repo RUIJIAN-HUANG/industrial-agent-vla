@@ -18,6 +18,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPOSITORY_ROOT = SCRIPT_DIR.parent
 SOURCE_DIR = REPOSITORY_ROOT / "src"
 TERMINAL_HOLD_ACTION_COUNT = 10
+APPROACH_CURVE_AMPLITUDE_M = 0.0005
 GRIPPER_SETTLE_ACTION_COUNT = 5
 
 
@@ -159,7 +160,9 @@ def _diversify_replay_actions(
         phase = np.linspace(0.0, np.pi, approach_end - approach_start + 1)
         axis = 1 if variant in (1, 2) else 0
         sign = 1.0 if variant in (1, 3) else -1.0
-        offsets[approach_start : approach_end + 1, axis] = sign * 0.003 * np.sin(phase)
+        offsets[approach_start : approach_end + 1, axis] = (
+            sign * APPROACH_CURVE_AMPLITUDE_M * np.sin(phase)
+        )
     else:
         phase = np.linspace(0.0, np.pi, last - first + 1)
         if lift_mm is None:

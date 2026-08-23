@@ -68,6 +68,32 @@ def test_action_hash_includes_duration() -> None:
     assert batch.action_sha256([action]) != batch.action_sha256([slower])
 
 
+def test_approach_curve_is_bounded_to_guard_safe_amplitude() -> None:
+    import numpy as np
+
+    source = list(_source_actions())
+    varied = batch._diversify_replay_actions(
+        source,
+        profile="approach_curve",
+        seed=901,
+        variant=1,
+    )
+
+    base_positions = np.vstack(
+        [np.zeros(3), np.cumsum(np.asarray([a.values[:3] for a in source]), axis=0)]
+    )
+    varied_positions = np.vstack(
+        [np.zeros(3), np.cumsum(np.asarray([a.values[:3] for a in varied]), axis=0)]
+    )
+    displacement = np.max(np.abs(varied_positions - base_positions), axis=0)
+
+    assert np.any(np.abs(varied_positions - base_positions) > 0.0)
+    assert displacement[0] <= 0.0005 + 1e-12
+    assert displacement[1] <= 0.0005 + 1e-12
+    assert displacement[2] == 0.0
+    assert [a.values[6] for a in varied] == [a.values[6] for a in source]
+
+
 def test_generate_w01_batch_writes_hashed_configs_manifest_and_commands(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
