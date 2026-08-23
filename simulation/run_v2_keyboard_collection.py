@@ -101,6 +101,103 @@ def _load_replay_task_actions(
     return source_episode_id, _replay_task_actions_from_rows(rows)
 
 
+def _diversify_replay_actions(
+    actions: list[Any],
+    *,
+    profile: str,
+    seed: int,
+    variant: int = 0,
+    lift_mm: float | None = None,
+    final_y_offset_mm: float = 0.0,
+    final_z_offset_mm: float = 0.0,
+) -> list[Any]:
+    """Apply a bounded, smooth deterministic variation to replay actions.
+
+    V2 actions are Cartesian deltas, so perturb cumulative translation and
+    convert it back to deltas.  Grasp/release commands remain unchanged.
+    """
+
+    if profile == "baseline":
+        return list(actions)
+    if profile not in {"diverse_low", "approach_curve"}:
+        raise ValueError(f"unsupported trajectory profile: {profile}")
+    if len(actions) < 8:
+        raise ValueError(f"{profile} requires at least eight task actions")
+
+    import numpy as np
+
+    from industrial_agent.contracts import ActionStep
+
+    values = np.asarray([action.values for action in actions], dtype=np.float64)
+    closed_indices = np.flatnonzero(values[:, 6] < 0.5)
+    if closed_indices.size < 4:
+        raise ValueError(
+            f"{profile} could not identify a closed-gripper transfer segment"
+        )
+
+    start = int(closed_indices[0])
+    end = int(closed_indices[-1])
+    span = end - start
+    if span < 4:
+        raise ValueError(f"{profile} transfer segment is too short")
+
+    first = start + max(1, span // 5)
+    last = end - max(1, span // 5)
+    if last <= first:
+        raise ValueError(f"{profile} has no safe interior transfer segment")
+
+    cumulative = np.zeros((len(actions) + 1, 3), dtype=np.float64)
+    cumulative[1:] = np.cumsum(values[:, :3], axis=0)
+    offsets = np.zeros_like(cumulative)
+    if profile == "approach_curve":
+        if not 1 <= variant <= 4:
+            raise ValueError("approach_curve variant must be in [1, 4]")
+        approach_end = start
+        if approach_end < 6:
+            raise ValueError("approach_curve requires at least six pre-grasp actions")
+        approach_start = max(0, approach_end - max(10, approach_end // 2))
+        phase = np.linspace(0.0, np.pi, approach_end - approach_start + 1)
+        axis = 1 if variant in (1, 2) else 0
+        sign = 1.0 if variant in (1, 3) else -1.0
+        offsets[approach_start : approach_end + 1, axis] = sign * 0.003 * np.sin(phase)
+    else:
+        phase = np.linspace(0.0, np.pi, last - first + 1)
+        if lift_mm is None:
+            rng = np.random.default_rng(int(seed))
+            lift_m = float(rng.choice(np.asarray([0.0002, 0.0003, 0.0005])))
+        else:
+            if not 0.0 < float(lift_mm) <= 5.0:
+                raise ValueError("lift_mm must be in (0, 5] millimetres")
+            lift_m = float(lift_mm) / 1000.0
+        offsets[first : last + 1, 2] = lift_m * np.sin(phase)
+
+    final_offset = np.asarray(
+        [0.0, float(final_y_offset_mm) / 1000.0, float(final_z_offset_mm) / 1000.0],
+        dtype=np.float64,
+    )
+    if np.any(final_offset):
+        release_candidates = np.flatnonzero(
+            (np.arange(len(actions)) > end) & (values[:, 6] >= 0.5)
+        )
+        if release_candidates.size == 0:
+            raise ValueError(
+                "final placement correction requires an open-gripper release action"
+            )
+        release = int(release_candidates[0])
+        ramp_start = min(last, release)
+        ramp = np.linspace(0.0, 1.0, release - ramp_start + 1)
+        offsets[ramp_start : release + 1] += ramp[:, None] * final_offset
+        offsets[release + 1 :] += final_offset
+
+    varied_positions = cumulative + offsets
+    varied = values.copy()
+    varied[:, :3] = varied_positions[1:] - varied_positions[:-1]
+    return [
+        ActionStep.from_sequence(row.tolist(), duration_ms=action.duration_ms)
+        for row, action in zip(varied, actions)
+    ]
+
+
 def _collect_p01_terminal_success(
     *,
     bridge: Any,
@@ -463,6 +560,15 @@ def main() -> int:
                 expected_scene_config_sha256=preflight.scene_config_sha256,
                 expected_task_id=preflight.task_id,
             )
+            replay_actions = _diversify_replay_actions(
+                replay_actions,
+                profile=args.trajectory_profile,
+                seed=args.trajectory_seed,
+                variant=args.trajectory_variant,
+                lift_mm=args.lift_mm,
+                final_y_offset_mm=args.final_y_offset_mm,
+                final_z_offset_mm=args.final_z_offset_mm,
+            )
             if len(replay_actions) + TERMINAL_HOLD_ACTION_COUNT > args.max_actions:
                 raise RuntimeError(
                     "replayed task actions plus terminal holds exceed "
@@ -473,7 +579,28 @@ def main() -> int:
                     "replay_source_episode_id": replay_source_episode_id,
                     "replay_source_path": str(replay_path),
                     "replay_task_action_count": len(replay_actions),
+                    "trajectory_profile": args.trajectory_profile,
+                    "trajectory_seed": args.trajectory_seed,
+                    "trajectory_variant": args.trajectory_variant,
+                    "trajectory_lift_mm": args.lift_mm,
+                    "final_y_offset_mm": args.final_y_offset_mm,
+                    "final_z_offset_mm": args.final_z_offset_mm,
                 }
+            )
+            write_result(
+                artifact_dir / "trajectory_metadata.json",
+                {
+                    "reference_episode_id": replay_source_episode_id,
+                    "reference_episode_path": str(replay_path),
+                    "trajectory_profile": args.trajectory_profile,
+                    "trajectory_seed": args.trajectory_seed,
+                    "trajectory_variant": args.trajectory_variant,
+                    "trajectory_lift_mm": args.lift_mm,
+                    "final_y_offset_mm": args.final_y_offset_mm,
+                    "final_z_offset_mm": args.final_z_offset_mm,
+                    "scene_seed": preflight.scene_seed,
+                    "task_id": preflight.task_id,
+                },
             )
 
         _preload_pink_runtime(args.ik_backend)

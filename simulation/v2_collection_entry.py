@@ -59,6 +59,49 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--trajectory-profile",
+        choices=("baseline", "diverse_low", "approach_curve"),
+        default="baseline",
+        help=(
+            "Replay profile. baseline preserves the source actions; "
+            "diverse_low applies a smooth, small lift-path variation; "
+            "approach_curve adds a small pre-grasp approach arc."
+        ),
+    )
+    parser.add_argument(
+        "--trajectory-seed",
+        type=int,
+        default=0,
+        help="Deterministic seed for the selected trajectory profile.",
+    )
+    parser.add_argument(
+        "--trajectory-variant",
+        type=int,
+        default=0,
+        help="Explicit variant index for non-baseline replay profiles.",
+    )
+    parser.add_argument(
+        "--lift-mm",
+        type=float,
+        default=None,
+        help=(
+            "Explicit diverse_low lift amplitude in millimetres. "
+            "When set, this overrides the seed-selected amplitude."
+        ),
+    )
+    parser.add_argument(
+        "--final-y-offset-mm",
+        type=float,
+        default=0.0,
+        help="Smooth final placement correction along bin-local Y, in millimetres.",
+    )
+    parser.add_argument(
+        "--final-z-offset-mm",
+        type=float,
+        default=0.0,
+        help="Smooth final placement correction along bin-local Z, in millimetres.",
+    )
+    parser.add_argument(
         "--ik-backend",
         choices=("pink", "lula"),
         default="pink",
@@ -103,6 +146,27 @@ def preflight_from_args(
         )
     if not 0.0 < args.rotation_step_deg <= 5.0:
         raise ValueError("--rotation-step-deg must be in (0, 5]")
+    if args.trajectory_profile != "baseline" and args.replay_episode is None:
+        raise ValueError("a trajectory profile requires --replay-episode")
+    if args.lift_mm is not None and not 0.0 < args.lift_mm <= 5.0:
+        raise ValueError("--lift-mm must be in (0, 5] millimetres")
+    if args.lift_mm is not None and args.trajectory_profile != "diverse_low":
+        raise ValueError("--lift-mm requires --trajectory-profile diverse_low")
+    if (
+        args.trajectory_profile == "approach_curve"
+        and not 1 <= args.trajectory_variant <= 4
+    ):
+        raise ValueError("approach_curve requires --trajectory-variant in [1, 4]")
+    if args.trajectory_profile != "approach_curve" and args.trajectory_variant != 0:
+        raise ValueError("--trajectory-variant is only supported with approach_curve")
+    if abs(args.final_y_offset_mm) > 20.0 or abs(args.final_z_offset_mm) > 20.0:
+        raise ValueError("final placement offsets must be within +/-20 millimetres")
+    if (
+        args.final_y_offset_mm != 0.0 or args.final_z_offset_mm != 0.0
+    ) and args.trajectory_profile != "diverse_low":
+        raise ValueError(
+            "final placement offsets require --trajectory-profile diverse_low"
+        )
     openpi_sha: str | None = None
     openpi_clean: bool | None = None
     if args.openpi_root is not None:
