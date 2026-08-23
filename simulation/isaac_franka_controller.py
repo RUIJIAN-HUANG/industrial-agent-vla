@@ -21,6 +21,8 @@ from industrial_agent.sync_contract import FROZEN_MULTI_RATE
 
 _ARMS = ("Arm_A", "Arm_B")
 _FINGER_JOINTS = ("panda_finger_joint1", "panda_finger_joint2")
+_MIN_TRANSLATION_PROGRESS_M = 0.00025
+_MIN_TRANSLATION_DIRECTION_COSINE = 0.25
 
 
 def _quat_multiply(left: np.ndarray, right: np.ndarray) -> np.ndarray:
@@ -183,6 +185,50 @@ def _virtual_tcp_world_position(
     ) @ np.asarray(tcp_offset_local_m, dtype=float)
 
 
+def _translation_tracking_diagnostic(
+    requested_world_m: np.ndarray,
+    observed_world_m: np.ndarray,
+) -> dict[str, Any]:
+    """Check that a translated TCP actually moved in the requested direction."""
+
+    requested = np.asarray(requested_world_m, dtype=float)
+    observed = np.asarray(observed_world_m, dtype=float)
+    if requested.shape != (3,) or observed.shape != (3,):
+        raise ValueError("translation tracking vectors must be 3-D")
+    if not np.all(np.isfinite(requested)) or not np.all(np.isfinite(observed)):
+        raise ValueError("translation tracking vectors must be finite")
+
+    requested_norm = float(np.linalg.norm(requested))
+    observed_norm = float(np.linalg.norm(observed))
+    if requested_norm == 0.0:
+        return {
+            "checked": False,
+            "pass": True,
+            "requested_world_m": requested.tolist(),
+            "observed_world_m": observed.tolist(),
+        }
+
+    requested_unit = requested / requested_norm
+    forward_progress = float(np.dot(observed, requested_unit))
+    direction_cosine = forward_progress / observed_norm if observed_norm > 0.0 else 0.0
+    passed = bool(
+        forward_progress >= _MIN_TRANSLATION_PROGRESS_M
+        and direction_cosine >= _MIN_TRANSLATION_DIRECTION_COSINE
+    )
+    return {
+        "checked": True,
+        "pass": passed,
+        "requested_world_m": requested.tolist(),
+        "observed_world_m": observed.tolist(),
+        "requested_norm_m": requested_norm,
+        "observed_norm_m": observed_norm,
+        "forward_progress_m": forward_progress,
+        "direction_cosine": direction_cosine,
+        "minimum_forward_progress_m": _MIN_TRANSLATION_PROGRESS_M,
+        "minimum_direction_cosine": _MIN_TRANSLATION_DIRECTION_COSINE,
+    }
+
+
 def _control_world_position_for_tcp(
     tcp_position_world_m: np.ndarray,
     tcp_orientation_world_wxyz: np.ndarray,
@@ -293,6 +339,7 @@ class IsaacSimFrankaController:
         self._control_frame_name = end_effector_frame_name
         self._tcp_offsets_local_m: dict[str, np.ndarray] = {}
         self._tcp_definitions: dict[str, dict[str, Any]] = {}
+        self._last_motion_diagnostics: dict[str, dict[str, Any]] = {}
         for arm_id, arm in self._arms.items():
             config = (
                 interface_config_loader.load_supported_lula_kinematics_solver_config(
@@ -502,6 +549,20 @@ class IsaacSimFrankaController:
                 "tcp_offset_local_m": [0.0, 0.0, 0.0],
             }
         return dict(definitions[arm_id])
+
+    def diagnostics(self, arm_id: str) -> dict[str, Any]:
+        """Return the latest auditable IK and Cartesian tracking diagnostics."""
+
+        self._require_owner_thread()
+        if arm_id not in self._arms:
+            raise RuntimeError(f"unknown Isaac Franka arm: {arm_id!r}")
+        payload: dict[str, Any] = {
+            "ik_backend": self._ik_backend,
+            "last_motion": dict(self._last_motion_diagnostics.get(arm_id, {})),
+        }
+        if self._pink_adapter is not None:
+            payload["pink"] = self._pink_adapter.diagnostics(arm_id)
+        return payload
 
     def end_effector_pose_in_base(
         self,
@@ -803,6 +864,22 @@ class IsaacSimFrankaController:
                         raise RuntimeError(
                             "control lease was revoked during action execution"
                         )
+
+            if getattr(self, "_ik_backend", "lula") == "pink":
+                final_position, _ = self.end_effector_pose(arm_id)
+                motion_diagnostic = _translation_tracking_diagnostic(
+                    world_translation,
+                    np.asarray(final_position, dtype=float) - current_position,
+                )
+                self._last_motion_diagnostics[arm_id] = motion_diagnostic
+                if not motion_diagnostic["pass"]:
+                    raise RuntimeError(
+                        f"Pink Cartesian tracking guard rejected {arm_id}: "
+                        f"forward_progress_m="
+                        f"{motion_diagnostic['forward_progress_m']:.6f}, "
+                        f"direction_cosine="
+                        f"{motion_diagnostic['direction_cosine']:.3f}"
+                    )
         finally:
             self._action_idle.set()
             self._action_lock.release()

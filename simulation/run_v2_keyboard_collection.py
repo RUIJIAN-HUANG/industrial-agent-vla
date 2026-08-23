@@ -18,6 +18,13 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPOSITORY_ROOT = SCRIPT_DIR.parent
 SOURCE_DIR = REPOSITORY_ROOT / "src"
 TERMINAL_HOLD_ACTION_COUNT = 10
+GRIPPER_SETTLE_ACTION_COUNT = 5
+
+
+def _interactive_action_repeat_count(command: Any) -> int:
+    """Give a gripper toggle enough recorded 100 ms actions to reach target."""
+
+    return GRIPPER_SETTLE_ACTION_COUNT if command.key == "g" else 1
 
 
 def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
@@ -73,6 +80,7 @@ def _load_replay_task_actions(
     episode_dir: Path,
     *,
     expected_scene_config_sha256: str,
+    expected_task_id: str,
 ) -> tuple[str, list[Any]]:
     """Load validated task actions, excluding the frozen terminal hold suffix."""
 
@@ -82,6 +90,8 @@ def _load_replay_task_actions(
         metadata = reader.manifest["metadata"]
         if metadata["outcome"] != "SUCCEEDED":
             raise ValueError("--replay-episode must have outcome SUCCEEDED")
+        if metadata["task_id"] != expected_task_id:
+            raise ValueError("--replay-episode task_id does not match this collection")
         _validate_replay_source_metadata(
             metadata,
             expected_scene_config_sha256=expected_scene_config_sha256,
@@ -190,6 +200,95 @@ def _collect_p01_terminal_success(
         }
     )
     report_path = artifact_dir / "offline_gt" / "p01_terminal_success.json"
+    _write_json_atomic(report_path, payload)
+    return result, report_path, action_count
+
+
+def _collect_w01_terminal_success(
+    *,
+    bridge: Any,
+    controller: Any,
+    probe: Any,
+    config: dict[str, Any],
+    artifact_dir: Path,
+    task_id: str,
+    episode_id: str,
+    action_count: int,
+    max_actions: int | None = None,
+) -> tuple[Any, Path, int]:
+    """Hold W01 for one real second, voting on S14 containment and orientation."""
+
+    if max_actions is not None and action_count + 10 > max_actions:
+        raise RuntimeError(
+            "terminal hold actions exceed the --max-actions safety limit"
+        )
+    from industrial_agent.contracts import ActionStep
+    from industrial_agent.sync_contract import FROZEN_MULTI_RATE
+    from simulation.v2_terminal_success import evaluate_w01_terminal_success
+
+    part_path = "/World/Parts/W01"
+    bin_path = "/World/Bins/Bin_01"
+    hold_action = ActionStep.from_sequence(
+        (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0), duration_ms=100
+    )
+    positions = [probe.world_position(part_path)]
+    flat_error, heading_error = probe.w01_orientation_errors(
+        part_path=part_path, bin_path=bin_path
+    )
+    timestamps_s = [float(controller.physics_tick_index) / FROZEN_MULTI_RATE.physics_hz]
+    vote_reports: list[dict[str, Any]] = []
+    for step in range(1, 11):
+        _record_and_execute_formal_action(
+            bridge=bridge,
+            controller=controller,
+            action=hold_action,
+            arm_id="Arm_A",
+            task_id=task_id,
+            episode_id=episode_id,
+            action_index=action_count,
+        )
+        action_count += 1
+        physics_tick = int(controller.physics_tick_index)
+        positions.append(probe.world_position(part_path))
+        timestamps_s.append(float(physics_tick) / FROZEN_MULTI_RATE.physics_hz)
+        if step not in {1, 5, 10}:
+            continue
+        placement = probe.w01_in_s14(
+            part_path=part_path, bin_path=bin_path, bin_config=config["bin"]
+        )
+        vote_reports.append(
+            {
+                "observation_id": f"physics-{physics_tick}",
+                "timestamp_s": timestamps_s[-1],
+                "physics_tick": physics_tick,
+                "containment": placement["containment"],
+                "flat_error_rad": placement["flat_error_rad"],
+                "heading_error_rad": placement["heading_error_rad"],
+                "pass": bool(placement["pass"]),
+            }
+        )
+
+    result = evaluate_w01_terminal_success(
+        flat_error_rad=flat_error,
+        heading_error_rad=heading_error,
+        vote_reports=vote_reports,
+        positions_world=positions,
+        timestamps_s=timestamps_s,
+    )
+    payload = result.to_dict()
+    payload.update(
+        {
+            "scene_id": config["scene_id"],
+            "task_id": task_id,
+            "part_path": part_path,
+            "bin_path": bin_path,
+            "position_samples_world": positions,
+            "timestamp_samples_s": timestamps_s,
+            "vote_reports": vote_reports,
+            "isolation": "offline_gt_only",
+        }
+    )
+    report_path = artifact_dir / "offline_gt" / "w01_terminal_success.json"
     _write_json_atomic(report_path, payload)
     return result, report_path, action_count
 
@@ -342,13 +441,19 @@ def main() -> int:
             EpisodeOutcome,
             P01ToS11CollectionStateMachine,
             V2CollectionContract,
+            W01ToS14CollectionStateMachine,
         )
         from simulation.v2_scene_contract import require_valid_config
 
         config = _load_json(preflight.config_path)
         require_valid_config(config)
         contract = V2CollectionContract.from_config(config)
-        machine = P01ToS11CollectionStateMachine(contract)
+        task_profiles = {
+            "P01_TO_S11": (P01ToS11CollectionStateMachine, "P01", "S11"),
+            "W01_TO_S14": (W01ToS14CollectionStateMachine, "W01", "S14"),
+        }
+        machine_type, task_part_id, task_slot_id = task_profiles[preflight.task_id]
+        machine = machine_type(contract)
 
         if args.replay_episode is not None:
             phase = "load_replay_episode"
@@ -356,6 +461,7 @@ def main() -> int:
             replay_source_episode_id, replay_actions = _load_replay_task_actions(
                 replay_path,
                 expected_scene_config_sha256=preflight.scene_config_sha256,
+                expected_task_id=preflight.task_id,
             )
             if len(replay_actions) + TERMINAL_HOLD_ACTION_COUNT > args.max_actions:
                 raise RuntimeError(
@@ -465,17 +571,17 @@ def main() -> int:
                 action_count += 1
                 print(f"REPLAY ACTION {action_count}/{len(replay_actions)} Arm_A")
             machine.record_part_placement(
-                part_id="P01",
-                slot_id=contract.part_to_slot["P01"],
+                part_id=task_part_id,
+                slot_id=contract.part_to_slot[task_part_id],
                 stable=True,
             )
             arm_a = _arm_readback(controller, arms, config, "Arm_A")
-            machine.complete_p01(
+            machine.complete(
                 arm_a_gripper_open=arm_a["gripper_open"],
                 arm_a_clear=arm_a["retreated"],
             )
             terminal_hold_requested = True
-            print("REPLAY COMPLETED P01_TO_S11; starting terminal validation")
+            print(f"REPLAY COMPLETED {preflight.task_id}; starting terminal validation")
         else:
             mapper = KeyboardTeleopMapper(
                 translation_step_m=args.translation_step_m,
@@ -495,21 +601,27 @@ def main() -> int:
             )
             with status_window.frame:
                 with ui.VStack(spacing=5):
-                    ui.Label("W/S X | A/D Y | Q/E Z | I/K J/L U/O rotation | G gripper")
+                    ui.Label(
+                        "W/S X | A/D Y | Q/E Z | I/K J/L U/O rotation | "
+                        "G gripper (0.5 s settle)"
+                    )
                     ui.Label(
                         f"F toggles COARSE/FINE translation "
                         f"({args.translation_step_m * 1000:.0f} mm / "
                         f"{args.fine_translation_step_m * 1000:.0f} mm)"
                     )
-                    ui.Label("P01 target: S11 = bin back row, left-most slot")
+                    ui.Label(f"{task_part_id} target: {task_slot_id}")
                     ui.Label(
                         f"IK backend: {controller.ik_backend.upper()} + "
                         "null-space posture"
                     )
-                    ui.Label("Z confirm P01 in S11 | C complete P01 task")
+                    ui.Label(
+                        f"Z confirm {task_part_id} in {task_slot_id} | "
+                        f"C complete {task_part_id} task"
+                    )
                     ui.Label("P checkpoint | X safe-stop | V/B disabled for this task")
                     ui.Label("Tap keys once. Do not hold. Formal actions are recorded.")
-                    status_label = ui.Label("READY | A_ONLY | next=P01")
+                    status_label = ui.Label(f"READY | A_ONLY | next={task_part_id}")
 
             print("V2 canonical keyboard collection READY")
             print(mapper.help_text())
@@ -568,25 +680,26 @@ def main() -> int:
                         continue
                     if command.kind == "handoff_verify":
                         raise RuntimeError(
-                            "P01_TO_S11 ends before handoff; V is not allowed"
+                            f"{preflight.task_id} ends before handoff; V is not allowed"
                         )
                     if command.kind == "activate_b":
                         raise RuntimeError(
-                            "P01_TO_S11 permits Arm_A only; B is not allowed"
+                            f"{preflight.task_id} permits Arm_A only; B is not allowed"
                         )
                     if command.kind == "complete":
                         arm_a = _arm_readback(controller, arms, config, "Arm_A")
-                        machine.complete_p01(
+                        machine.complete(
                             arm_a_gripper_open=arm_a["gripper_open"],
                             arm_a_clear=arm_a["retreated"],
                         )
-                        print("HUMAN CONFIRMED P01_TO_S11 COMPLETE")
+                        print(f"HUMAN CONFIRMED {preflight.task_id} COMPLETE")
                         terminal_hold_requested = True
                         running = False
                         continue
                     if command.action is None:
                         raise RuntimeError("action command contains no ActionStep")
-                    if action_count >= args.max_actions:
+                    repeat_count = _interactive_action_repeat_count(command)
+                    if action_count + repeat_count > args.max_actions:
                         raise RuntimeError("max-actions safety limit reached")
                     machine.require_arm_action(active_arm)
                     rejection = controller.action_rejection_reason(
@@ -599,16 +712,22 @@ def main() -> int:
                             f"REJECTED | {rejection} | actions={action_count}"
                         )
                         continue
-                    _record_and_execute_formal_action(
-                        bridge=bridge,
-                        controller=controller,
-                        action=command.action,
-                        arm_id=active_arm,
-                        task_id=preflight.task_id,
-                        episode_id=preflight.episode_id,
-                        action_index=action_count,
-                    )
-                    action_count += 1
+                    for repeat_index in range(repeat_count):
+                        _record_and_execute_formal_action(
+                            bridge=bridge,
+                            controller=controller,
+                            action=command.action,
+                            arm_id=active_arm,
+                            task_id=preflight.task_id,
+                            episode_id=preflight.episode_id,
+                            action_index=action_count,
+                        )
+                        action_count += 1
+                        if repeat_count > 1:
+                            print(
+                                f"GRIPPER SETTLE {repeat_index + 1}/{repeat_count} "
+                                f"actions={action_count}"
+                            )
                     status_label.text = (
                         f"{machine.token.value} | arm={active_arm} | "
                         f"next={machine.next_part_id} | actions={action_count}"
@@ -620,8 +739,13 @@ def main() -> int:
 
         if terminal_hold_requested and machine.outcome is EpisodeOutcome.SUCCEEDED:
             phase = "terminal_hold_offline_gt"
+            terminal_collector = (
+                _collect_p01_terminal_success
+                if preflight.task_id == "P01_TO_S11"
+                else _collect_w01_terminal_success
+            )
             terminal_success_report, terminal_success_path, action_count = (
-                _collect_p01_terminal_success(
+                terminal_collector(
                     bridge=bridge,
                     controller=controller,
                     probe=offline_gt_probe,
@@ -718,6 +842,17 @@ def main() -> int:
             result.setdefault("offline_gt_path", str(terminal_success_path))
         if terminal_success_report is not None:
             result.setdefault("terminal_success", terminal_success_report.to_dict())
+        if controller is not None:
+            try:
+                result.setdefault(
+                    "controller_diagnostics",
+                    {
+                        arm_id: controller.diagnostics(arm_id)
+                        for arm_id in ("Arm_A", "Arm_B")
+                    },
+                )
+            except BaseException as diagnostics_exc:
+                result.setdefault("controller_diagnostics_error", repr(diagnostics_exc))
         result["finished_at_local"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
         write_result(result_path, result)
         print(json.dumps(result, indent=2, ensure_ascii=False, default=str))

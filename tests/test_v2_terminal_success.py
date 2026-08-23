@@ -9,6 +9,7 @@ from simulation.v2_terminal_success import (
     P01_MAX_VERTICAL_ERROR_RAD,
     evaluate_fresh_gt_votes,
     evaluate_p01_terminal_success,
+    evaluate_w01_terminal_success,
     evaluate_terminal_hold_drift,
     vertical_error_rad,
 )
@@ -145,6 +146,32 @@ def test_all_three_gates_are_required_and_gt_is_not_canonical() -> None:
     )
     assert failed.passed is False
     assert "P01_ORIENTATION_EXCEEDED" in failed.failure_codes
+
+
+def test_w01_terminal_success_accepts_flat_y_stable_votes() -> None:
+    result = evaluate_w01_terminal_success(
+        flat_error_rad=math.radians(2),
+        heading_error_rad=math.radians(3),
+        vote_reports=_votes(True, True, True),
+        positions_world=[[0, 0, 0], [0.0005, 0, 0]],
+        timestamps_s=[0, 1],
+    )
+    assert result.passed is True
+    assert result.failure_codes == ()
+
+
+def test_w01_orientation_is_diagnostic_not_a_success_gate() -> None:
+    result = evaluate_w01_terminal_success(
+        flat_error_rad=math.radians(90),
+        heading_error_rad=math.radians(30),
+        vote_reports=_votes(True, True, True),
+        positions_world=[[0, 0, 0], [0.0005, 0, 0]],
+        timestamps_s=[0, 1],
+    )
+    assert result.passed is True
+    assert result.orientation_pass is False
+    assert result.to_dict()["orientation_required"] is False
+    assert result.failure_codes == ()
 
 
 def test_s11_bounds_exclude_neighbor_slots_and_dividers() -> None:

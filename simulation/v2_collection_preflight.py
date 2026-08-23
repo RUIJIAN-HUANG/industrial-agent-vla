@@ -12,8 +12,7 @@ from typing import Any
 
 from industrial_agent.data.recorder_v2 import (
     CANONICAL_V2_VERSION,
-    V2_INSTRUCTION,
-    V2_TASK_ID,
+    V2_TASK_INSTRUCTIONS,
 )
 from configs.pi05.constants import OPENPI_COMMIT
 from simulation.v2_collection_state import V2CollectionContract
@@ -120,13 +119,15 @@ def build_collection_preflight(
     ):
         raise CollectionPreflightError("scene_seed must be a non-negative integer")
 
-    if task_id != V2_TASK_ID:
+    if task_id not in V2_TASK_INSTRUCTIONS:
         raise CollectionPreflightError(
-            f"task_id must equal the frozen V2 identity {V2_TASK_ID!r}"
+            "task_id must equal one of the frozen V2 identities "
+            f"{tuple(V2_TASK_INSTRUCTIONS)!r}"
         )
-    if instruction != V2_INSTRUCTION:
+    expected_instruction = V2_TASK_INSTRUCTIONS[task_id]
+    if instruction != expected_instruction:
         raise CollectionPreflightError(
-            f"instruction must equal the frozen V2 text {V2_INSTRUCTION!r}"
+            f"instruction must equal {expected_instruction!r} for {task_id}"
         )
 
     try:

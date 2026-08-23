@@ -52,6 +52,7 @@ def _args(tmp_path: Path) -> argparse.Namespace:
 
 
 def test_cli_builds_visible_practice_preflight(tmp_path: Path) -> None:
+    assert _args(tmp_path).rotation_step_deg == 5.0
     result = preflight_from_args(_args(tmp_path), git_sha="a" * 40, worktree_clean=True)
     assert result.scene_id == "single_bin_manual_industrial_v2"
     assert result.training_allowed is False

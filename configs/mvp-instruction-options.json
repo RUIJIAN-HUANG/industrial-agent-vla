@@ -6,6 +6,11 @@
       "task_id": "P01_TO_S11",
       "display_instruction": "帮我把螺母P01放置到料箱的S11格子中。",
       "canonical_instruction": "把P01放到S11中"
+    },
+    {
+      "task_id": "W01_TO_S14",
+      "display_instruction": "帮我把扳手W01放置到料箱的S14格子中。",
+      "canonical_instruction": "把W01放到S14中"
     }
   ]
 }

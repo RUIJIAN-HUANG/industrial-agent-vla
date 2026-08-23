@@ -86,6 +86,7 @@ def evaluate_fresh_gt_votes(
     *,
     expected_count: int = P01_GT_VOTE_COUNT,
     minimum_passes: int = P01_GT_MIN_PASSES,
+    failure_prefix: str = "P01",
 ) -> dict[str, Any]:
     """Require exactly three unique, chronological fresh GT observations."""
 
@@ -94,7 +95,7 @@ def evaluate_fresh_gt_votes(
             "pass": False,
             "count": len(reports),
             "passed_count": 0,
-            "failure_codes": ["P01_GT_NOT_FRESH"],
+            "failure_codes": [f"{failure_prefix}_GT_NOT_FRESH"],
         }
 
     ids: list[str] = []
@@ -106,7 +107,7 @@ def evaluate_fresh_gt_votes(
                 "pass": False,
                 "count": len(reports),
                 "passed_count": 0,
-                "failure_codes": ["P01_GT_NOT_FRESH"],
+                "failure_codes": [f"{failure_prefix}_GT_NOT_FRESH"],
             }
         ids.append(observation_id)
         try:
@@ -116,7 +117,7 @@ def evaluate_fresh_gt_votes(
                 "pass": False,
                 "count": len(reports),
                 "passed_count": 0,
-                "failure_codes": ["P01_GT_NOT_FRESH"],
+                "failure_codes": [f"{failure_prefix}_GT_NOT_FRESH"],
             }
 
     if len(set(ids)) != expected_count or any(
@@ -126,7 +127,7 @@ def evaluate_fresh_gt_votes(
             "pass": False,
             "count": len(reports),
             "passed_count": 0,
-            "failure_codes": ["P01_GT_NOT_FRESH"],
+            "failure_codes": [f"{failure_prefix}_GT_NOT_FRESH"],
         }
 
     passed_count = sum(report.get("pass") is True for report in reports)
@@ -135,7 +136,7 @@ def evaluate_fresh_gt_votes(
         "pass": passed,
         "count": len(reports),
         "passed_count": passed_count,
-        "failure_codes": [] if passed else ["P01_GT_VOTE_INSUFFICIENT"],
+        "failure_codes": [] if passed else [f"{failure_prefix}_GT_VOTE_INSUFFICIENT"],
     }
 
 
@@ -145,6 +146,7 @@ def evaluate_terminal_hold_drift(
     *,
     minimum_duration_s: float = P01_HOLD_DURATION_S,
     max_drift_m: float = P01_MAX_HOLD_DRIFT_M,
+    failure_prefix: str = "P01",
 ) -> dict[str, Any]:
     """Check a real one-second hold against the initial P01 position."""
 
@@ -153,7 +155,7 @@ def evaluate_terminal_hold_drift(
             "pass": False,
             "duration_s": 0.0,
             "max_drift_m": None,
-            "failure_codes": ["P01_TERMINAL_HOLD_TOO_SHORT"],
+            "failure_codes": [f"{failure_prefix}_TERMINAL_HOLD_TOO_SHORT"],
         }
     try:
         points = [
@@ -174,9 +176,9 @@ def evaluate_terminal_hold_drift(
     passed = duration_s >= minimum_duration_s and max_drift <= max_drift_m
     failure_codes: list[str] = []
     if duration_s < minimum_duration_s:
-        failure_codes.append("P01_TERMINAL_HOLD_TOO_SHORT")
+        failure_codes.append(f"{failure_prefix}_TERMINAL_HOLD_TOO_SHORT")
     if max_drift > max_drift_m:
-        failure_codes.append("P01_TERMINAL_DRIFT_EXCEEDED")
+        failure_codes.append(f"{failure_prefix}_TERMINAL_DRIFT_EXCEEDED")
     return {
         "pass": passed,
         "duration_s": duration_s,
@@ -245,6 +247,69 @@ def evaluate_p01_terminal_success(
         passed=orientation_pass and vote["pass"] and drift["pass"],
         orientation_pass=orientation_pass,
         orientation_error_rad=angle,
+        fresh_vote_pass=bool(vote["pass"]),
+        fresh_vote=vote,
+        hold_drift_pass=bool(drift["pass"]),
+        hold_drift=drift,
+        failure_codes=failure_codes,
+    )
+
+
+@dataclass(frozen=True)
+class W01TerminalSuccess:
+    passed: bool
+    orientation_pass: bool
+    flat_error_rad: float
+    heading_error_rad: float
+    fresh_vote_pass: bool
+    fresh_vote: Mapping[str, Any]
+    hold_drift_pass: bool
+    hold_drift: Mapping[str, Any]
+    failure_codes: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "passed": self.passed,
+            "orientation_pass": self.orientation_pass,
+            "flat_error_rad": self.flat_error_rad,
+            "heading_error_rad": self.heading_error_rad,
+            "orientation_threshold_rad": P01_MAX_VERTICAL_ERROR_RAD,
+            "orientation_required": False,
+            "fresh_vote_pass": self.fresh_vote_pass,
+            "fresh_vote": dict(self.fresh_vote),
+            "hold_drift_pass": self.hold_drift_pass,
+            "hold_drift": dict(self.hold_drift),
+            "hold_duration_threshold_s": P01_HOLD_DURATION_S,
+            "hold_drift_threshold_m": P01_MAX_HOLD_DRIFT_M,
+            "failure_codes": list(self.failure_codes),
+            "canonical_included": False,
+        }
+
+
+def evaluate_w01_terminal_success(
+    *,
+    flat_error_rad: float,
+    heading_error_rad: float,
+    vote_reports: Sequence[Mapping[str, Any]],
+    positions_world: Sequence[Sequence[float]],
+    timestamps_s: Sequence[float],
+) -> W01TerminalSuccess:
+    angles = (float(flat_error_rad), float(heading_error_rad))
+    if any(not math.isfinite(value) or value < 0.0 for value in angles):
+        raise ValueError("W01 orientation errors must be finite and non-negative")
+    orientation_pass = all(value <= P01_MAX_VERTICAL_ERROR_RAD for value in angles)
+    vote = evaluate_fresh_gt_votes(vote_reports, failure_prefix="W01")
+    drift = evaluate_terminal_hold_drift(
+        positions_world, timestamps_s, failure_prefix="W01"
+    )
+    failure_codes = tuple(
+        dict.fromkeys(list(vote["failure_codes"]) + list(drift["failure_codes"]))
+    )
+    return W01TerminalSuccess(
+        passed=vote["pass"] and drift["pass"],
+        orientation_pass=orientation_pass,
+        flat_error_rad=angles[0],
+        heading_error_rad=angles[1],
         fresh_vote_pass=bool(vote["pass"]),
         fresh_vote=vote,
         hold_drift_pass=bool(drift["pass"]),

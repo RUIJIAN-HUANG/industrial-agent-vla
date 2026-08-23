@@ -8,6 +8,7 @@ from simulation.v2_collection_state import (
     ControlToken,
     EpisodeOutcome,
     P01ToS11CollectionStateMachine,
+    W01ToS14CollectionStateMachine,
     V2CollectionContract,
     V2FailureCode,
     V2ManualCollectionStateMachine,
@@ -52,6 +53,17 @@ def _machine() -> V2ManualCollectionStateMachine:
 def _p01_machine() -> P01ToS11CollectionStateMachine:
     contract = V2CollectionContract.from_config(_config())
     return P01ToS11CollectionStateMachine(contract)
+
+
+def test_w01_to_s14_single_part_workflow() -> None:
+    contract = V2CollectionContract.from_config(_config())
+    machine = W01ToS14CollectionStateMachine(contract)
+    assert machine.next_part_id == "W01"
+    machine.require_arm_action("Arm_A")
+    machine.record_part_placement(part_id="W01", slot_id="S14", stable=True)
+    machine.complete(arm_a_gripper_open=True, arm_a_clear=True)
+    assert machine.outcome is EpisodeOutcome.SUCCEEDED
+    assert machine.placed_parts == ("W01",)
 
 
 def _place_all(machine: V2ManualCollectionStateMachine) -> None:

@@ -48,7 +48,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-actions", type=int, default=500)
     parser.add_argument("--translation-step-m", type=float, default=0.05)
     parser.add_argument("--fine-translation-step-m", type=float, default=0.005)
-    parser.add_argument("--rotation-step-deg", type=float, default=2.0)
+    parser.add_argument("--rotation-step-deg", type=float, default=5.0)
     parser.add_argument(
         "--replay-episode",
         type=Path,

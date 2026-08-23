@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import h5py
 import numpy as np
@@ -13,11 +14,19 @@ from industrial_agent.image_cas import ImageCas, ImageCasConfig
 from scripts.pi05.convert_openpi_v2 import preflight_canonical_v2_windows
 from simulation.canonical_recorder_bridge import CanonicalRecorderBridge
 from simulation.run_v2_keyboard_collection import (
+    GRIPPER_SETTLE_ACTION_COUNT,
     _collect_p01_terminal_success,
+    _interactive_action_repeat_count,
     _record_and_execute_formal_action,
-    _validate_replay_source_metadata,
     _replay_task_actions_from_rows,
+    _validate_replay_source_metadata,
 )
+
+
+def test_gripper_toggle_gets_five_recorded_settle_actions() -> None:
+    assert GRIPPER_SETTLE_ACTION_COUNT == 5
+    assert _interactive_action_repeat_count(SimpleNamespace(key="g")) == 5
+    assert _interactive_action_repeat_count(SimpleNamespace(key="q")) == 1
 
 
 class _RgbPipeline:

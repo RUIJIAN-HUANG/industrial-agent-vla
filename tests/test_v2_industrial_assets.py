@@ -3,7 +3,11 @@ from __future__ import annotations
 import unittest
 from copy import deepcopy
 
-from simulation.v2_industrial_assets import asset_summary, validate_part_spec
+from simulation.v2_industrial_assets import (
+    asset_summary,
+    physics_material_key,
+    validate_part_spec,
+)
 from simulation.v2_scene_contract import load_config
 
 
@@ -39,6 +43,12 @@ class V2IndustrialAssetTests(unittest.TestCase):
         self.assertTrue(
             any("visually distinct" in item for item in validate_part_spec(wrench))
         )
+
+    def test_wrenches_receive_the_configured_high_friction_material(self) -> None:
+        keys = {part["id"]: physics_material_key(part) for part in self.config["parts"]}
+        self.assertEqual(keys["W01"], "carry_grip")
+        self.assertEqual(keys["W02"], "carry_grip")
+        self.assertEqual(keys["P01"], "ordinary")
 
 
 if __name__ == "__main__":
