@@ -142,8 +142,7 @@ class CanonicalV2Recorder(CanonicalRecorder):
             raise ValueError(f"Canonical V2 actions require executor={V2_EXECUTOR!r}")
         if subtask_id != self.metadata.task_id:
             raise ValueError(
-                "Canonical V2 actions require subtask_id="
-                f"{self.metadata.task_id!r}"
+                f"Canonical V2 actions require subtask_id={self.metadata.task_id!r}"
             )
         return CanonicalRecorder._validate_action_metadata(
             arm_id=arm_id,

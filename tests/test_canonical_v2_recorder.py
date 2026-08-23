@@ -52,9 +52,7 @@ def _record_complete_episode(
     task_id: str = "P01_TO_S11",
     instruction: str = "把P01放到S11中",
 ) -> Path:
-    recorder, image_cas = _recorder(
-        tmp_path, task_id=task_id, instruction=instruction
-    )
+    recorder, image_cas = _recorder(tmp_path, task_id=task_id, instruction=instruction)
     frame = np.zeros((720, 1280, 3), dtype=np.uint8)
     frame[20:30, 40:50] = (10, 20, 30)
     references = {

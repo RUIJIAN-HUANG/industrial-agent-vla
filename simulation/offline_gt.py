@@ -108,9 +108,7 @@ def p01_s11_task_pass(
     )
 
 
-def w01_s14_task_pass(
-    *, nearest_slot_id: str, center_inside_target_cell: bool
-) -> bool:
+def w01_s14_task_pass(*, nearest_slot_id: str, center_inside_target_cell: bool) -> bool:
     """Apply the group-lead contract: W01 is stably inside S14.
 
     Final orientation and full-bound containment remain diagnostics only.
@@ -242,7 +240,9 @@ class OfflineGtProbe:
     ) -> tuple[float, float]:
         """Return flatness and unsigned long-axis error for a ``wrench_y`` slot."""
 
-        def angle(left: Sequence[float], right: Sequence[float], *, unsigned: bool) -> float:
+        def angle(
+            left: Sequence[float], right: Sequence[float], *, unsigned: bool
+        ) -> float:
             left_norm = sqrt(sum(float(value) ** 2 for value in left))
             right_norm = sqrt(sum(float(value) ** 2 for value in right))
             if not left_norm or not right_norm:
@@ -293,11 +293,7 @@ class OfflineGtProbe:
         nearest = min(
             slots.values(),
             key=lambda item: sum(
-                (
-                    center_local[index]
-                    - float(item["center_local_m"][index])
-                )
-                ** 2
+                (center_local[index] - float(item["center_local_m"][index])) ** 2
                 for index in (0, 1)
             ),
         )["id"]

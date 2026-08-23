@@ -219,7 +219,9 @@ def _collect_w01_terminal_success(
     """Hold W01 for one real second, voting on S14 containment and orientation."""
 
     if max_actions is not None and action_count + 10 > max_actions:
-        raise RuntimeError("terminal hold actions exceed the --max-actions safety limit")
+        raise RuntimeError(
+            "terminal hold actions exceed the --max-actions safety limit"
+        )
     from industrial_agent.contracts import ActionStep
     from industrial_agent.sync_contract import FROZEN_MULTI_RATE
     from simulation.v2_terminal_success import evaluate_w01_terminal_success
@@ -254,15 +256,17 @@ def _collect_w01_terminal_success(
         placement = probe.w01_in_s14(
             part_path=part_path, bin_path=bin_path, bin_config=config["bin"]
         )
-        vote_reports.append({
-            "observation_id": f"physics-{physics_tick}",
-            "timestamp_s": timestamps_s[-1],
-            "physics_tick": physics_tick,
-            "containment": placement["containment"],
-            "flat_error_rad": placement["flat_error_rad"],
-            "heading_error_rad": placement["heading_error_rad"],
-            "pass": bool(placement["pass"]),
-        })
+        vote_reports.append(
+            {
+                "observation_id": f"physics-{physics_tick}",
+                "timestamp_s": timestamps_s[-1],
+                "physics_tick": physics_tick,
+                "containment": placement["containment"],
+                "flat_error_rad": placement["flat_error_rad"],
+                "heading_error_rad": placement["heading_error_rad"],
+                "pass": bool(placement["pass"]),
+            }
+        )
 
     result = evaluate_w01_terminal_success(
         flat_error_rad=flat_error,
@@ -272,16 +276,18 @@ def _collect_w01_terminal_success(
         timestamps_s=timestamps_s,
     )
     payload = result.to_dict()
-    payload.update({
-        "scene_id": config["scene_id"],
-        "task_id": task_id,
-        "part_path": part_path,
-        "bin_path": bin_path,
-        "position_samples_world": positions,
-        "timestamp_samples_s": timestamps_s,
-        "vote_reports": vote_reports,
-        "isolation": "offline_gt_only",
-    })
+    payload.update(
+        {
+            "scene_id": config["scene_id"],
+            "task_id": task_id,
+            "part_path": part_path,
+            "bin_path": bin_path,
+            "position_samples_world": positions,
+            "timestamp_samples_s": timestamps_s,
+            "vote_reports": vote_reports,
+            "isolation": "offline_gt_only",
+        }
+    )
     report_path = artifact_dir / "offline_gt" / "w01_terminal_success.json"
     _write_json_atomic(report_path, payload)
     return result, report_path, action_count
@@ -615,9 +621,7 @@ def main() -> int:
                     )
                     ui.Label("P checkpoint | X safe-stop | V/B disabled for this task")
                     ui.Label("Tap keys once. Do not hold. Formal actions are recorded.")
-                    status_label = ui.Label(
-                        f"READY | A_ONLY | next={task_part_id}"
-                    )
+                    status_label = ui.Label(f"READY | A_ONLY | next={task_part_id}")
 
             print("V2 canonical keyboard collection READY")
             print(mapper.help_text())
@@ -848,9 +852,7 @@ def main() -> int:
                     },
                 )
             except BaseException as diagnostics_exc:
-                result.setdefault(
-                    "controller_diagnostics_error", repr(diagnostics_exc)
-                )
+                result.setdefault("controller_diagnostics_error", repr(diagnostics_exc))
         result["finished_at_local"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
         write_result(result_path, result)
         print(json.dumps(result, indent=2, ensure_ascii=False, default=str))

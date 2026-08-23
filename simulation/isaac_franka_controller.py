@@ -210,9 +210,7 @@ def _translation_tracking_diagnostic(
 
     requested_unit = requested / requested_norm
     forward_progress = float(np.dot(observed, requested_unit))
-    direction_cosine = (
-        forward_progress / observed_norm if observed_norm > 0.0 else 0.0
-    )
+    direction_cosine = forward_progress / observed_norm if observed_norm > 0.0 else 0.0
     passed = bool(
         forward_progress >= _MIN_TRANSLATION_PROGRESS_M
         and direction_cosine >= _MIN_TRANSLATION_DIRECTION_COSINE

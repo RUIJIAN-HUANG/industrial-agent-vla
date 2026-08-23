@@ -45,9 +45,7 @@ class V2IndustrialAssetTests(unittest.TestCase):
         )
 
     def test_wrenches_receive_the_configured_high_friction_material(self) -> None:
-        keys = {
-            part["id"]: physics_material_key(part) for part in self.config["parts"]
-        }
+        keys = {part["id"]: physics_material_key(part) for part in self.config["parts"]}
         self.assertEqual(keys["W01"], "carry_grip")
         self.assertEqual(keys["W02"], "carry_grip")
         self.assertEqual(keys["P01"], "ordinary")

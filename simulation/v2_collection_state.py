@@ -333,9 +333,7 @@ class SinglePartToSlotCollectionStateMachine:
 
     def __init__(self, contract: V2CollectionContract):
         if contract.part_to_slot.get(self.PART_ID) != self.SLOT_ID:
-            raise ValueError(
-                f"V2 scene must map {self.PART_ID} to {self.SLOT_ID}"
-            )
+            raise ValueError(f"V2 scene must map {self.PART_ID} to {self.SLOT_ID}")
         self.contract = contract
         self.token = ControlToken.A_ONLY
         self.outcome: EpisodeOutcome | None = None

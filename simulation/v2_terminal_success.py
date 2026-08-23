@@ -302,9 +302,9 @@ def evaluate_w01_terminal_success(
     drift = evaluate_terminal_hold_drift(
         positions_world, timestamps_s, failure_prefix="W01"
     )
-    failure_codes = tuple(dict.fromkeys(
-        list(vote["failure_codes"]) + list(drift["failure_codes"])
-    ))
+    failure_codes = tuple(
+        dict.fromkeys(list(vote["failure_codes"]) + list(drift["failure_codes"]))
+    )
     return W01TerminalSuccess(
         passed=vote["pass"] and drift["pass"],
         orientation_pass=orientation_pass,
