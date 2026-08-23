@@ -68,4 +68,3 @@ PowerShell 因 `$ErrorActionPreference = 'Stop'` 立即停止。只有最终清�
 `0.2/0.3/0.5 mm` 平滑抬升；4 条 `approach_curve` 分别使用冻结变体 1–4。
 若任务二母轨迹在首次闭合夹爪前少于 6 个动作，`approach_curve` 会明确拒绝，必须
 重新采集合格母轨迹，不能退化为无差异副本。
-
