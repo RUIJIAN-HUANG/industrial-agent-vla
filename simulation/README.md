@@ -73,6 +73,10 @@ python simulation\run_v2_gui_scene_acceptance.py `
 V2 的静态 PASS 不代表 GUI、物理、IK、抓取或满载搬运通过。正式顺序与状态声明
 见 [`../docs/v2-manual-industrial-collection.md`](../docs/v2-manual-industrial-collection.md)。
 
+成功母 Episode 的 `diverse_low`/`approach_curve` 确定性批处理、哈希清单、去重门禁
+及训练就绪命令见
+[`../docs/v2-replay-batch-generation.md`](../docs/v2-replay-batch-generation.md)。
+
 ## V1 自动闭环兼容基线
 
 `single_bin_pack_handoff_v1` 仍用于四 Agent 自动串行闭环：Arm_A/π0.5 处理

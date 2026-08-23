@@ -105,6 +105,10 @@ Canonical 指令。当前唯一选项定义在 `configs/mvp-instruction-options.
 
 ## Canonical→LeRobot 数据 Preflight
 
+从成功母 Episode 生成回放变体时，先按
+[V2 回放轨迹批处理生成](v2-replay-batch-generation.md)生成配置、执行并完成哈希/去重
+验收；不得直接把未 finalization 的回放目录交给转换器。
+
 获得至少一条正式 V2 Episode 和经过 SHA 校验的 Split Registry 后，先运行只读检查：
 
 ```powershell
