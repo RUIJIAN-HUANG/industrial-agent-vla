@@ -12,6 +12,11 @@ from industrial_agent.data import (
     CanonicalV2EpisodeMetadata,
     CanonicalV2Recorder,
 )
+from industrial_agent.data.recorder_v2 import (
+    V2_INSTRUCTION,
+    V2_TASK_ID,
+    V2_TASK_INSTRUCTIONS,
+)
 from industrial_agent.image_cas import ImageCas
 from industrial_agent.perception import ImageReference
 
@@ -28,12 +33,14 @@ class V2CollectionIdentity:
     scene_seed: int
     git_sha: str
     scene_config_sha256: str
+    task_id: str = V2_TASK_ID
+    instruction: str = V2_INSTRUCTION
 
     def to_metadata(self) -> CanonicalV2EpisodeMetadata:
         return CanonicalV2EpisodeMetadata(
             episode_id=self.episode_id,
-            task_id="P01_TO_S11",
-            instruction="把P01放到S11中",
+            task_id=self.task_id,
+            instruction=self.instruction,
             scene_seed=self.scene_seed,
             git_sha=self.git_sha,
             scene_config_sha256=self.scene_config_sha256,
@@ -60,6 +67,15 @@ class V2CollectionRecorder:
             raise TypeError("identity must be V2CollectionIdentity")
         if not isinstance(image_cas, ImageCas):
             raise TypeError("image_cas must be ImageCas")
+        if identity.task_id not in V2_TASK_INSTRUCTIONS:
+            raise ValueError(f"unsupported V2 task_id: {identity.task_id!r}")
+        expected_instruction = V2_TASK_INSTRUCTIONS[identity.task_id]
+        if identity.instruction != expected_instruction:
+            raise ValueError(
+                f"instruction for {identity.task_id} must equal "
+                f"{expected_instruction!r}"
+            )
+        self.identity = identity
         self.image_cas = image_cas
         self.recorder = CanonicalV2Recorder(
             output_root,
@@ -153,7 +169,7 @@ class V2CollectionRecorder:
         chunk_id: str,
         action_7d: Sequence[float] | np.ndarray,
     ) -> None:
-        """Record one P01 action only after exact-tick observation is present."""
+        """Record one task action after exact-tick observation is present."""
 
         if physics_tick not in self._camera_ticks:
             raise ValueError(
@@ -171,7 +187,7 @@ class V2CollectionRecorder:
         self.recorder.add_action(
             arm_id="Arm_A",
             executor="pi05",
-            subtask_id="P01_TO_S11",
+            subtask_id=self.identity.task_id,
             chunk_id=chunk_id,
             timestamp_ns=timestamp_ns,
             physics_tick=physics_tick,
