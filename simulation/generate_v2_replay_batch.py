@@ -133,7 +133,9 @@ def _validate_source_metadata(metadata: dict[str, Any]) -> tuple[str, str]:
     task_id = metadata.get("task_id")
     instruction = metadata.get("instruction")
     if not isinstance(task_id, str) or V2_TASK_INSTRUCTIONS.get(task_id) != instruction:
-        raise ReplayBatchError("source episode has an unsupported V2 task/instruction pair")
+        raise ReplayBatchError(
+            "source episode has an unsupported V2 task/instruction pair"
+        )
     return task_id, str(instruction)
 
 
@@ -296,13 +298,9 @@ def _command_argv(
     if trajectory["lift_mm"] is not None:
         argv.extend(["--lift-mm", str(trajectory["lift_mm"])])
     if trajectory["final_offset_mm"]["y"]:
-        argv.extend(
-            ["--final-y-offset-mm", str(trajectory["final_offset_mm"]["y"])]
-        )
+        argv.extend(["--final-y-offset-mm", str(trajectory["final_offset_mm"]["y"])])
     if trajectory["final_offset_mm"]["z"]:
-        argv.extend(
-            ["--final-z-offset-mm", str(trajectory["final_offset_mm"]["z"])]
-        )
+        argv.extend(["--final-z-offset-mm", str(trajectory["final_offset_mm"]["z"])])
     if run["split"] in {"train", "validation"}:
         if frozen_collection_sha is None or openpi_root is None:
             raise ReplayBatchError(
@@ -439,7 +437,9 @@ def generate_batch(
         config_sha = _write_json_atomic(config_path, config)
         entries.append(
             {
-                "config_file": str(config_path.relative_to(destination)).replace("\\", "/"),
+                "config_file": str(config_path.relative_to(destination)).replace(
+                    "\\", "/"
+                ),
                 "config_sha256": config_sha,
                 "episode_id": episode_id,
                 "profile": spec.profile,
@@ -485,7 +485,9 @@ def generate_batch(
     manifest_sha = _write_json_atomic(manifest_path, manifest)
     _write_bytes_atomic(
         destination / MANIFEST_SHA_FILENAME,
-        f"{manifest_sha.removeprefix('sha256:')}  {MANIFEST_FILENAME}\n".encode("ascii"),
+        f"{manifest_sha.removeprefix('sha256:')}  {MANIFEST_FILENAME}\n".encode(
+            "ascii"
+        ),
     )
     commands = [
         _command_line(
@@ -530,7 +532,10 @@ def _read_verified_manifest(path: Path) -> dict[str, Any]:
     if parts[0].lower() != actual:
         raise ReplayBatchError("manifest SHA-256 mismatch")
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict) or payload.get("schema_version") != BATCH_SCHEMA_VERSION:
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schema_version") != BATCH_SCHEMA_VERSION
+    ):
         raise ReplayBatchError("unsupported replay batch manifest")
     return payload
 
@@ -602,14 +607,18 @@ def finalize_batch(manifest: str | Path) -> dict[str, Any]:
         "accepted": accepted,
         "rejected": rejected,
     }
-    payload["status"] = "ACCEPTED" if planned > 0 and accepted == planned else "REJECTED"
+    payload["status"] = (
+        "ACCEPTED" if planned > 0 and accepted == planned else "REJECTED"
+    )
     payload["training_ready"] = bool(
         payload["status"] == "ACCEPTED" and payload["batch"]["split"] == "train"
     )
     manifest_sha = _write_json_atomic(manifest_path, payload)
     _write_bytes_atomic(
         manifest_path.with_name(MANIFEST_SHA_FILENAME),
-        f"{manifest_sha.removeprefix('sha256:')}  {manifest_path.name}\n".encode("ascii"),
+        f"{manifest_sha.removeprefix('sha256:')}  {manifest_path.name}\n".encode(
+            "ascii"
+        ),
     )
     return payload
 
@@ -617,7 +626,9 @@ def finalize_batch(manifest: str | Path) -> dict[str, Any]:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
-    plan = subparsers.add_parser("plan", help="Generate configs, manifest, and commands")
+    plan = subparsers.add_parser(
+        "plan", help="Generate configs, manifest, and commands"
+    )
     plan.add_argument("--source-episode", type=Path, required=True)
     plan.add_argument("--output-dir", type=Path, required=True)
     plan.add_argument("--episode-root", type=Path, required=True)
@@ -687,4 +698,3 @@ __all__ = [
     "load_source_episode",
     "main",
 ]
-

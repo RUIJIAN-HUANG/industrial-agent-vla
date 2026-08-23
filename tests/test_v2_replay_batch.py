@@ -173,4 +173,3 @@ def test_approach_curve_cardinality_is_fail_closed() -> None:
             diverse_low_count=0,
             approach_curve_count=5,
         )
-

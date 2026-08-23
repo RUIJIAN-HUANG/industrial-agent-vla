@@ -159,9 +159,7 @@ def _diversify_replay_actions(
         phase = np.linspace(0.0, np.pi, approach_end - approach_start + 1)
         axis = 1 if variant in (1, 2) else 0
         sign = 1.0 if variant in (1, 3) else -1.0
-        offsets[approach_start : approach_end + 1, axis] = (
-            sign * 0.003 * np.sin(phase)
-        )
+        offsets[approach_start : approach_end + 1, axis] = sign * 0.003 * np.sin(phase)
     else:
         phase = np.linspace(0.0, np.pi, last - first + 1)
         if lift_mm is None:

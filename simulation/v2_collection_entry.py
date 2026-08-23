@@ -158,15 +158,12 @@ def preflight_from_args(
     ):
         raise ValueError("approach_curve requires --trajectory-variant in [1, 4]")
     if args.trajectory_profile != "approach_curve" and args.trajectory_variant != 0:
-        raise ValueError(
-            "--trajectory-variant is only supported with approach_curve"
-        )
+        raise ValueError("--trajectory-variant is only supported with approach_curve")
     if abs(args.final_y_offset_mm) > 20.0 or abs(args.final_z_offset_mm) > 20.0:
         raise ValueError("final placement offsets must be within +/-20 millimetres")
     if (
-        (args.final_y_offset_mm != 0.0 or args.final_z_offset_mm != 0.0)
-        and args.trajectory_profile != "diverse_low"
-    ):
+        args.final_y_offset_mm != 0.0 or args.final_z_offset_mm != 0.0
+    ) and args.trajectory_profile != "diverse_low":
         raise ValueError(
             "final placement offsets require --trajectory-profile diverse_low"
         )
