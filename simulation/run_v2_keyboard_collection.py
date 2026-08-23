@@ -19,6 +19,7 @@ REPOSITORY_ROOT = SCRIPT_DIR.parent
 SOURCE_DIR = REPOSITORY_ROOT / "src"
 TERMINAL_HOLD_ACTION_COUNT = 10
 APPROACH_CURVE_AMPLITUDE_M = 0.0005
+APPROACH_CURVE_MAX_STEP_RATIO = 0.1
 GRIPPER_SETTLE_ACTION_COUNT = 5
 
 
@@ -163,6 +164,28 @@ def _diversify_replay_actions(
         offsets[approach_start : approach_end + 1, axis] = (
             sign * APPROACH_CURVE_AMPLITUDE_M * np.sin(phase)
         )
+        # Pink's tracking guard evaluates each Cartesian step, not only the
+        # total path.  Bound the perturbation against the corresponding source
+        # step so the curve cannot dominate forward progress on a short step.
+        offset_deltas = np.diff(offsets, axis=0)
+        curve_scale = 1.0
+        for index in range(approach_start, approach_end):
+            base_step = values[index, :3]
+            perturbation = offset_deltas[index]
+            base_norm = float(np.linalg.norm(base_step))
+            perturbation_norm = float(np.linalg.norm(perturbation))
+            if perturbation_norm == 0.0:
+                continue
+            if base_norm <= np.finfo(np.float64).eps:
+                curve_scale = 0.0
+                break
+            curve_scale = min(
+                curve_scale,
+                APPROACH_CURVE_MAX_STEP_RATIO * base_norm / perturbation_norm,
+            )
+        if curve_scale <= 0.0:
+            raise ValueError("approach_curve has no guard-safe non-zero pre-grasp step")
+        offsets *= min(1.0, curve_scale)
     else:
         phase = np.linspace(0.0, np.pi, last - first + 1)
         if lift_mm is None:
