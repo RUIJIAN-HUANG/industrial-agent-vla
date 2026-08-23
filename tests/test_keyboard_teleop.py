@@ -19,13 +19,13 @@ def test_motion_keys_follow_frozen_7d_rotation_vector_order() -> None:
         0,
         0,
         0,
-        radians(2),
+        radians(5),
         0,
         0,
         1,
     )
-    assert mapper.parse("j").action.values[4] == radians(2)
-    assert mapper.parse("u").action.values[5] == radians(2)
+    assert mapper.parse("j").action.values[4] == radians(5)
+    assert mapper.parse("u").action.values[5] == radians(5)
     assert mapper.parse("w").action.duration_ms == 100
 
 

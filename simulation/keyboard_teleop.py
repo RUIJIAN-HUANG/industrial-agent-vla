@@ -42,7 +42,7 @@ class KeyboardTeleopMapper:
         *,
         translation_step_m: float = 0.005,
         fine_translation_step_m: float = 0.005,
-        rotation_step_rad: float = radians(2.0),
+        rotation_step_rad: float = radians(5.0),
         duration_ms: int = 100,
         gripper_open: bool = True,
     ) -> None:

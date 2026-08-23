@@ -39,7 +39,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--arm-id", choices=("Arm_A", "Arm_B"), default="Arm_A")
     parser.add_argument("--artifact-dir", type=Path, default=DEFAULT_ARTIFACT_DIR)
     parser.add_argument("--translation-step-m", type=float, default=0.005)
-    parser.add_argument("--rotation-step-deg", type=float, default=2.0)
+    parser.add_argument("--rotation-step-deg", type=float, default=5.0)
     parser.add_argument(
         "--input-mode",
         choices=("terminal", "gui"),

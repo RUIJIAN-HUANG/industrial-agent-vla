@@ -72,9 +72,9 @@ Observation 或控制链路的有效验收证据。
 | `w` / `s` | robot-base `+X` / `-X`，每次 5 mm |
 | `a` / `d` | robot-base `+Y` / `-Y`，每次 5 mm |
 | `q` / `e` | robot-base `+Z` / `-Z`，每次 5 mm |
-| `i` / `k` | rotation-vector X 正/负 2° |
-| `j` / `l` | rotation-vector Y 正/负 2° |
-| `u` / `o` | rotation-vector Z 正/负 2° |
+| `i` / `k` | rotation-vector X 正/负 5° |
+| `j` / `l` | rotation-vector Y 正/负 5° |
+| `u` / `o` | rotation-vector Z 正/负 5° |
 | `g` | 切换夹爪开/合；写入的是目标端点 1/0，不是增量 |
 | `r` | 重置场景 |
 | `p` 或输入 `space` | 保存一个冒烟检查点 |
