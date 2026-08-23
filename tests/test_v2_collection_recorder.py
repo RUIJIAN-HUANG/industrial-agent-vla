@@ -15,13 +15,20 @@ from simulation.v2_collection_recorder import (
 )
 
 
-def _writer(tmp_path: Path) -> tuple[V2CollectionRecorder, ImageCas]:
+def _writer(
+    tmp_path: Path,
+    *,
+    task_id: str = "P01_TO_S11",
+    instruction: str = "把P01放到S11中",
+) -> tuple[V2CollectionRecorder, ImageCas]:
     image_cas = ImageCas(ImageCasConfig(root=tmp_path / "cas"))
     identity = V2CollectionIdentity(
         episode_id="v2-collection-000001",
         scene_seed=19,
         git_sha="a" * 40,
         scene_config_sha256=f"sha256:{'b' * 64}",
+        task_id=task_id,
+        instruction=instruction,
     )
     return (
         V2CollectionRecorder(
@@ -72,6 +79,40 @@ def test_v2_collection_boundary_writes_reader_valid_episode(tmp_path: Path) -> N
 
     with CanonicalV2Reader(episode_path) as reader:
         assert len(tuple(reader.iter_action_7d())) == 1
+
+
+def test_v2_collection_boundary_preserves_w01_identity(tmp_path: Path) -> None:
+    writer, image_cas = _writer(
+        tmp_path,
+        task_id="W01_TO_S14",
+        instruction="把W01放到S14中",
+    )
+    with writer:
+        writer.record_camera_bundle(
+            timestamp_ns=1_000_000_000,
+            physics_tick=0,
+            sequence_id=0,
+            images=_images(image_cas),
+        )
+        writer.record_state_bundle(
+            timestamp_ns=1_000_000_000,
+            physics_tick=0,
+            sequence_id=0,
+            states=_states(),
+        )
+        writer.record_action(
+            timestamp_ns=1_000_000_000,
+            physics_tick=0,
+            sequence_id=0,
+            chunk_id="manual-w01-0",
+            action_7d=[0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        )
+        episode_path = writer.finalize(outcome="SUCCEEDED")
+
+    with CanonicalV2Reader(episode_path) as reader:
+        assert reader.manifest["metadata"]["task_id"] == "W01_TO_S14"
+        assert reader.manifest["metadata"]["instruction"] == "把W01放到S14中"
+        assert reader._h5["actions/subtask_id"][0].decode() == "W01_TO_S14"
 
 
 def test_v2_collection_rejects_action_without_exact_tick_observation(
