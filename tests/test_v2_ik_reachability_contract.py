@@ -7,9 +7,9 @@ from simulation.v2_scene_contract import load_config
 
 
 class V2IkReachabilityContractTests(unittest.TestCase):
-    def test_eight_safe_position_only_targets_are_frozen(self) -> None:
+    def test_nine_safe_position_only_targets_are_frozen(self) -> None:
         targets = _ik_targets(load_config())
-        self.assertEqual(len(targets), 8)
+        self.assertEqual(len(targets), 9)
         self.assertEqual(
             [item["target_id"] for item in targets],
             [
@@ -19,6 +19,7 @@ class V2IkReachabilityContractTests(unittest.TestCase):
                 "ARM_A_ZONE_D_SAFE_APPROACH",
                 "ARM_A_PACK_STATION_HANDLE_APPROACH",
                 "ARM_A_HANDOFF_CENTER_HANDLE_APPROACH",
+                "ARM_B_PACK_STATION_HANDLE_APPROACH",
                 "ARM_B_HANDOFF_CENTER_HANDLE_APPROACH",
                 "ARM_B_FINISHED_01_HANDLE_APPROACH",
             ],
@@ -29,7 +30,7 @@ class V2IkReachabilityContractTests(unittest.TestCase):
         targets = _ik_targets(load_config())
         self.assertEqual(
             [item["arm_id"] for item in targets],
-            ["Arm_A"] * 6 + ["Arm_B"] * 2,
+            ["Arm_A"] * 6 + ["Arm_B"] * 3,
         )
 
 

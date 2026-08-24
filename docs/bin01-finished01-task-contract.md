@@ -9,7 +9,8 @@
 The Episode must start from the unmodified frozen scene configuration. The task
 must not relocate, reorient, add, or remove any part at reset. Its only object
 goal is to move `Bin_01` from its configured initial pose to `FINISHED_01`.
-Only robot actions needed to transport the bin are recordable.
+Only Arm_B actions needed to transport the bin are recordable. Arm_A must not
+move, and no handoff phase is part of this instruction.
 
 The operator grasps `BIN_CARRY_TCP`, transports the bin to `FINISHED_01`,
 releases it, retreats Arm_B, and presses `C`. Terminal acceptance requires:

@@ -83,7 +83,7 @@ def _ik_targets(config: Mapping[str, Any]) -> list[dict[str, Any]]:
             }
         )
 
-    for station_id in ("HANDOFF_CENTER", "FINISHED_01"):
+    for station_id in ("PACK_STATION", "HANDOFF_CENTER", "FINISHED_01"):
         station = stations[station_id]
         position = [float(value) for value in station["pose"]["position_m"]]
         position[2] += handle_z + approach_z
@@ -96,9 +96,9 @@ def _ik_targets(config: Mapping[str, Any]) -> list[dict[str, Any]]:
             }
         )
 
-    if len(targets) != 8 or len({item["target_id"] for item in targets}) != 8:
+    if len(targets) != 9 or len({item["target_id"] for item in targets}) != 9:
         raise RuntimeError(
-            "V2 IK target construction must produce eight unique targets"
+            "V2 IK target construction must produce nine unique targets"
         )
     for item in targets:
         if item["arm_id"] not in ARM_IDS:
