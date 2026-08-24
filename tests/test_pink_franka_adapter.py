@@ -133,6 +133,42 @@ class PinkFrankaAdapterMathTests(unittest.TestCase):
                 dt_s=0.1,
             )
 
+    def test_virtual_fk_updates_only_pink_configuration(self):
+        class Transform:
+            translation = np.asarray([0.1, 0.2, 0.3])
+            rotation = np.eye(3)
+
+        class Configuration:
+            def __init__(self):
+                self.updated = None
+
+            def update(self, values):
+                self.updated = np.asarray(values, dtype=float).copy()
+
+            def get_transform_frame_to_world(self, frame):
+                self.frame = frame
+                return Transform()
+
+        class Controller:
+            pink_configuration = Configuration()
+
+        pink = object.__new__(PinkFrankaAdapter)
+        pink._controllers = {"Arm_B": Controller()}
+        pink._control_frame_names = {"Arm_B": "right_gripper"}
+        pink._controlled_indices = {"Arm_B": list(range(7))}
+
+        position, rotation = pink.control_frame_pose_in_base(
+            arm_id="Arm_B",
+            joint_positions=np.arange(9, dtype=float),
+        )
+
+        np.testing.assert_allclose(position, [0.1, 0.2, 0.3])
+        np.testing.assert_allclose(rotation, np.eye(3))
+        np.testing.assert_allclose(
+            pink._controllers["Arm_B"].pink_configuration.updated,
+            np.arange(7, dtype=float),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

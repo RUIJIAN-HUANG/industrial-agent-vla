@@ -25,6 +25,14 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--output-scene", type=Path, required=True)
     parser.add_argument("--evidence-dir", type=Path, required=True)
     parser.add_argument("--review-seconds", type=int, default=20)
+    parser.add_argument("--ik-backend", choices=("lula", "pink"), default="lula")
+    parser.add_argument(
+        "--arm-b-bin-transport-only",
+        action="store_true",
+        help="Probe only Arm_B at the frozen bin start and FINISHED_01.",
+    )
+    parser.add_argument("--pink-max-virtual-actions", type=int, default=64)
+    parser.add_argument("--pink-position-tolerance-m", type=float, default=0.01)
     return parser.parse_args()
 
 
@@ -56,6 +64,18 @@ def _ik_targets(config: Mapping[str, Any]) -> list[dict[str, Any]]:
     handle = config["bin"]["carry_handle"]
     handle_z = float(handle["position_local_m"][2])
     approach_z = float(handle["approach_offset_m"][2])
+    initial_station_id = str(config["bin"]["initial_station_id"])
+    frozen_bin_position = [
+        float(value) for value in config["bin"]["pose"]["position_m"]
+    ]
+    initial_station_position = [
+        float(value)
+        for value in stations[initial_station_id]["pose"]["position_m"]
+    ]
+    bin_center_offset = [
+        frozen_bin_position[index] - initial_station_position[index]
+        for index in range(3)
+    ]
 
     targets: list[dict[str, Any]] = []
     for zone_id in ("A", "B", "C", "D"):
@@ -73,6 +93,10 @@ def _ik_targets(config: Mapping[str, Any]) -> list[dict[str, Any]]:
     for station_id in ("PACK_STATION", "HANDOFF_CENTER"):
         station = stations[station_id]
         position = [float(value) for value in station["pose"]["position_m"]]
+        position = [
+            value + bin_center_offset[index]
+            for index, value in enumerate(position)
+        ]
         position[2] += handle_z + approach_z
         targets.append(
             {
@@ -86,6 +110,10 @@ def _ik_targets(config: Mapping[str, Any]) -> list[dict[str, Any]]:
     for station_id in ("PACK_STATION", "HANDOFF_CENTER", "FINISHED_01"):
         station = stations[station_id]
         position = [float(value) for value in station["pose"]["position_m"]]
+        position = [
+            value + bin_center_offset[index]
+            for index, value in enumerate(position)
+        ]
         position[2] += handle_z + approach_z
         targets.append(
             {
@@ -114,6 +142,10 @@ def main() -> int:
     args = _parse_args()
     if not 10 <= args.review_seconds <= 300:
         raise ValueError("--review-seconds must be in [10, 300]")
+    if not 1 <= args.pink_max_virtual_actions <= 200:
+        raise ValueError("--pink-max-virtual-actions must be in [1, 200]")
+    if not 0.001 <= args.pink_position_tolerance_m <= 0.05:
+        raise ValueError("--pink-position-tolerance-m must be in [0.001, 0.05]")
     for path in (SCRIPT_DIR, SCRIPT_DIR.parent, SCRIPT_DIR.parent / "src"):
         if str(path) not in sys.path:
             sys.path.insert(0, str(path))
@@ -125,7 +157,10 @@ def main() -> int:
         "status": "ERROR",
         "gate": "V2_VISIBLE_READ_ONLY_IK_REACHABILITY",
         "headless": False,
-        "position_only_ik": True,
+        "position_only_ik": args.ik_backend == "lula",
+        "pink_orientation_constraint": (
+            "hold_initial_tcp_orientation" if args.ik_backend == "pink" else None
+        ),
         "ik_solution_applied": False,
         "cartesian_motion_performed": False,
         "grasp_performed": False,
@@ -144,6 +179,17 @@ def main() -> int:
         config = load_config(args.config)
         require_valid_config(config)
         targets = _ik_targets(config)
+        if args.arm_b_bin_transport_only:
+            critical_ids = {
+                "ARM_B_PACK_STATION_HANDLE_APPROACH",
+                "ARM_B_FINISHED_01_HANDLE_APPROACH",
+            }
+            targets = [item for item in targets if item["target_id"] in critical_ids]
+            if [item["target_id"] for item in targets] != [
+                "ARM_B_PACK_STATION_HANDLE_APPROACH",
+                "ARM_B_FINISHED_01_HANDLE_APPROACH",
+            ]:
+                raise RuntimeError("Arm_B bin-transport target selection drifted")
         simulation_app = isaac_compat.launch_simulation_app(headless=False)
 
         import numpy as np
@@ -201,51 +247,134 @@ def main() -> int:
             arm_id: np.asarray(arms[arm_id].get_joint_positions(), dtype=float).copy()
             for arm_id in ARM_IDS
         }
-        solvers: dict[str, Any] = {}
-        for arm_id in ARM_IDS:
-            solver_config = (
-                interface_config_loader.load_supported_lula_kinematics_solver_config(
-                    "Franka"
-                )
-            )
-            lula = LulaKinematicsSolver(**solver_config)
-            base_position, base_orientation = arms[arm_id].get_world_pose()
-            lula.set_robot_base_pose(
-                np.asarray(base_position, dtype=float),
-                np.asarray(base_orientation, dtype=float),
-            )
-            solvers[arm_id] = ArticulationKinematicsSolver(
-                arms[arm_id], lula, "right_gripper"
-            )
-
         ik_records: list[dict[str, Any]] = []
         errors: list[str] = []
-        for target in targets:
-            solver = solvers[target["arm_id"]]
-            ik_action, success = solver.compute_inverse_kinematics(
-                np.asarray(target["position_world_m"], dtype=float)
+        if args.ik_backend == "lula":
+            solvers: dict[str, Any] = {}
+            for arm_id in ARM_IDS:
+                solver_config = (
+                    interface_config_loader.load_supported_lula_kinematics_solver_config(
+                        "Franka"
+                    )
+                )
+                lula = LulaKinematicsSolver(**solver_config)
+                base_position, base_orientation = arms[arm_id].get_world_pose()
+                lula.set_robot_base_pose(
+                    np.asarray(base_position, dtype=float),
+                    np.asarray(base_orientation, dtype=float),
+                )
+                solvers[arm_id] = ArticulationKinematicsSolver(
+                    arms[arm_id], lula, "right_gripper"
+                )
+
+            for target in targets:
+                solver = solvers[target["arm_id"]]
+                ik_action, success = solver.compute_inverse_kinematics(
+                    np.asarray(target["position_world_m"], dtype=float)
+                )
+                solution = getattr(ik_action, "joint_positions", None)
+                solution_array = (
+                    np.asarray(solution, dtype=float)
+                    if solution is not None
+                    else np.asarray([])
+                )
+                finite_solution = bool(
+                    solution_array.size and np.all(np.isfinite(solution_array))
+                )
+                passed = bool(success and finite_solution)
+                if not passed:
+                    errors.append(
+                        f"{target['target_id']}: Lula position-only IK failed"
+                    )
+                ik_records.append(
+                    {
+                        **target,
+                        "backend": "lula",
+                        "success": bool(success),
+                        "finite_solution": finite_solution,
+                        "solution_joint_positions_rad": solution_array,
+                        "solution_applied": False,
+                    }
+                )
+        else:
+            from isaac_franka_controller import (
+                IsaacSimFrankaController,
+                _rotation_matrix_to_quaternion,
             )
-            solution = getattr(ik_action, "joint_positions", None)
-            solution_array = (
-                np.asarray(solution, dtype=float)
-                if solution is not None
-                else np.asarray([])
+
+            controller = IsaacSimFrankaController(
+                world=world,
+                arms=arms,
+                physics_dt_s=float(physics["physics_dt_s"]),
+                virtual_tcp_fingertip_frame_names=(
+                    "panda_leftfingertip",
+                    "panda_rightfingertip",
+                ),
+                ik_backend="pink",
             )
-            finite_solution = bool(
-                solution_array.size and np.all(np.isfinite(solution_array))
-            )
-            passed = bool(success and finite_solution)
-            if not passed:
-                errors.append(f"{target['target_id']}: Lula position-only IK failed")
-            ik_records.append(
-                {
-                    **target,
-                    "success": bool(success),
-                    "finite_solution": finite_solution,
-                    "solution_joint_positions_rad": solution_array,
-                    "solution_applied": False,
-                }
-            )
+            for target in targets:
+                arm_id = target["arm_id"]
+                virtual_joints = joint_positions_before[arm_id].copy()
+                _, initial_rotation_world = controller.end_effector_pose(arm_id)
+                target_orientation_world = _rotation_matrix_to_quaternion(
+                    initial_rotation_world
+                )
+                target_position_world = np.asarray(
+                    target["position_world_m"], dtype=float
+                )
+                predicted_tcp_world = np.full(3, np.nan, dtype=float)
+                position_error_m = float("inf")
+                virtual_action_count = 0
+                for virtual_action_count in range(
+                    1, args.pink_max_virtual_actions + 1
+                ):
+                    virtual_joints, predicted_tcp_world, _ = (
+                        controller.predict_pink_tcp_pose_read_only(
+                            arm_id=arm_id,
+                            current_joint_positions=virtual_joints,
+                            target_tcp_position_world_m=target_position_world,
+                            target_tcp_orientation_world_wxyz=(
+                                target_orientation_world
+                            ),
+                            dt_s=0.1,
+                        )
+                    )
+                    position_error_m = float(
+                        np.linalg.norm(predicted_tcp_world - target_position_world)
+                    )
+                    if position_error_m <= args.pink_position_tolerance_m:
+                        break
+                finite_solution = bool(
+                    np.all(np.isfinite(virtual_joints))
+                    and np.all(np.isfinite(predicted_tcp_world))
+                    and math.isfinite(position_error_m)
+                )
+                success = bool(
+                    finite_solution
+                    and position_error_m <= args.pink_position_tolerance_m
+                )
+                if not success:
+                    errors.append(
+                        f"{target['target_id']}: Pink virtual TCP error "
+                        f"{position_error_m:.6f} m exceeds "
+                        f"{args.pink_position_tolerance_m:.6f} m"
+                    )
+                ik_records.append(
+                    {
+                        **target,
+                        "backend": "pink",
+                        "orientation_constraint": "hold_initial_tcp_orientation",
+                        "success": success,
+                        "finite_solution": finite_solution,
+                        "virtual_action_count": virtual_action_count,
+                        "position_tolerance_m": args.pink_position_tolerance_m,
+                        "final_position_error_m": position_error_m,
+                        "predicted_tcp_position_world_m": predicted_tcp_world,
+                        "solution_joint_positions_rad": virtual_joints,
+                        "solution_applied": False,
+                        "pink_diagnostics": controller.diagnostics(arm_id),
+                    }
+                )
 
         joint_positions_after = {
             arm_id: np.asarray(arms[arm_id].get_joint_positions(), dtype=float).copy()
@@ -271,6 +400,8 @@ def main() -> int:
             evidence_dir / "ik_report.json",
             {
                 "targets": ik_records,
+                "ik_backend": args.ik_backend,
+                "arm_b_bin_transport_only": args.arm_b_bin_transport_only,
                 "max_live_joint_change_rad": max_joint_change,
                 "errors": errors,
             },
@@ -292,6 +423,8 @@ def main() -> int:
                 "scene_file": scene_file,
                 "franka_asset": franka_asset,
                 "target_count": len(targets),
+                "ik_backend": args.ik_backend,
+                "arm_b_bin_transport_only": args.arm_b_bin_transport_only,
                 "successful_target_count": sum(
                     1
                     for item in ik_records

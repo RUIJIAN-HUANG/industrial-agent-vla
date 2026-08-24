@@ -564,6 +564,67 @@ class IsaacSimFrankaController:
             payload["pink"] = self._pink_adapter.diagnostics(arm_id)
         return payload
 
+    def predict_pink_tcp_pose_read_only(
+        self,
+        *,
+        arm_id: str,
+        current_joint_positions: np.ndarray,
+        target_tcp_position_world_m: np.ndarray,
+        target_tcp_orientation_world_wxyz: np.ndarray,
+        dt_s: float,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Predict one Pink update without applying it to the live articulation."""
+
+        self._require_owner_thread()
+        if self._ik_backend != "pink" or self._pink_adapter is None:
+            raise RuntimeError("read-only Pink prediction requires ik_backend='pink'")
+        if arm_id not in self._arms:
+            raise RuntimeError(f"unknown Isaac Franka arm: {arm_id!r}")
+
+        base_position, base_orientation = self._arms[arm_id].get_world_pose()
+        base_position = np.asarray(base_position, dtype=float)
+        base_orientation = np.asarray(base_orientation, dtype=float)
+        target_orientation_world = np.asarray(
+            target_tcp_orientation_world_wxyz, dtype=float
+        )
+        target_control_world = _control_world_position_for_tcp(
+            np.asarray(target_tcp_position_world_m, dtype=float),
+            target_orientation_world,
+            self._tcp_offsets_local_m[arm_id],
+        )
+        inverse_base = _quat_inverse(base_orientation)
+        target_control_base = _rotate_vector(
+            inverse_base, target_control_world - base_position
+        )
+        target_orientation_base = _quat_multiply(
+            inverse_base, target_orientation_world
+        )
+
+        predicted = np.asarray(current_joint_positions, dtype=float).copy()
+        controlled_indices = self._pink_adapter.controlled_indices(arm_id)
+        predicted[controlled_indices] = self._pink_adapter.compute(
+            arm_id=arm_id,
+            current_joint_positions=predicted,
+            target_position_base_m=target_control_base,
+            target_orientation_base_wxyz=target_orientation_base,
+            dt_s=dt_s,
+        )
+        control_position_base, control_rotation_base = (
+            self._pink_adapter.control_frame_pose_in_base(
+                arm_id=arm_id,
+                joint_positions=predicted,
+            )
+        )
+        tcp_position_base = _virtual_tcp_world_position(
+            control_position_base,
+            control_rotation_base,
+            self._tcp_offsets_local_m[arm_id],
+        )
+        predicted_tcp_world = base_position + _rotate_vector(
+            base_orientation, tcp_position_base
+        )
+        return predicted, predicted_tcp_world, control_rotation_base
+
     def end_effector_pose_in_base(
         self,
         arm_id: str,

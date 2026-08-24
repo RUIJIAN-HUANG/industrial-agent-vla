@@ -33,6 +33,15 @@ class V2IkReachabilityContractTests(unittest.TestCase):
             ["Arm_A"] * 6 + ["Arm_B"] * 3,
         )
 
+    def test_arm_b_pack_probe_uses_exact_frozen_bin_pose(self) -> None:
+        config = load_config()
+        targets = {item["target_id"]: item for item in _ik_targets(config)}
+        target = targets["ARM_B_PACK_STATION_HANDLE_APPROACH"]
+        expected = list(config["bin"]["pose"]["position_m"])
+        expected[2] += config["bin"]["carry_handle"]["position_local_m"][2]
+        expected[2] += config["bin"]["carry_handle"]["approach_offset_m"][2]
+        self.assertEqual(target["position_world_m"], expected)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -110,6 +110,7 @@ class PinkFrankaAdapter:
         self._pin = pin
         self._controllers: dict[str, Any] = {}
         self._frame_tasks: dict[str, Any] = {}
+        self._control_frame_names: dict[str, str] = {}
         self._controlled_indices: dict[str, list[int]] = {}
         self._diagnostics: dict[str, dict[str, Any]] = {}
 
@@ -199,6 +200,7 @@ class PinkFrankaAdapter:
 
             self._controllers[arm_id] = controller
             self._frame_tasks[arm_id] = active_frame_tasks[0]
+            self._control_frame_names[arm_id] = control_frame_name
             self._controlled_indices[arm_id] = indices
             self._diagnostics[arm_id] = {
                 "backend": "pink",
@@ -217,6 +219,41 @@ class PinkFrankaAdapter:
 
     def diagnostics(self, arm_id: str) -> dict[str, Any]:
         return dict(self._diagnostics[arm_id])
+
+    def control_frame_pose_in_base(
+        self,
+        *,
+        arm_id: str,
+        joint_positions: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Return a virtual Pink FK pose without writing to the articulation."""
+
+        current = np.asarray(joint_positions, dtype=float)
+        indices = self._controlled_indices[arm_id]
+        if current.ndim != 1 or not np.all(np.isfinite(current)):
+            raise ValueError("joint_positions must be a finite vector")
+        if not indices or max(indices) >= current.size:
+            raise ValueError("joint_positions does not cover controlled joints")
+
+        configuration = getattr(
+            self._controllers[arm_id], "pink_configuration", None
+        )
+        if configuration is None:
+            raise RuntimeError(f"Pink configuration is unavailable for {arm_id}")
+        configuration.update(current[indices])
+        transform = configuration.get_transform_frame_to_world(
+            self._control_frame_names[arm_id]
+        )
+        position = np.asarray(transform.translation, dtype=float)
+        rotation = np.asarray(transform.rotation, dtype=float)
+        if (
+            position.shape != (3,)
+            or rotation.shape != (3, 3)
+            or not np.all(np.isfinite(position))
+            or not np.all(np.isfinite(rotation))
+        ):
+            raise RuntimeError(f"Pink returned an invalid virtual FK pose for {arm_id}")
+        return position.copy(), rotation.copy()
 
     def compute(
         self,
