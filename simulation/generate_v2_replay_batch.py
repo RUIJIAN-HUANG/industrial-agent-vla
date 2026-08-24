@@ -166,6 +166,38 @@ def load_source_episode(
         )
 
 
+def load_existing_action_hashes(
+    roots: Sequence[str | Path],
+) -> dict[str, tuple[str, ...]]:
+    """Hash every successful Canonical V2 episode below the supplied roots."""
+
+    by_hash: dict[str, list[str]] = {}
+    visited: set[Path] = set()
+    for root_value in roots:
+        root = Path(root_value).expanduser().resolve()
+        if not root.is_dir():
+            raise ReplayBatchError(f"deduplication root does not exist: {root}")
+        for structure_path in sorted(root.rglob("structure.json")):
+            episode_path = structure_path.parent.resolve()
+            if episode_path in visited or not (episode_path / "episode.h5").is_file():
+                continue
+            visited.add(episode_path)
+            try:
+                with CanonicalV2Reader(episode_path) as reader:
+                    metadata = reader.manifest["metadata"]
+                    if metadata.get("outcome") != "SUCCEEDED":
+                        continue
+                    rows = list(reader.iter_action_7d())
+                actions = _replay_task_actions_from_rows(rows)
+                digest = action_sha256(actions)
+            except (KeyError, OSError, TypeError, ValueError) as exc:
+                raise ReplayBatchError(
+                    f"invalid episode below deduplication root: {episode_path}: {exc}"
+                ) from exc
+            by_hash.setdefault(digest, []).append(str(episode_path))
+    return {digest: tuple(paths) for digest, paths in sorted(by_hash.items())}
+
+
 def _centered_offset(index: int, *, step_mm: float = 2.0) -> float:
     if index == 0:
         return 0.0
@@ -335,6 +367,7 @@ def generate_batch(
     python_command: str = "python",
     frozen_collection_sha: str | None = None,
     openpi_root: str | Path | None = None,
+    reject_against_roots: Sequence[str | Path] = (),
 ) -> Path:
     """Materialize a deterministic replay plan and return its manifest path."""
 
@@ -364,8 +397,9 @@ def generate_batch(
         Path(openpi_root).expanduser().resolve() if openpi_root is not None else None
     )
 
+    existing_hashes = load_existing_action_hashes(reject_against_roots)
     entries: list[dict[str, Any]] = []
-    seen_hashes: set[str] = {action_sha256(source.actions)}
+    seen_hashes: set[str] = {action_sha256(source.actions), *existing_hashes}
     profile_ordinals = {"diverse_low": 0, "approach_curve": 0}
     for spec in specs:
         varied_actions = _diversify_replay_actions(
@@ -379,8 +413,15 @@ def generate_batch(
         )
         varied_sha = action_sha256(varied_actions)
         if varied_sha in seen_hashes:
+            existing_paths = existing_hashes.get(varied_sha, ())
+            provenance = (
+                f"; existing episodes: {', '.join(existing_paths)}"
+                if existing_paths
+                else ""
+            )
             raise ReplayBatchError(
                 f"duplicate trajectory rejected for {spec.profile} seed={spec.seed}"
+                f"{provenance}"
             )
         seen_hashes.add(varied_sha)
         profile_ordinals[spec.profile] += 1
@@ -473,6 +514,15 @@ def generate_batch(
             "base_seed": base_seed,
             "diverse_low_count": diverse_low_count,
             "approach_curve_count": approach_curve_count,
+        },
+        "deduplication": {
+            "reference_roots": [
+                str(Path(root).expanduser().resolve()) for root in reject_against_roots
+            ],
+            "existing_unique_action_hashes": len(existing_hashes),
+            "existing_episode_count": sum(
+                len(paths) for paths in existing_hashes.values()
+            ),
         },
         "counts": {
             "planned": len(entries),
@@ -647,6 +697,13 @@ def build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--python-command", default="python")
     plan.add_argument("--frozen-collection-sha")
     plan.add_argument("--openpi-root", type=Path)
+    plan.add_argument(
+        "--reject-against-root",
+        action="append",
+        default=[],
+        type=Path,
+        help="Reject planned actions already present below this episode root; repeatable",
+    )
 
     finalize = subparsers.add_parser("finalize", help="Validate completed outputs")
     finalize.add_argument("--manifest", type=Path, required=True)
@@ -672,6 +729,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 python_command=args.python_command,
                 frozen_collection_sha=args.frozen_collection_sha,
                 openpi_root=args.openpi_root,
+                reject_against_roots=args.reject_against_root,
             )
             print(json.dumps({"status": "PLANNED", "manifest": str(manifest_path)}))
             return 0
@@ -696,5 +754,6 @@ __all__ = [
     "finalize_batch",
     "generate_batch",
     "load_source_episode",
+    "load_existing_action_hashes",
     "main",
 ]
