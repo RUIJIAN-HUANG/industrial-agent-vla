@@ -73,6 +73,19 @@ def test_w01_s14_practice_preflight_uses_second_frozen_identity(
     )
 
 
+def test_bin01_finished01_practice_preflight_uses_arm_b_identity(
+    tmp_path: Path,
+) -> None:
+    result = _build(
+        tmp_path,
+        task_id="BIN01_TO_FINISHED01",
+        instruction="把Bin_01搬到FINISHED_01",
+    )
+    assert result.task_id == "BIN01_TO_FINISHED01"
+    assert result.instruction == "把Bin_01搬到FINISHED_01"
+    assert result.split is CollectionSplit.PRACTICE
+
+
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [

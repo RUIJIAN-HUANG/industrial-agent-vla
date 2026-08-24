@@ -19,9 +19,20 @@ EXPECTED_INSTRUCTION = "把P01放到S11中"
 EXPECTED_TASK_INSTRUCTIONS = {
     EXPECTED_TASK_ID: EXPECTED_INSTRUCTION,
     "W01_TO_S14": "把W01放到S14中",
+    "BIN01_TO_FINISHED01": "把Bin_01搬到FINISHED_01",
 }
 EXPECTED_ARM_ID = "Arm_A"
 EXPECTED_EXECUTOR = "pi05"
+EXPECTED_TASK_ACTION_IDENTITIES = {
+    "P01_TO_S11": ("Arm_A", "pi05"),
+    "W01_TO_S14": ("Arm_A", "pi05"),
+    "BIN01_TO_FINISHED01": ("Arm_B", "openvla_oft"),
+}
+EXPECTED_TASK_CAMERA_IDS = {
+    "P01_TO_S11": "CAM_A_TOP",
+    "W01_TO_S14": "CAM_A_TOP",
+    "BIN01_TO_FINISHED01": "CAM_B_TOP",
+}
 EXPECTED_CAMERA_IDS = ("CAM_A_TOP", "CAM_HANDOFF", "CAM_B_TOP")
 EXPECTED_ARM_IDS = ("Arm_A", "Arm_B")
 STATE_DIM = 7
@@ -359,10 +370,12 @@ class CanonicalV2Reader:
         valid_count = int(self.manifest["streams"]["actions"]["valid_count"])
         if valid_count != count or valid_count != int(np.count_nonzero(valid_mask)):
             self._fail("valid_count must equal count", "actions.valid_count")
+        task_id = str(self.manifest["metadata"]["task_id"])
+        expected_arm_id, expected_executor = EXPECTED_TASK_ACTION_IDENTITIES[task_id]
         identities = {
-            "arm_id": EXPECTED_ARM_ID,
-            "executor": EXPECTED_EXECUTOR,
-            "subtask_id": str(self.manifest["metadata"]["task_id"]),
+            "arm_id": expected_arm_id,
+            "executor": expected_executor,
+            "subtask_id": task_id,
         }
         for field, expected in identities.items():
             values_text = _decoded_strings(group[field])
@@ -414,6 +427,8 @@ __all__ = [
     "EXPECTED_INSTRUCTION",
     "EXPECTED_SCENE_ID",
     "EXPECTED_TASK_ID",
+    "EXPECTED_TASK_ACTION_IDENTITIES",
+    "EXPECTED_TASK_CAMERA_IDS",
     "EXPECTED_TASK_INSTRUCTIONS",
     "STATE_DIM",
     "read_canonical_v2_episode",

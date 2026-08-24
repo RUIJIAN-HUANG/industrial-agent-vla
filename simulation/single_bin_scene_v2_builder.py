@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any, Mapping
 
 from pxr import Usd, UsdPhysics, UsdShade, Vt
@@ -197,6 +198,7 @@ def build_scene(
     *,
     franka_asset_path: str | None,
     include_robots: bool = True,
+    task_id: str | None = None,
 ) -> Usd.Stage:
     """Populate ``stage`` without touching the V1 builder output."""
 
@@ -216,9 +218,18 @@ def build_scene(
     shared._create_environment(stage, config)
     shared._create_markers(stage, config)
     materials = _create_materials(stage, config)
-    create_parts(stage, config["parts"], physics_materials=materials)
+    part_configs = deepcopy(config["parts"])
+    bin_config = deepcopy(config["bin"])
+    if task_id == "BIN01_TO_FINISHED01":
+        from simulation.v2_task_initialization import bin01_transport_initial_poses
+
+        initial_poses = bin01_transport_initial_poses(config)
+        bin_config["pose"] = initial_poses["/World/Bins/Bin_01"]
+        for part in part_configs:
+            part["pose"] = initial_poses[f"/World/Parts/{part['id']}"]
+    create_parts(stage, part_configs, physics_materials=materials)
     stage.DefinePrim("/World/Bins", "Xform")
-    _create_bin(stage, config["bin"], materials)
+    _create_bin(stage, bin_config, materials)
     shared._create_cameras(stage, config["cameras"])
     shared._create_lighting(stage)
     if include_robots:

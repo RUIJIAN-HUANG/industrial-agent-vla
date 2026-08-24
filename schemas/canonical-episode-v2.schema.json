@@ -103,10 +103,10 @@
           "const": "single_bin_manual_industrial_v2"
         },
         "task_id": {
-          "enum": ["P01_TO_S11", "W01_TO_S14"]
+          "enum": ["P01_TO_S11", "W01_TO_S14", "BIN01_TO_FINISHED01"]
         },
         "instruction": {
-          "enum": ["把P01放到S11中", "把W01放到S14中"]
+          "enum": ["把P01放到S11中", "把W01放到S14中", "把Bin_01搬到FINISHED_01"]
         },
         "scene_seed": {
           "type": "integer",
@@ -163,6 +163,12 @@
               "properties": {
                 "task_id": {"const": "W01_TO_S14"},
                 "instruction": {"const": "把W01放到S14中"}
+              }
+            },
+            {
+              "properties": {
+                "task_id": {"const": "BIN01_TO_FINISHED01"},
+                "instruction": {"const": "把Bin_01搬到FINISHED_01"}
               }
             }
           ]

@@ -48,6 +48,10 @@ class V2FailureCode(str, Enum):
     W01_GT_VOTE_INSUFFICIENT = "W01_GT_VOTE_INSUFFICIENT"
     W01_TERMINAL_HOLD_TOO_SHORT = "W01_TERMINAL_HOLD_TOO_SHORT"
     W01_TERMINAL_DRIFT_EXCEEDED = "W01_TERMINAL_DRIFT_EXCEEDED"
+    BIN01_GT_NOT_FRESH = "BIN01_GT_NOT_FRESH"
+    BIN01_GT_VOTE_INSUFFICIENT = "BIN01_GT_VOTE_INSUFFICIENT"
+    BIN01_TERMINAL_HOLD_TOO_SHORT = "BIN01_TERMINAL_HOLD_TOO_SHORT"
+    BIN01_TERMINAL_DRIFT_EXCEEDED = "BIN01_TERMINAL_DRIFT_EXCEEDED"
 
 
 class CollectionStateError(RuntimeError):
@@ -452,3 +456,86 @@ class W01ToS14CollectionStateMachine(SinglePartToSlotCollectionStateMachine):
     TASK_ID = "W01_TO_S14"
     PART_ID = "W01"
     SLOT_ID = "S14"
+
+
+class Bin01ToFinished01CollectionStateMachine:
+    """Atomic Arm_B profile starting from a verified handoff-ready scene."""
+
+    TASK_ID = "BIN01_TO_FINISHED01"
+
+    def __init__(self, contract: V2CollectionContract):
+        self.contract = contract
+        self.token = ControlToken.B_ONLY
+        self.outcome: EpisodeOutcome | None = None
+        self.failure_code: V2FailureCode | None = None
+
+    @property
+    def placed_parts(self) -> tuple[str, ...]:
+        return ()
+
+    @property
+    def next_part_id(self) -> None:
+        return None
+
+    def _require_active(self) -> None:
+        if self.outcome is not None or self.token is ControlToken.NONE:
+            raise RuntimeError(f"{self.TASK_ID} collection attempt is already terminal")
+
+    def _reject(self, code: V2FailureCode, message: str) -> None:
+        self.failure_code = code
+        self.outcome = EpisodeOutcome.FAILED
+        self.token = ControlToken.NONE
+        raise CollectionStateError(code, message)
+
+    def require_arm_action(self, arm_id: str) -> None:
+        self._require_active()
+        if arm_id != "Arm_B":
+            self._reject(
+                V2FailureCode.INACTIVE_ARM_ACTION,
+                f"{self.TASK_ID} permits Arm_B actions only",
+            )
+
+    def complete(
+        self,
+        *,
+        bin_at_finished: bool,
+        bin_stable: bool,
+        arm_b_gripper_open: bool,
+        arm_b_clear: bool,
+    ) -> None:
+        self._require_active()
+        if not all(
+            (
+                bin_at_finished is True,
+                bin_stable is True,
+                arm_b_gripper_open is True,
+                arm_b_clear is True,
+            )
+        ):
+            self._reject(
+                V2FailureCode.FINISH_PRECONDITION_FAILED,
+                "Bin_01 completion requires stable FINISHED_01 placement, "
+                "open gripper, and Arm_B clear",
+            )
+        self.token = ControlToken.NONE
+        self.outcome = EpisodeOutcome.SUCCEEDED
+        self.failure_code = None
+
+    def safe_stop(self, *, confirmed: bool) -> None:
+        self._require_active()
+        self.token = ControlToken.NONE
+        if confirmed:
+            self.outcome = EpisodeOutcome.SAFE_STOPPED
+            self.failure_code = V2FailureCode.USER_SAFE_STOP
+        else:
+            self.outcome = EpisodeOutcome.SAFE_STOP_FAILED
+            self.failure_code = V2FailureCode.SAFE_STOP_CONFIRMATION_FAILED
+
+    def fail_offline_gt(self, code: V2FailureCode) -> None:
+        if self.outcome is not EpisodeOutcome.SUCCEEDED:
+            raise RuntimeError("offline GT can only gate a provisional success")
+        if not isinstance(code, V2FailureCode):
+            raise TypeError("offline GT failure code must be V2FailureCode")
+        self.outcome = EpisodeOutcome.FAILED
+        self.failure_code = code
+        self.token = ControlToken.NONE

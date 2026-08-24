@@ -40,11 +40,13 @@ V2 与 V1/P01 保底场景隔离。V1 配置、构建入口、冻结 TaskProfile
 ## MVP 指令选项
 
 MVP 界面显示完整、易懂的自然语言，但采集后台和训练数据只保存统一的
-Canonical 指令。当前唯一选项定义在 `configs/mvp-instruction-options.json`：
+Canonical 指令。当前冻结选项定义在 `configs/mvp-instruction-options.json`：
 
 | task_id | 界面显示 | Canonical/训练指令 |
 |---|---|---|
 | `P01_TO_S11` | 帮我把螺母P01放置到料箱的S11格子中。 | 把P01放到S11中 |
+| `W01_TO_S14` | 帮我把扳手W01放置到料箱的S14格子中。 | 把W01放到S14中 |
+| `BIN01_TO_FINISHED01` | 请把料箱Bin_01搬运到成品区FINISHED_01。 | 把Bin_01搬到FINISHED_01 |
 
 界面不得自行改写、补充或删除文字；采集端将显示文本解析为同一 `task_id` 后，
 把 Canonical 指令写入 Episode 元数据。V1 的四零件装箱指令仍保持独立，不得与

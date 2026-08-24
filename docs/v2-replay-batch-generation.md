@@ -2,7 +2,8 @@
 
 `simulation/generate_v2_replay_batch.py` 从一条成功的 Canonical V2 母 Episode
 生成确定性的 `diverse_low` 与 `approach_curve` 回放配置。当前冻结任务
-`P01_TO_S11` 和 `W01_TO_S14` 共用同一入口；任务 ID 与训练指令从母 Episode
+`P01_TO_S11`、`W01_TO_S14` 和 `BIN01_TO_FINISHED01` 共用同一入口；任务 ID
+与训练指令从母 Episode
 读取，不能由命令行改写。
 
 生成目录包含：

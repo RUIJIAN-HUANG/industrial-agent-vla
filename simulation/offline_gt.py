@@ -161,6 +161,103 @@ class OfflineGtProbe:
         translation = self._world_matrix(path).ExtractTranslation()
         return [float(value) for value in translation]
 
+    def bin01_in_finished01(
+        self,
+        *,
+        bin_path: str,
+        stations: Sequence[Mapping[str, Any]],
+        bin_config: Mapping[str, Any],
+        max_vertical_error_deg: float = 10.0,
+        max_height_error_m: float = 0.03,
+    ) -> dict[str, Any]:
+        """Require the complete Bin_01 footprint inside FINISHED_01."""
+
+        station_by_id = {str(item["id"]): item for item in stations}
+        finished = station_by_id["FINISHED_01"]
+        station_position = [
+            float(value) for value in finished["pose"]["position_m"]
+        ]
+        footprint = [float(value) for value in finished["footprint_m"]]
+        world_range = self._world_aligned_range(bin_path)
+        world_min = [float(value) for value in world_range.GetMin()]
+        world_max = [float(value) for value in world_range.GetMax()]
+        footprint_min = [
+            station_position[0] - footprint[0] / 2.0,
+            station_position[1] - footprint[1] / 2.0,
+        ]
+        footprint_max = [
+            station_position[0] + footprint[0] / 2.0,
+            station_position[1] + footprint[1] / 2.0,
+        ]
+        footprint_pass = all(
+            world_min[axis] >= footprint_min[axis]
+            and world_max[axis] <= footprint_max[axis]
+            for axis in range(2)
+        )
+        center = self.world_position(bin_path)
+        expected_center_z = station_position[2] + (
+            float(bin_config["pose"]["position_m"][2])
+            - next(
+                float(item["pose"]["position_m"][2])
+                for item in stations
+                if item["id"] == "PACK_STATION"
+            )
+        )
+        height_error_m = abs(center[2] - expected_center_z)
+        vertical_error = vertical_error_rad(
+            self.world_direction(bin_path, (0.0, 0.0, 1.0)),
+            (0.0, 0.0, 1.0),
+        )
+        orientation_pass = vertical_error <= radians(float(max_vertical_error_deg))
+        height_pass = height_error_m <= float(max_height_error_m)
+        bin_inverse = self._world_matrix(bin_path).GetInverse()
+        content_reports: list[dict[str, Any]] = []
+        for slot in bin_config["slots"]:
+            slot_id = str(slot["id"])
+            part_id = str(slot["part_id"])
+            part_center = bin_inverse.Transform(
+                self._world_matrix(f"/World/Parts/{part_id}").ExtractTranslation()
+            )
+            center_local = [float(part_center[axis]) for axis in range(3)]
+            allowed = slot_interior_bounds(bin_config, slot_id)
+            center_in_slot = all(
+                allowed["min"][axis] <= center_local[axis] <= allowed["max"][axis]
+                for axis in range(3)
+            )
+            content_reports.append(
+                {
+                    "part_id": part_id,
+                    "slot_id": slot_id,
+                    "center_in_bin_local_m": center_local,
+                    "center_inside_assigned_slot": center_in_slot,
+                }
+            )
+        contents_pass = all(
+            report["center_inside_assigned_slot"] for report in content_reports
+        )
+        return {
+            "pass": (
+                footprint_pass and orientation_pass and height_pass and contents_pass
+            ),
+            "bin_id": "Bin_01",
+            "station_id": "FINISHED_01",
+            "center_world_m": center,
+            "world_aligned_bounds_m": {"min": world_min, "max": world_max},
+            "allowed_footprint_world_m": {
+                "min": footprint_min,
+                "max": footprint_max,
+            },
+            "footprint_pass": footprint_pass,
+            "vertical_error_rad": vertical_error,
+            "vertical_error_threshold_deg": float(max_vertical_error_deg),
+            "orientation_pass": orientation_pass,
+            "height_error_m": height_error_m,
+            "height_error_threshold_m": float(max_height_error_m),
+            "height_pass": height_pass,
+            "contents_pass": contents_pass,
+            "contents": content_reports,
+        }
+
     def p01_in_s11(
         self,
         *,

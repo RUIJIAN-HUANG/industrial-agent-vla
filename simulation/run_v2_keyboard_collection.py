@@ -421,6 +421,89 @@ def _collect_w01_terminal_success(
     return result, report_path, action_count
 
 
+def _collect_bin01_terminal_success(
+    *,
+    bridge: Any,
+    controller: Any,
+    probe: Any,
+    config: dict[str, Any],
+    artifact_dir: Path,
+    task_id: str,
+    episode_id: str,
+    action_count: int,
+    max_actions: int | None = None,
+) -> tuple[Any, Path, int]:
+    """Hold the released bin for one second and verify FINISHED_01."""
+
+    if max_actions is not None and action_count + 10 > max_actions:
+        raise RuntimeError(
+            "terminal hold actions exceed the --max-actions safety limit"
+        )
+    from industrial_agent.contracts import ActionStep
+    from industrial_agent.sync_contract import FROZEN_MULTI_RATE
+    from simulation.v2_terminal_success import evaluate_bin01_terminal_success
+
+    bin_path = "/World/Bins/Bin_01"
+    hold_action = ActionStep.from_sequence(
+        (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0), duration_ms=100
+    )
+    positions = [probe.world_position(bin_path)]
+    timestamps_s = [float(controller.physics_tick_index) / FROZEN_MULTI_RATE.physics_hz]
+    vote_reports: list[dict[str, Any]] = []
+    for step in range(1, 11):
+        _record_and_execute_formal_action(
+            bridge=bridge,
+            controller=controller,
+            action=hold_action,
+            arm_id="Arm_B",
+            task_id=task_id,
+            episode_id=episode_id,
+            action_index=action_count,
+        )
+        action_count += 1
+        physics_tick = int(controller.physics_tick_index)
+        positions.append(probe.world_position(bin_path))
+        timestamps_s.append(float(physics_tick) / FROZEN_MULTI_RATE.physics_hz)
+        if step not in {1, 5, 10}:
+            continue
+        placement = probe.bin01_in_finished01(
+            bin_path=bin_path,
+            stations=config["stations"],
+            bin_config=config["bin"],
+        )
+        vote_reports.append(
+            {
+                "observation_id": f"physics-{physics_tick}",
+                "timestamp_s": timestamps_s[-1],
+                "physics_tick": physics_tick,
+                "pass": bool(placement["pass"]),
+                "placement": placement,
+            }
+        )
+
+    result = evaluate_bin01_terminal_success(
+        vote_reports=vote_reports,
+        positions_world=positions,
+        timestamps_s=timestamps_s,
+    )
+    payload = result.to_dict()
+    payload.update(
+        {
+            "scene_id": config["scene_id"],
+            "task_id": task_id,
+            "bin_path": bin_path,
+            "station_id": "FINISHED_01",
+            "position_samples_world": positions,
+            "timestamp_samples_s": timestamps_s,
+            "vote_reports": vote_reports,
+            "isolation": "offline_gt_only",
+        }
+    )
+    report_path = artifact_dir / "offline_gt" / "bin01_terminal_success.json"
+    _write_json_atomic(report_path, payload)
+    return result, report_path, action_count
+
+
 def _record_and_execute_formal_action(
     *,
     bridge,
@@ -566,6 +649,7 @@ def main() -> int:
         from simulation.offline_gt import OfflineGtProbe
         from simulation.rgb_cas_bridge import IsaacRgbCasPublisher
         from simulation.v2_collection_state import (
+            Bin01ToFinished01CollectionStateMachine,
             EpisodeOutcome,
             P01ToS11CollectionStateMachine,
             V2CollectionContract,
@@ -577,10 +661,28 @@ def main() -> int:
         require_valid_config(config)
         contract = V2CollectionContract.from_config(config)
         task_profiles = {
-            "P01_TO_S11": (P01ToS11CollectionStateMachine, "P01", "S11"),
-            "W01_TO_S14": (W01ToS14CollectionStateMachine, "W01", "S14"),
+            "P01_TO_S11": (
+                P01ToS11CollectionStateMachine,
+                "P01",
+                "S11",
+                "Arm_A",
+            ),
+            "W01_TO_S14": (
+                W01ToS14CollectionStateMachine,
+                "W01",
+                "S14",
+                "Arm_A",
+            ),
+            "BIN01_TO_FINISHED01": (
+                Bin01ToFinished01CollectionStateMachine,
+                None,
+                "FINISHED_01",
+                "Arm_B",
+            ),
         }
-        machine_type, task_part_id, task_slot_id = task_profiles[preflight.task_id]
+        machine_type, task_part_id, task_slot_id, task_arm_id = task_profiles[
+            preflight.task_id
+        ]
         machine = machine_type(contract)
 
         if args.replay_episode is not None:
@@ -649,6 +751,7 @@ def main() -> int:
             config,
             franka_asset_path=franka_asset,
             include_robots=True,
+            task_id=preflight.task_id,
         )
         offline_gt_probe = OfflineGtProbe(stage)
         isaac_compat.wait_for_stage_loading(simulation_app, timeout_seconds=180.0)
@@ -700,7 +803,7 @@ def main() -> int:
         )
         bridge.record_initial(physics_tick=0)
         controller.set_tick_observer(bridge.observe_physics_tick)
-        active_arm = "Arm_A"
+        active_arm = task_arm_id
         if replay_actions is not None:
             phase = "replay_actions"
             print(
@@ -727,17 +830,34 @@ def main() -> int:
                     action_index=action_count,
                 )
                 action_count += 1
-                print(f"REPLAY ACTION {action_count}/{len(replay_actions)} Arm_A")
-            machine.record_part_placement(
-                part_id=task_part_id,
-                slot_id=contract.part_to_slot[task_part_id],
-                stable=True,
-            )
-            arm_a = _arm_readback(controller, arms, config, "Arm_A")
-            machine.complete(
-                arm_a_gripper_open=arm_a["gripper_open"],
-                arm_a_clear=arm_a["retreated"],
-            )
+                print(
+                    f"REPLAY ACTION {action_count}/{len(replay_actions)} {active_arm}"
+                )
+            if preflight.task_id == "BIN01_TO_FINISHED01":
+                placement = offline_gt_probe.bin01_in_finished01(
+                    bin_path="/World/Bins/Bin_01",
+                    stations=config["stations"],
+                    bin_config=config["bin"],
+                )
+                arm_b = _arm_readback(controller, arms, config, "Arm_B")
+                machine.complete(
+                    bin_at_finished=bool(placement["pass"]),
+                    bin_stable=True,
+                    arm_b_gripper_open=arm_b["gripper_open"],
+                    arm_b_clear=arm_b["retreated"],
+                )
+            else:
+                assert task_part_id is not None
+                machine.record_part_placement(
+                    part_id=task_part_id,
+                    slot_id=contract.part_to_slot[task_part_id],
+                    stable=True,
+                )
+                arm_a = _arm_readback(controller, arms, config, "Arm_A")
+                machine.complete(
+                    arm_a_gripper_open=arm_a["gripper_open"],
+                    arm_a_clear=arm_a["retreated"],
+                )
             terminal_hold_requested = True
             print(f"REPLAY COMPLETED {preflight.task_id}; starting terminal validation")
         else:
@@ -757,6 +877,23 @@ def main() -> int:
             status_window = ui.Window(
                 "V2 Canonical Keyboard Collection", width=760, height=250
             )
+            bin_transport_task = preflight.task_id == "BIN01_TO_FINISHED01"
+            target_label = (
+                "Bin_01 target: FINISHED_01"
+                if bin_transport_task
+                else f"{task_part_id} target: {task_slot_id}"
+            )
+            completion_label = (
+                "C confirm released Bin_01 in FINISHED_01"
+                if bin_transport_task
+                else f"Z confirm {task_part_id} in {task_slot_id} | "
+                f"C complete {task_part_id} task"
+            )
+            workflow_label = (
+                "Arm_B only | Z/V/B disabled | P checkpoint | X safe-stop"
+                if bin_transport_task
+                else "P checkpoint | X safe-stop | V/B disabled for this task"
+            )
             with status_window.frame:
                 with ui.VStack(spacing=5):
                     ui.Label(
@@ -768,18 +905,17 @@ def main() -> int:
                         f"({args.translation_step_m * 1000:.0f} mm / "
                         f"{args.fine_translation_step_m * 1000:.0f} mm)"
                     )
-                    ui.Label(f"{task_part_id} target: {task_slot_id}")
+                    ui.Label(target_label)
                     ui.Label(
                         f"IK backend: {controller.ik_backend.upper()} + "
                         "null-space posture"
                     )
-                    ui.Label(
-                        f"Z confirm {task_part_id} in {task_slot_id} | "
-                        f"C complete {task_part_id} task"
-                    )
-                    ui.Label("P checkpoint | X safe-stop | V/B disabled for this task")
+                    ui.Label(completion_label)
+                    ui.Label(workflow_label)
                     ui.Label("Tap keys once. Do not hold. Formal actions are recorded.")
-                    status_label = ui.Label(f"READY | A_ONLY | next={task_part_id}")
+                    status_label = ui.Label(
+                        f"READY | {machine.token.value} | arm={active_arm}"
+                    )
 
             print("V2 canonical keyboard collection READY")
             print(mapper.help_text())
@@ -823,6 +959,11 @@ def main() -> int:
                         )
                         continue
                     if command.kind == "part_placed":
+                        if bin_transport_task:
+                            raise RuntimeError(
+                                "BIN01_TO_FINISHED01 does not use Z; press C only "
+                                "after releasing the bin and retreating Arm_B"
+                            )
                         part_id = machine.next_part_id
                         if part_id is None:
                             raise RuntimeError("all formal parts are already confirmed")
@@ -845,11 +986,25 @@ def main() -> int:
                             f"{preflight.task_id} permits Arm_A only; B is not allowed"
                         )
                     if command.kind == "complete":
-                        arm_a = _arm_readback(controller, arms, config, "Arm_A")
-                        machine.complete(
-                            arm_a_gripper_open=arm_a["gripper_open"],
-                            arm_a_clear=arm_a["retreated"],
-                        )
+                        if bin_transport_task:
+                            placement = offline_gt_probe.bin01_in_finished01(
+                                bin_path="/World/Bins/Bin_01",
+                                stations=config["stations"],
+                                bin_config=config["bin"],
+                            )
+                            arm_b = _arm_readback(controller, arms, config, "Arm_B")
+                            machine.complete(
+                                bin_at_finished=bool(placement["pass"]),
+                                bin_stable=True,
+                                arm_b_gripper_open=arm_b["gripper_open"],
+                                arm_b_clear=arm_b["retreated"],
+                            )
+                        else:
+                            arm_a = _arm_readback(controller, arms, config, "Arm_A")
+                            machine.complete(
+                                arm_a_gripper_open=arm_a["gripper_open"],
+                                arm_a_clear=arm_a["retreated"],
+                            )
                         print(f"HUMAN CONFIRMED {preflight.task_id} COMPLETE")
                         terminal_hold_requested = True
                         running = False
@@ -897,11 +1052,12 @@ def main() -> int:
 
         if terminal_hold_requested and machine.outcome is EpisodeOutcome.SUCCEEDED:
             phase = "terminal_hold_offline_gt"
-            terminal_collector = (
-                _collect_p01_terminal_success
-                if preflight.task_id == "P01_TO_S11"
-                else _collect_w01_terminal_success
-            )
+            terminal_collectors = {
+                "P01_TO_S11": _collect_p01_terminal_success,
+                "W01_TO_S14": _collect_w01_terminal_success,
+                "BIN01_TO_FINISHED01": _collect_bin01_terminal_success,
+            }
+            terminal_collector = terminal_collectors[preflight.task_id]
             terminal_success_report, terminal_success_path, action_count = (
                 terminal_collector(
                     bridge=bridge,

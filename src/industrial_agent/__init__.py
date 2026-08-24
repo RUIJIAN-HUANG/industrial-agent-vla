@@ -15,6 +15,7 @@ from .contracts import (
 )
 from .instructions import (
     InstructionOption,
+    MVP_BIN01_TO_FINISHED01,
     MVP_INSTRUCTION_OPTIONS,
     MVP_P01_TO_S11,
     MVP_W01_TO_S14,
@@ -80,6 +81,7 @@ __all__ = [
     "OBSERVATION_VERSION",
     "TASK_SCHEMA_VERSION",
     "InstructionOption",
+    "MVP_BIN01_TO_FINISHED01",
     "MVP_INSTRUCTION_OPTIONS",
     "MVP_P01_TO_S11",
     "MVP_W01_TO_S14",

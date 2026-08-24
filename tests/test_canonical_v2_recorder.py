@@ -76,9 +76,14 @@ def _record_complete_episode(
                 sequence_id=0,
                 state_7d=[0.4, 0.0, 0.3, 0.0, 0.0, 0.0, 0.375],
             )
+        arm_id, executor = (
+            ("Arm_B", "openvla_oft")
+            if task_id == "BIN01_TO_FINISHED01"
+            else ("Arm_A", "pi05")
+        )
         recorder.add_action(
-            arm_id="Arm_A",
-            executor="pi05",
+            arm_id=arm_id,
+            executor=executor,
             subtask_id=task_id,
             chunk_id="manual-p01-000001",
             timestamp_ns=1_000_000_000,
@@ -119,6 +124,18 @@ def test_w01_v2_recorder_writes_reader_valid_episode(tmp_path: Path) -> None:
     with CanonicalV2Reader(episode_path) as reader:
         assert reader.manifest["metadata"]["task_id"] == "W01_TO_S14"
         assert len(tuple(reader.iter_action_7d())) == 1
+
+
+def test_bin01_v2_recorder_uses_arm_b_identity(tmp_path: Path) -> None:
+    episode_path = _record_complete_episode(
+        tmp_path,
+        task_id="BIN01_TO_FINISHED01",
+        instruction="把Bin_01搬到FINISHED_01",
+    )
+    with CanonicalV2Reader(episode_path) as reader:
+        assert reader.manifest["metadata"]["task_id"] == "BIN01_TO_FINISHED01"
+        assert reader.h5["actions/arm_id"][0].decode() == "Arm_B"
+        assert reader.h5["actions/executor"][0].decode() == "openvla_oft"
 
 
 @pytest.mark.parametrize(
