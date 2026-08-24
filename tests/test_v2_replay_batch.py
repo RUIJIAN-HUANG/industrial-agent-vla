@@ -101,6 +101,25 @@ def test_approach_curve_is_bounded_to_guard_safe_amplitude() -> None:
             )
 
 
+def test_approach_curve_skips_zero_pregrasp_steps() -> None:
+    source = list(_source_actions())
+    source[3] = ActionStep.from_sequence(
+        [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, source[3].values[6]],
+        duration_ms=source[3].duration_ms,
+    )
+
+    varied = batch._diversify_replay_actions(
+        source,
+        profile="approach_curve",
+        seed=902,
+        variant=2,
+    )
+
+    assert len(varied) == len(source)
+    assert varied[3].values[:3] == source[3].values[:3]
+    assert any(a.values[:3] != b.values[:3] for a, b in zip(varied, source))
+
+
 def test_generate_w01_batch_writes_hashed_configs_manifest_and_commands(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

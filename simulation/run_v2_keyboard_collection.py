@@ -158,34 +158,39 @@ def _diversify_replay_actions(
         if approach_end < 6:
             raise ValueError("approach_curve requires at least six pre-grasp actions")
         approach_start = max(0, approach_end - max(10, approach_end // 2))
-        phase = np.linspace(0.0, np.pi, approach_end - approach_start + 1)
         axis = 1 if variant in (1, 2) else 0
         sign = 1.0 if variant in (1, 3) else -1.0
-        offsets[approach_start : approach_end + 1, axis] = (
-            sign * APPROACH_CURVE_AMPLITUDE_M * np.sin(phase)
-        )
+        moving_indices = [
+            index
+            for index in range(approach_start, approach_end)
+            if np.linalg.norm(values[index, :3]) > np.finfo(np.float64).eps
+        ]
+        if len(moving_indices) < 2:
+            raise ValueError(
+                "approach_curve has fewer than two movable pre-grasp steps"
+            )
+        phase = np.linspace(0.0, np.pi, len(moving_indices) + 1)
+        curve_positions = np.zeros((len(moving_indices) + 1, 3), dtype=np.float64)
+        curve_positions[:, axis] = sign * APPROACH_CURVE_AMPLITUDE_M * np.sin(phase)
+        curve_deltas = np.diff(curve_positions, axis=0)
         # Pink's tracking guard evaluates each Cartesian step, not only the
         # total path.  Bound the perturbation against the corresponding source
         # step so the curve cannot dominate forward progress on a short step.
-        offset_deltas = np.diff(offsets, axis=0)
         curve_scale = 1.0
-        for index in range(approach_start, approach_end):
+        for index, perturbation in zip(moving_indices, curve_deltas):
             base_step = values[index, :3]
-            perturbation = offset_deltas[index]
             base_norm = float(np.linalg.norm(base_step))
             perturbation_norm = float(np.linalg.norm(perturbation))
             if perturbation_norm == 0.0:
                 continue
-            if base_norm <= np.finfo(np.float64).eps:
-                curve_scale = 0.0
-                break
             curve_scale = min(
                 curve_scale,
                 APPROACH_CURVE_MAX_STEP_RATIO * base_norm / perturbation_norm,
             )
-        if curve_scale <= 0.0:
-            raise ValueError("approach_curve has no guard-safe non-zero pre-grasp step")
-        offsets *= min(1.0, curve_scale)
+        offset_deltas = np.zeros_like(offsets)
+        for index, perturbation in zip(moving_indices, curve_deltas):
+            offset_deltas[index] = curve_scale * perturbation
+        offsets[1:] = np.cumsum(offset_deltas[:-1], axis=0)
     else:
         phase = np.linspace(0.0, np.pi, last - first + 1)
         if lift_mm is None:
