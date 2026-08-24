@@ -145,6 +145,11 @@ def test_generate_w01_batch_writes_hashed_configs_manifest_and_commands(
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["source"]["task_id"] == "W01_TO_S14"
     assert manifest["counts"] == {"planned": 6, "accepted": 0, "rejected": 0}
+    assert manifest["deduplication"] == {
+        "reference_roots": [],
+        "existing_unique_action_hashes": 0,
+        "existing_episode_count": 0,
+    }
     hashes = {item["planned_action_sha256"] for item in manifest["trajectories"]}
     assert len(hashes) == 6
     for item in manifest["trajectories"]:
@@ -187,6 +192,52 @@ def test_generation_rejects_a_duplicate_of_the_source(
             scene_config=scene_config,
             diverse_low_count=1,
             approach_curve_count=0,
+        )
+
+
+def test_generation_rejects_a_duplicate_from_an_existing_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _source(tmp_path)
+    scene_config = tmp_path / "scene.json"
+    scene_config.write_text("{}\n", encoding="utf-8")
+    spec = batch.build_variant_specs(
+        base_seed=1000,
+        diverse_low_count=1,
+        approach_curve_count=0,
+    )[0]
+    candidate = batch._diversify_replay_actions(
+        list(source.actions),
+        profile=spec.profile,
+        seed=spec.seed,
+        variant=spec.variant,
+        lift_mm=spec.lift_mm,
+        final_y_offset_mm=spec.final_y_offset_mm,
+        final_z_offset_mm=spec.final_z_offset_mm,
+    )
+    candidate_sha = batch.action_sha256(candidate)
+    existing_root = tmp_path / "existing"
+    existing_root.mkdir()
+    monkeypatch.setattr(batch, "load_source_episode", lambda *args, **kwargs: source)
+    monkeypatch.setattr(
+        batch,
+        "load_existing_action_hashes",
+        lambda roots: {candidate_sha: (str(existing_root / "episode-001"),)},
+    )
+
+    with pytest.raises(batch.ReplayBatchError, match="existing episodes"):
+        batch.generate_batch(
+            source_episode=source.path,
+            output_dir=tmp_path / "batch",
+            episode_root=tmp_path / "episodes",
+            cas_root=tmp_path / "cas",
+            artifact_root=tmp_path / "artifacts",
+            scene_output_root=tmp_path / "scenes",
+            scene_config=scene_config,
+            diverse_low_count=1,
+            approach_curve_count=0,
+            reject_against_roots=[existing_root],
         )
 
 
