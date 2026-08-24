@@ -751,7 +751,6 @@ def main() -> int:
             config,
             franka_asset_path=franka_asset,
             include_robots=True,
-            task_id=preflight.task_id,
         )
         offline_gt_probe = OfflineGtProbe(stage)
         isaac_compat.wait_for_stage_loading(simulation_app, timeout_seconds=180.0)

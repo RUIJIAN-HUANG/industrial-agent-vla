@@ -210,35 +210,8 @@ class OfflineGtProbe:
         )
         orientation_pass = vertical_error <= radians(float(max_vertical_error_deg))
         height_pass = height_error_m <= float(max_height_error_m)
-        bin_inverse = self._world_matrix(bin_path).GetInverse()
-        content_reports: list[dict[str, Any]] = []
-        for slot in bin_config["slots"]:
-            slot_id = str(slot["id"])
-            part_id = str(slot["part_id"])
-            part_center = bin_inverse.Transform(
-                self._world_matrix(f"/World/Parts/{part_id}").ExtractTranslation()
-            )
-            center_local = [float(part_center[axis]) for axis in range(3)]
-            allowed = slot_interior_bounds(bin_config, slot_id)
-            center_in_slot = all(
-                allowed["min"][axis] <= center_local[axis] <= allowed["max"][axis]
-                for axis in range(3)
-            )
-            content_reports.append(
-                {
-                    "part_id": part_id,
-                    "slot_id": slot_id,
-                    "center_in_bin_local_m": center_local,
-                    "center_inside_assigned_slot": center_in_slot,
-                }
-            )
-        contents_pass = all(
-            report["center_inside_assigned_slot"] for report in content_reports
-        )
         return {
-            "pass": (
-                footprint_pass and orientation_pass and height_pass and contents_pass
-            ),
+            "pass": footprint_pass and orientation_pass and height_pass,
             "bin_id": "Bin_01",
             "station_id": "FINISHED_01",
             "center_world_m": center,
@@ -254,8 +227,6 @@ class OfflineGtProbe:
             "height_error_m": height_error_m,
             "height_error_threshold_m": float(max_height_error_m),
             "height_pass": height_pass,
-            "contents_pass": contents_pass,
-            "contents": content_reports,
         }
 
     def p01_in_s11(

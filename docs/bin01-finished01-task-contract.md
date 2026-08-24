@@ -6,19 +6,18 @@
 - Executor identity: `openvla_oft`
 - Training camera/state: `CAM_B_TOP` and `Arm_B`
 
-This is an independent atomic Episode. At reset, the deterministic task
-initializer places the fully loaded `Bin_01` at `HANDOFF_CENTER`, corrects the
-two inverted shafts to their packed orientation, and leaves both arms at HOME.
-Only Arm_B actions are recordable.
+The Episode must start from the unmodified frozen scene configuration. The task
+must not relocate, reorient, add, or remove any part at reset. Its only object
+goal is to move `Bin_01` from its configured initial pose to `FINISHED_01`.
+Only robot actions needed to transport the bin are recordable.
 
 The operator grasps `BIN_CARRY_TCP`, transports the bin to `FINISHED_01`,
 releases it, retreats Arm_B, and presses `C`. Terminal acceptance requires:
 
 1. the complete bin footprint is inside `FINISHED_01`;
 2. the bin height and vertical orientation are within the frozen tolerances;
-3. all eight part centers remain inside their assigned slots;
-4. three fresh offline-GT votes pass; and
-5. ten real 100 ms open-gripper Arm_B hold actions pass the 1 mm drift gate.
+3. three fresh offline-GT votes pass; and
+4. ten real 100 ms open-gripper hold actions pass the 1 mm drift gate.
 
 Detailed GT is written only to
 `offline_gt/bin01_terminal_success.json`; Canonical observations remain free of
@@ -27,8 +26,9 @@ ground truth.
 ## Formal mother trajectory command
 
 Run this only on the approved Linux Isaac Sim host after the branch commit,
-scene SHA, OpenPI commit, HOME, IK, collision, loaded-bin and terminal-gate
-acceptances have been frozen by the group lead.
+scene SHA, OpenPI commit, HOME, IK, collision, frozen-scene invariance,
+bin-only transport and terminal-gate acceptances have been frozen by the group
+lead.
 
 ```bash
 source /home/xyz/miniforge3/etc/profile.d/conda.sh
