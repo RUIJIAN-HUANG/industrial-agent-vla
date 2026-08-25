@@ -39,6 +39,22 @@ def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
     temporary.replace(path)
 
 
+def _handoff_precondition_failures(
+    placement: dict[str, Any],
+    arm_a: dict[str, Any],
+) -> tuple[str, ...]:
+    """Return actionable reasons why a Bin_01 handoff cannot proceed yet."""
+
+    failures: list[str] = []
+    if not bool(placement.get("pass")):
+        failures.append("PLACE BIN_01 INSIDE HANDOFF_CENTER")
+    if not bool(arm_a.get("gripper_open")):
+        failures.append("OPEN ARM_A GRIPPER WITH G")
+    if not bool(arm_a.get("retreated")):
+        failures.append("RETREAT ARM_A OUTSIDE GREEN ZONE")
+    return tuple(failures)
+
+
 def _replay_task_actions_from_rows(rows: list[Any]) -> list[Any]:
     """Convert validated rows while removing the frozen terminal hold suffix."""
 
@@ -1100,6 +1116,17 @@ def main() -> int:
                             artifact_dir / "offline_gt" / "bin01_handoff.json",
                             handoff_report,
                         )
+                        handoff_failures = _handoff_precondition_failures(
+                            placement,
+                            arm_a,
+                        )
+                        if handoff_failures:
+                            message = "HANDOFF NOT READY | " + " | ".join(
+                                handoff_failures
+                            )
+                            status_label.text = message + " | THEN PRESS V AGAIN"
+                            print(message)
+                            continue
                         machine.enter_handoff_verify(
                             bin_at_handoff_center=bool(placement["pass"]),
                             bin_stable=True,
