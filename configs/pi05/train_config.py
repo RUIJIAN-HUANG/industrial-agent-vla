@@ -142,11 +142,47 @@ def project_policy_actions(actions: Any) -> np.ndarray:
     return array[..., :CANONICAL_ACTION_DIM]
 
 
+def _read_int_env(name: str, default: int, *, minimum: int = 1) -> int:
+    """Read one integer environment override without aborting configuration load."""
+
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return default
+    try:
+        value = int(raw_value)
+    except ValueError:
+        logger.warning(
+            "%s=%r 不是整数，使用默认值 %d",
+            name,
+            raw_value,
+            default,
+        )
+        return default
+    if value < minimum:
+        logger.warning(
+            "%s=%d 小于允许的最小值 %d，使用默认值 %d",
+            name,
+            value,
+            minimum,
+            default,
+        )
+        return default
+    return value
+
+
 # ----------------- 训练超参数补充（C2 修复）-----------------
 # 以下参数若 openpi 官方 TrainConfig 未直接暴露对应字段，则由 optimizer / lr_schedule 内部默认值控制；
 # 此处暴露为环境变量用于文档审计与外部脚本覆盖，实际生效依赖 openpi 官方实现。
 # batch_size 显式覆盖（方案书 §3.3：22.5GB 卡建议降到 16 或 8；默认 16 为安全值）
-BATCH_SIZE: int = int(os.environ.get("PI05_BATCH_SIZE", "16"))
+BATCH_SIZE: int = _read_int_env("PI05_BATCH_SIZE", 16)
+# 数据加载并发数；0 表示在训练进程内同步加载，默认值保持为 2。
+NUM_WORKERS: int = _read_int_env("PI05_NUM_WORKERS", 2, minimum=0)
+# 正式默认值保持 30000；服务器 Smoke 可通过环境变量临时缩短。
+NUM_TRAIN_STEPS: int = _read_int_env("PI05_NUM_TRAIN_STEPS", 30_000)
+# 日志和 checkpoint 周期；均必须为正整数，非法输入回退到原默认值。
+LOG_INTERVAL: int = _read_int_env("PI05_LOG_INTERVAL", 100)
+SAVE_INTERVAL: int = _read_int_env("PI05_SAVE_INTERVAL", 1_000)
+KEEP_PERIOD: int = _read_int_env("PI05_KEEP_PERIOD", 5_000)
 # warmup_steps：学习率线性预热步数（openpi 官方示例约 2000；D21 按数据量调整，§6.3）
 WARMUP_STEPS: int = int(os.environ.get("PI05_WARMUP_STEPS", "2000"))
 # weight_decay：AdamW 权重衰减系数（openpi 官方示例约 0.01—0.1；D21 实验确认）
@@ -443,11 +479,11 @@ def _build_pi05_industrial_config() -> TrainConfig:
         # 方案书 §3.3：LoRA 微调显存 >22.5GB；22.5GB 卡建议降到 16 或 8。
         # 默认 batch_size=16（安全值），可通过 PI05_BATCH_SIZE 环境变量覆盖（W3 修复）。
         batch_size=BATCH_SIZE,
-        num_workers=2,
-        num_train_steps=30000,  # openpi 官方示例参考值；D21 按数据量与收敛情况调整（W5）
-        log_interval=100,
-        save_interval=1000,
-        keep_period=5000,
+        num_workers=NUM_WORKERS,
+        num_train_steps=NUM_TRAIN_STEPS,
+        log_interval=LOG_INTERVAL,
+        save_interval=SAVE_INTERVAL,
+        keep_period=KEEP_PERIOD,
         # LoRA 训练禁用 EMA（EMA 与 LoRA 不兼容，ema_decay=None 由 openpi 内部处理）
         ema_decay=None,
         # ---- 学习率 ----
@@ -594,8 +630,14 @@ def _print_summary() -> None:
     print(
         f"batch_size:         {BATCH_SIZE}  (默认安全值 16；方案书 §3.3：22.5GB 卡建议 ≤16)"
     )
+    print(f"num_workers:        {NUM_WORKERS}")
     print("lr init_value:      2e-5 (LoRA 微调较小学习率)")
-    print("num_train_steps:    30000  (openpi 官方示例参考值；D21 按数据量与收敛调整)")
+    print(
+        f"num_train_steps:    {NUM_TRAIN_STEPS}  (默认 30000；D21 按数据量与收敛调整)"
+    )
+    print(f"log_interval:       {LOG_INTERVAL}")
+    print(f"save_interval:      {SAVE_INTERVAL}")
+    print(f"keep_period:        {KEEP_PERIOD}")
     print(
         f"warmup_steps:       {WARMUP_STEPS}  (C2 修复；若 openpi API 不支持则由 scheduler 内部控制)"
     )
