@@ -157,13 +157,14 @@ def test_bin01_v2_recorder_accepts_ordered_dual_arm_actions(tmp_path: Path) -> N
         for sequence_id, (arm_id, executor) in enumerate(
             (("Arm_A", "pi05"), ("Arm_B", "openvla_oft"))
         ):
+            physics_tick = sequence_id * 12
             recorder.add_action(
                 arm_id=arm_id,
                 executor=executor,
                 subtask_id="BIN01_TO_FINISHED01",
                 chunk_id=f"manual-bin01-{sequence_id}",
-                timestamp_ns=1_000_000_000 + sequence_id,
-                physics_tick=sequence_id,
+                timestamp_ns=1_000_000_000 + sequence_id * 100_000_000,
+                physics_tick=physics_tick,
                 sequence_id=sequence_id,
                 action_7d=[0.0] * 7,
             )

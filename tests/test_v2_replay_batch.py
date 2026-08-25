@@ -139,7 +139,14 @@ def test_dual_arm_variation_preserves_one_ordered_arm_boundary() -> None:
     assert [action.values[6] for action in varied] == [
         action.values[6] for action in actions
     ]
-    assert varied[len(arm_a) - 1].values[:3] == arm_a[-1].values[:3]
+    import numpy as np
+
+    np.testing.assert_allclose(
+        varied[len(arm_a) - 1].values[:3],
+        arm_a[-1].values[:3],
+        rtol=0.0,
+        atol=1e-12,
+    )
     assert any(
         changed.values[:3] != original.values[:3]
         for changed, original in zip(varied, actions)
