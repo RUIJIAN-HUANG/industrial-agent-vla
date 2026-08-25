@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import math
 import sys
@@ -15,6 +16,15 @@ from typing import Any, Mapping
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_CONFIG = SCRIPT_DIR / "configs" / "single_bin_scene_v2.json"
 ARM_IDS = ("Arm_A", "Arm_B")
+
+
+def _preload_pink_runtime(ik_backend: str) -> None:
+    """Mirror the proven Arm_A startup order before Kit loads plugins."""
+
+    if ik_backend != "pink":
+        return
+    importlib.import_module("eigenpy")
+    importlib.import_module("pinocchio")
 
 
 def _parse_args() -> argparse.Namespace:
@@ -190,6 +200,7 @@ def main() -> int:
                 "ARM_B_FINISHED_01_HANDLE_APPROACH",
             ]:
                 raise RuntimeError("Arm_B bin-transport target selection drifted")
+        _preload_pink_runtime(args.ik_backend)
         simulation_app = isaac_compat.launch_simulation_app(headless=False)
 
         import numpy as np
