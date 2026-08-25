@@ -172,12 +172,53 @@ class OfflineGtProbe:
     ) -> dict[str, Any]:
         """Require the complete Bin_01 footprint inside FINISHED_01."""
 
+        return self._bin01_at_station(
+            bin_path=bin_path,
+            stations=stations,
+            bin_config=bin_config,
+            station_id="FINISHED_01",
+            max_vertical_error_deg=max_vertical_error_deg,
+            max_height_error_m=max_height_error_m,
+        )
+
+    def bin01_in_handoff_center(
+        self,
+        *,
+        bin_path: str,
+        stations: Sequence[Mapping[str, Any]],
+        bin_config: Mapping[str, Any],
+        max_vertical_error_deg: float = 10.0,
+        max_height_error_m: float = 0.03,
+    ) -> dict[str, Any]:
+        """Require the complete Bin_01 footprint inside HANDOFF_CENTER."""
+
+        return self._bin01_at_station(
+            bin_path=bin_path,
+            stations=stations,
+            bin_config=bin_config,
+            station_id="HANDOFF_CENTER",
+            max_vertical_error_deg=max_vertical_error_deg,
+            max_height_error_m=max_height_error_m,
+        )
+
+    def _bin01_at_station(
+        self,
+        *,
+        bin_path: str,
+        stations: Sequence[Mapping[str, Any]],
+        bin_config: Mapping[str, Any],
+        station_id: str,
+        max_vertical_error_deg: float,
+        max_height_error_m: float,
+    ) -> dict[str, Any]:
+        """Evaluate the same frozen placement gate at one configured station."""
+
         station_by_id = {str(item["id"]): item for item in stations}
-        finished = station_by_id["FINISHED_01"]
+        target_station = station_by_id[station_id]
         station_position = [
-            float(value) for value in finished["pose"]["position_m"]
+            float(value) for value in target_station["pose"]["position_m"]
         ]
-        footprint = [float(value) for value in finished["footprint_m"]]
+        footprint = [float(value) for value in target_station["footprint_m"]]
         world_range = self._world_aligned_range(bin_path)
         world_min = [float(value) for value in world_range.GetMin()]
         world_max = [float(value) for value in world_range.GetMax()]
@@ -213,7 +254,7 @@ class OfflineGtProbe:
         return {
             "pass": footprint_pass and orientation_pass and height_pass,
             "bin_id": "Bin_01",
-            "station_id": "FINISHED_01",
+            "station_id": station_id,
             "center_world_m": center,
             "world_aligned_bounds_m": {"min": world_min, "max": world_max},
             "allowed_footprint_world_m": {

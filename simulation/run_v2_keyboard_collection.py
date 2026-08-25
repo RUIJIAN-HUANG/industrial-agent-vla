@@ -83,7 +83,7 @@ def _load_replay_task_actions(
     *,
     expected_scene_config_sha256: str,
     expected_task_id: str,
-) -> tuple[str, list[Any]]:
+) -> tuple[str, list[Any], list[str]]:
     """Load validated task actions, excluding the frozen terminal hold suffix."""
 
     from scripts.pi05.canonical_v2 import CanonicalV2Reader
@@ -99,8 +99,28 @@ def _load_replay_task_actions(
             expected_scene_config_sha256=expected_scene_config_sha256,
         )
         rows = list(reader.iter_action_7d())
+        stored_arm_ids = [
+            value.decode("utf-8") if isinstance(value, bytes) else str(value)
+            for value in reader.h5["actions/arm_id"][:]
+        ]
         source_episode_id = reader.episode_id
-    return source_episode_id, _replay_task_actions_from_rows(rows)
+    actions = _replay_task_actions_from_rows(rows)
+    arm_ids = stored_arm_ids[: len(actions)]
+    if len(stored_arm_ids) != len(rows) or len(arm_ids) != len(actions):
+        raise ValueError("--replay-episode action identity count is inconsistent")
+    if expected_task_id == "BIN01_TO_FINISHED01":
+        if "Arm_A" not in arm_ids or "Arm_B" not in arm_ids:
+            raise ValueError(
+                "--replay-episode BIN01_TO_FINISHED01 requires both Arm_A and Arm_B"
+            )
+        first_b = arm_ids.index("Arm_B")
+        if any(arm_id != "Arm_A" for arm_id in arm_ids[:first_b]) or any(
+            arm_id != "Arm_B" for arm_id in arm_ids[first_b:]
+        ):
+            raise ValueError(
+                "--replay-episode dual-arm actions must be ordered Arm_A then Arm_B"
+            )
+    return source_episode_id, actions, arm_ids
 
 
 def _diversify_replay_actions(
@@ -112,6 +132,7 @@ def _diversify_replay_actions(
     lift_mm: float | None = None,
     final_y_offset_mm: float = 0.0,
     final_z_offset_mm: float = 0.0,
+    arm_ids: list[str] | None = None,
 ) -> list[Any]:
     """Apply a bounded, smooth deterministic variation to replay actions.
 
@@ -123,6 +144,39 @@ def _diversify_replay_actions(
         return list(actions)
     if profile not in {"diverse_low", "approach_curve"}:
         raise ValueError(f"unsupported trajectory profile: {profile}")
+    if arm_ids is not None:
+        if len(arm_ids) != len(actions):
+            raise ValueError("arm_ids must align one-to-one with replay actions")
+        boundaries = [
+            index
+            for index in range(1, len(arm_ids))
+            if arm_ids[index] != arm_ids[index - 1]
+        ]
+        if boundaries:
+            if len(boundaries) != 1 or set(arm_ids) != {"Arm_A", "Arm_B"}:
+                raise ValueError(
+                    "dual-arm replay requires exactly one Arm_A-to-Arm_B transition"
+                )
+            split = boundaries[0]
+            if arm_ids[0] != "Arm_A" or arm_ids[split] != "Arm_B":
+                raise ValueError("dual-arm replay must be ordered Arm_A then Arm_B")
+            arm_a_actions = _diversify_replay_actions(
+                actions[:split],
+                profile=profile,
+                seed=seed,
+                variant=variant,
+                lift_mm=lift_mm,
+            )
+            arm_b_actions = _diversify_replay_actions(
+                actions[split:],
+                profile=profile,
+                seed=seed + 1,
+                variant=variant,
+                lift_mm=lift_mm,
+                final_y_offset_mm=final_y_offset_mm,
+                final_z_offset_mm=final_z_offset_mm,
+            )
+            return arm_a_actions + arm_b_actions
     if len(actions) < 8:
         raise ValueError(f"{profile} requires at least eight task actions")
 
@@ -638,6 +692,7 @@ def main() -> int:
     action_count = 0
     replay_source_episode_id: str | None = None
     replay_actions: list[Any] | None = None
+    replay_arm_ids: list[str] | None = None
     phase = "launch"
     episode_path: Path | None = None
     try:
@@ -677,7 +732,7 @@ def main() -> int:
                 Bin01ToFinished01CollectionStateMachine,
                 None,
                 "FINISHED_01",
-                "Arm_B",
+                "Arm_A",
             ),
         }
         machine_type, task_part_id, task_slot_id, task_arm_id = task_profiles[
@@ -688,7 +743,11 @@ def main() -> int:
         if args.replay_episode is not None:
             phase = "load_replay_episode"
             replay_path = args.replay_episode.expanduser().resolve()
-            replay_source_episode_id, replay_actions = _load_replay_task_actions(
+            (
+                replay_source_episode_id,
+                replay_actions,
+                replay_arm_ids,
+            ) = _load_replay_task_actions(
                 replay_path,
                 expected_scene_config_sha256=preflight.scene_config_sha256,
                 expected_task_id=preflight.task_id,
@@ -701,6 +760,7 @@ def main() -> int:
                 lift_mm=args.lift_mm,
                 final_y_offset_mm=args.final_y_offset_mm,
                 final_z_offset_mm=args.final_z_offset_mm,
+                arm_ids=replay_arm_ids,
             )
             if len(replay_actions) + TERMINAL_HOLD_ACTION_COUNT > args.max_actions:
                 raise RuntimeError(
@@ -804,12 +864,37 @@ def main() -> int:
         controller.set_tick_observer(bridge.observe_physics_tick)
         active_arm = task_arm_id
         if replay_actions is not None:
+            assert replay_arm_ids is not None
             phase = "replay_actions"
             print(
                 f"V2 REPLAY READY source={replay_source_episode_id} "
                 f"task_actions={len(replay_actions)}"
             )
-            for action in replay_actions:
+            for action, replay_arm_id in zip(replay_actions, replay_arm_ids):
+                if replay_arm_id != active_arm:
+                    if not (
+                        preflight.task_id == "BIN01_TO_FINISHED01"
+                        and active_arm == "Arm_A"
+                        and replay_arm_id == "Arm_B"
+                    ):
+                        raise RuntimeError(
+                            "invalid replay arm transition "
+                            f"{active_arm}->{replay_arm_id}"
+                        )
+                    placement = offline_gt_probe.bin01_in_handoff_center(
+                        bin_path="/World/Bins/Bin_01",
+                        stations=config["stations"],
+                        bin_config=config["bin"],
+                    )
+                    arm_a = _arm_readback(controller, arms, config, "Arm_A")
+                    machine.enter_handoff_verify(
+                        bin_at_handoff_center=bool(placement["pass"]),
+                        bin_stable=True,
+                        arm_a_gripper_open=arm_a["gripper_open"],
+                        arm_a_clear=arm_a["retreated"],
+                    )
+                    machine.activate_b_only()
+                    active_arm = "Arm_B"
                 machine.require_arm_action(active_arm)
                 rejection = controller.action_rejection_reason(
                     action,
@@ -883,13 +968,15 @@ def main() -> int:
                 else f"{task_part_id} target: {task_slot_id}"
             )
             completion_label = (
-                "C confirm released Bin_01 in FINISHED_01"
+                "V verify HANDOFF_CENTER | B activate Arm_B | "
+                "C confirm FINISHED_01"
                 if bin_transport_task
                 else f"Z confirm {task_part_id} in {task_slot_id} | "
                 f"C complete {task_part_id} task"
             )
             workflow_label = (
-                "Arm_B only | Z/V/B disabled | P checkpoint | X safe-stop"
+                "Start Arm_A | V verify handoff | B switch to Arm_B | "
+                "P checkpoint | X safe-stop"
                 if bin_transport_task
                 else "P checkpoint | X safe-stop | V/B disabled for this task"
             )
@@ -960,8 +1047,8 @@ def main() -> int:
                     if command.kind == "part_placed":
                         if bin_transport_task:
                             raise RuntimeError(
-                                "BIN01_TO_FINISHED01 does not use Z; press C only "
-                                "after releasing the bin and retreating Arm_B"
+                                "BIN01_TO_FINISHED01 does not use Z; use V then B "
+                                "for handoff, and C only after Arm_B finishes"
                             )
                         part_id = machine.next_part_id
                         if part_id is None:
@@ -977,13 +1064,54 @@ def main() -> int:
                         )
                         continue
                     if command.kind == "handoff_verify":
-                        raise RuntimeError(
-                            f"{preflight.task_id} ends before handoff; V is not allowed"
+                        if not bin_transport_task:
+                            raise RuntimeError(
+                                f"{preflight.task_id} ends before handoff; "
+                                "V is not allowed"
+                            )
+                        placement = offline_gt_probe.bin01_in_handoff_center(
+                            bin_path="/World/Bins/Bin_01",
+                            stations=config["stations"],
+                            bin_config=config["bin"],
                         )
+                        arm_a = _arm_readback(controller, arms, config, "Arm_A")
+                        handoff_report = {
+                            "placement": placement,
+                            "arm_a_gripper_open": arm_a["gripper_open"],
+                            "arm_a_clear": arm_a["retreated"],
+                        }
+                        _write_json_atomic(
+                            artifact_dir / "offline_gt" / "bin01_handoff.json",
+                            handoff_report,
+                        )
+                        machine.enter_handoff_verify(
+                            bin_at_handoff_center=bool(placement["pass"]),
+                            bin_stable=True,
+                            arm_a_gripper_open=arm_a["gripper_open"],
+                            arm_a_clear=arm_a["retreated"],
+                        )
+                        active_arm = "NONE"
+                        status_label.text = (
+                            "HANDOFF_VERIFY PASS | both arms locked | press B"
+                        )
+                        print(
+                            "HANDOFF VERIFIED: Bin_01 stable in HANDOFF_CENTER; "
+                            "press B to activate Arm_B"
+                        )
+                        continue
                     if command.kind == "activate_b":
-                        raise RuntimeError(
-                            f"{preflight.task_id} permits Arm_A only; B is not allowed"
+                        if not bin_transport_task:
+                            raise RuntimeError(
+                                f"{preflight.task_id} permits Arm_A only; "
+                                "B is not allowed"
+                            )
+                        machine.activate_b_only()
+                        active_arm = "Arm_B"
+                        status_label.text = (
+                            "B_ONLY | arm=Arm_B | continue to FINISHED_01"
                         )
+                        print("CONTROL SWITCHED: Arm_B is now active")
+                        continue
                     if command.kind == "complete":
                         if bin_transport_task:
                             placement = offline_gt_probe.bin01_in_finished01(

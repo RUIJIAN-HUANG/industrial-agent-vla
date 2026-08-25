@@ -459,13 +459,13 @@ class W01ToS14CollectionStateMachine(SinglePartToSlotCollectionStateMachine):
 
 
 class Bin01ToFinished01CollectionStateMachine:
-    """Atomic Arm_B profile starting from a verified handoff-ready scene."""
+    """Dual-arm bin transport from the frozen start through handoff to finish."""
 
     TASK_ID = "BIN01_TO_FINISHED01"
 
     def __init__(self, contract: V2CollectionContract):
         self.contract = contract
-        self.token = ControlToken.B_ONLY
+        self.token = ControlToken.A_ONLY
         self.outcome: EpisodeOutcome | None = None
         self.failure_code: V2FailureCode | None = None
 
@@ -489,11 +489,48 @@ class Bin01ToFinished01CollectionStateMachine:
 
     def require_arm_action(self, arm_id: str) -> None:
         self._require_active()
-        if arm_id != "Arm_B":
+        allowed = {
+            ControlToken.A_ONLY: "Arm_A",
+            ControlToken.B_ONLY: "Arm_B",
+        }.get(self.token)
+        if arm_id != allowed:
             self._reject(
                 V2FailureCode.INACTIVE_ARM_ACTION,
-                f"{self.TASK_ID} permits Arm_B actions only",
+                f"{arm_id} cannot act while token is {self.token.value}",
             )
+
+    def enter_handoff_verify(
+        self,
+        *,
+        bin_at_handoff_center: bool,
+        bin_stable: bool,
+        arm_a_gripper_open: bool,
+        arm_a_clear: bool,
+    ) -> None:
+        self._require_active()
+        if self.token is not ControlToken.A_ONLY or not all(
+            (
+                bin_at_handoff_center is True,
+                bin_stable is True,
+                arm_a_gripper_open is True,
+                arm_a_clear is True,
+            )
+        ):
+            self._reject(
+                V2FailureCode.HANDOFF_PRECONDITION_FAILED,
+                "Bin_01 handoff requires stable HANDOFF_CENTER placement, "
+                "open Arm_A gripper, and Arm_A clear",
+            )
+        self.token = ControlToken.HANDOFF_VERIFY
+
+    def activate_b_only(self) -> None:
+        self._require_active()
+        if self.token is not ControlToken.HANDOFF_VERIFY:
+            self._reject(
+                V2FailureCode.HANDOFF_PRECONDITION_FAILED,
+                "B_ONLY requires a successful Bin_01 handoff verification",
+            )
+        self.token = ControlToken.B_ONLY
 
     def complete(
         self,
@@ -504,7 +541,7 @@ class Bin01ToFinished01CollectionStateMachine:
         arm_b_clear: bool,
     ) -> None:
         self._require_active()
-        if not all(
+        if self.token is not ControlToken.B_ONLY or not all(
             (
                 bin_at_finished is True,
                 bin_stable is True,

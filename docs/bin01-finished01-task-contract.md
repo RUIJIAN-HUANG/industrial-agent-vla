@@ -2,23 +2,42 @@
 
 - Task ID: `BIN01_TO_FINISHED01`
 - Canonical instruction: `把Bin_01搬到FINISHED_01`
-- Active arm: `Arm_B`
-- Executor identity: `openvla_oft`
-- Training camera/state: `CAM_B_TOP` and `Arm_B`
+- Active-arm sequence: `Arm_A -> HANDOFF_VERIFY -> Arm_B`
+- Executor identities: `Arm_A/pi05`, then `Arm_B/openvla_oft`
+- Training cameras/state: all three frozen cameras and both arm states; each action
+  stores its actual `arm_id` and executor
 
 The Episode must start from the unmodified frozen scene configuration. The task
 must not relocate, reorient, add, or remove any part at reset. Its only object
 goal is to move `Bin_01` from its configured initial pose to `FINISHED_01`.
-Only Arm_B actions needed to transport the bin are recordable. Arm_A must not
-move, and no handoff phase is part of this instruction.
+The group-lead-approved execution is a controlled dual-arm relay. Arm_A moves
+the bin from its frozen initial pose to `HANDOFF_CENTER`, releases it, and
+retreats. The operator presses `V` to verify the complete bin footprint,
+height/orientation, open Arm_A gripper, and Arm_A clearance. Both arms remain
+locked in `HANDOFF_VERIFY` until the operator presses `B`; only then may Arm_B
+move the same bin from `HANDOFF_CENTER` to `FINISHED_01`. No scene object is
+relocated, reoriented, added, or removed at reset.
 
-The operator grasps `BIN_CARRY_TCP`, transports the bin to `FINISHED_01`,
-releases it, retreats Arm_B, and presses `C`. Terminal acceptance requires:
+The operator uses `BIN_CARRY_TCP` for both transfer legs, releases the bin at
+`FINISHED_01`, retreats Arm_B, and presses `C`. Terminal acceptance requires:
 
 1. the complete bin footprint is inside `FINISHED_01`;
 2. the bin height and vertical orientation are within the frozen tolerances;
 3. three fresh offline-GT votes pass; and
 4. ten real 100 ms open-gripper hold actions pass the 1 mm drift gate.
+
+## Visible keyboard workflow
+
+1. The Episode starts as `A_ONLY | arm=Arm_A`.
+2. Arm_A places Bin_01 in `HANDOFF_CENTER`, opens its gripper, and retreats.
+3. Press `V` once. A failed verification aborts the Episode; a pass displays
+   `HANDOFF_VERIFY PASS | both arms locked | press B`.
+4. Press `B` once. The display changes to `B_ONLY | arm=Arm_B`.
+5. Arm_B places Bin_01 in `FINISHED_01`, opens its gripper, and retreats.
+6. Press `C` once to request terminal validation.
+
+`Z` is not used by this task. Motion keys must be tapped, not held. `X` always
+requests a safe stop.
 
 Detailed GT is written only to
 `offline_gt/bin01_terminal_success.json`; Canonical observations remain free of
