@@ -127,6 +127,64 @@ def compute_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _stabilize_sparse_quantile_bounds(
+    q01: np.ndarray,
+    q99: np.ndarray,
+    minimum: np.ndarray,
+    maximum: np.ndarray,
+    *,
+    key: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Recover quantile bounds for sparse non-constant features.
+
+    Every input is a finite float64 vector shaped ``[D]``.  If the central
+    1%-99% quantile range collapses while the observed feature range remains
+    non-zero, OpenPI quantile normalization would amplify the rare values by
+    its ``1e-6`` denominator.  Only those dimensions fall back to their
+    observed minimum and maximum; dense and truly constant dimensions retain
+    their original quantiles.
+    """
+
+    lower = np.asarray(q01, dtype=np.float64).copy()
+    upper = np.asarray(q99, dtype=np.float64).copy()
+    observed_min = np.asarray(minimum, dtype=np.float64)
+    observed_max = np.asarray(maximum, dtype=np.float64)
+    shapes = {value.shape for value in (lower, upper, observed_min, observed_max)}
+    if len(shapes) != 1 or lower.ndim != 1:
+        raise ValueError(f"[{key}] quantile bounds must be matching [D] vectors")
+    if not all(
+        np.all(np.isfinite(value))
+        for value in (lower, upper, observed_min, observed_max)
+    ):
+        raise ValueError(f"[{key}] quantile bounds contain NaN or Infinity")
+
+    observed_span = observed_max - observed_min
+    quantile_span = upper - lower
+    fallback = (quantile_span <= EPS) & (observed_span > EPS)
+    for index in np.flatnonzero(fallback):
+        logger.warning(
+            "[%s] sparse quantile fallback at dim=%d: "
+            "q01=%.9g q99=%.9g min=%.9g max=%.9g",
+            key,
+            int(index),
+            float(lower[index]),
+            float(upper[index]),
+            float(observed_min[index]),
+            float(observed_max[index]),
+        )
+    lower[fallback] = observed_min[fallback]
+    upper[fallback] = observed_max[fallback]
+
+    unresolved = (observed_span > EPS) & ((upper - lower) <= EPS)
+    if np.any(unresolved):
+        dimensions = [int(index) for index in np.flatnonzero(unresolved)]
+        raise ValueError(
+            f"[{key}] non-constant dimensions have degenerate quantile bounds: "
+            f"{dimensions}"
+        )
+    return lower, upper
+
+
 def compute_stats(
     arr: np.ndarray,
     mask: np.ndarray | None = None,
@@ -154,13 +212,22 @@ def compute_stats(
         raise ValueError(f"[{key}] requires at least two valid samples")
     mean = array.mean(axis=0)
     std = np.maximum(array.std(axis=0, ddof=0), EPS)
+    minimum = array.min(axis=0)
+    maximum = array.max(axis=0)
+    q01, q99 = _stabilize_sparse_quantile_bounds(
+        np.quantile(array, 0.01, axis=0),
+        np.quantile(array, 0.99, axis=0),
+        minimum,
+        maximum,
+        key=key,
+    )
     result = {
         "mean": mean,
         "std": std,
-        "q01": np.quantile(array, 0.01, axis=0),
-        "q99": np.quantile(array, 0.99, axis=0),
-        "min": array.min(axis=0),
-        "max": array.max(axis=0),
+        "q01": q01,
+        "q99": q99,
+        "min": minimum,
+        "max": maximum,
     }
     if not all(np.all(np.isfinite(value)) for value in result.values()):
         raise ValueError(f"[{key}] computed non-finite statistics")
