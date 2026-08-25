@@ -174,23 +174,32 @@ class PinkFrankaAdapterMathTests(unittest.TestCase):
     def test_default_urdf_resolution_does_not_import_lula(self):
         import unittest.mock
 
-        fake_origin = Path(
-            "C:/opt/isaacsim/exts/isaacsim.core.api/isaacsim/core/api/__init__.py"
-        )
-        fake_urdf = (
-            Path("C:/opt/isaacsim/exts")
-            / "isaacsim.robot_motion.motion_generation"
-            / "motion_policy_configs/franka/lula_franka_gen.urdf"
-        )
-        spec = unittest.mock.Mock(origin=str(fake_origin), submodule_search_locations=[])
-        with (
-            unittest.mock.patch(
+        with TemporaryDirectory() as root:
+            exts = Path(root) / "exts"
+            fake_origin = (
+                exts
+                / "isaacsim.core.api"
+                / "isaacsim/core/api/__init__.py"
+            )
+            fake_urdf = (
+                exts
+                / "isaacsim.robot_motion.motion_generation"
+                / "motion_policy_configs/franka/lula_franka_gen.urdf"
+            )
+            fake_origin.parent.mkdir(parents=True)
+            fake_origin.touch()
+            fake_urdf.parent.mkdir(parents=True)
+            fake_urdf.touch()
+            spec = unittest.mock.Mock(
+                origin=str(fake_origin), submodule_search_locations=[]
+            )
+            with unittest.mock.patch(
                 "simulation.pink_franka_adapter.importlib.util.find_spec",
                 return_value=spec,
-            ),
-            unittest.mock.patch.object(Path, "is_file", return_value=True),
-        ):
-            self.assertEqual(Path(_resolve_default_franka_urdf()), fake_urdf)
+            ):
+                self.assertTrue(
+                    Path(_resolve_default_franka_urdf()).samefile(fake_urdf)
+                )
 
 
 if __name__ == "__main__":
