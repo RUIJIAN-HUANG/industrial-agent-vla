@@ -204,10 +204,8 @@ def check_norm_stats(config: Any, config_name: str) -> bool:
         return True
     logger.error("❌ norm_stats.json 不存在: %s", path)
     logger.error("   方案书 §3.3.1 Para186 要求训练前必跑 compute_norm_stats。")
-    logger.error(
-        "   请先运行: python scripts/pi05/compute_norm_stats.py --config-name %s",
-        config_name,
-    )
+    logger.error("   请先查看 V2 统计命令参数:")
+    logger.error("   python scripts/pi05/compute_norm_stats.py --help")
     return False
 
 

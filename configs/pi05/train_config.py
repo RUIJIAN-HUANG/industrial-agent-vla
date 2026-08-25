@@ -42,7 +42,7 @@
         --exp-name=my_experiment --overwrite
 
 norm stats 计算命令（训练前必跑，方案书 §3.3.1 Para186）：
-    uv run scripts/compute_norm_stats.py --config-name pi05_industrial
+    python scripts/pi05/compute_norm_stats.py --help
 """
 
 from __future__ import annotations
@@ -364,6 +364,9 @@ if OPENPI_AVAILABLE:
             model_transforms = ModelTransformFactory()(model_config)
             return dataclasses.replace(
                 self.create_base_config(assets_dirs, model_config),
+                # V2 rows already contain the frozen [10,7] action window.
+                # Empty sequence keys prevent OpenPI from windowing them again.
+                action_sequence_keys=(),
                 repack_transforms=repack_transform,
                 data_transforms=data_transforms,
                 model_transforms=model_transforms,
@@ -602,7 +605,7 @@ def _print_summary() -> None:
     print("  XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py \\")
     print("      pi05_industrial --exp-name=my_experiment --overwrite")
     print("norm stats 计算命令（训练前必跑，方案书 §3.3.1 Para186）:")
-    print("  uv run scripts/compute_norm_stats.py --config-name pi05_industrial")
+    print("  python scripts/pi05/compute_norm_stats.py --help")
     print("=" * 64)
 
 

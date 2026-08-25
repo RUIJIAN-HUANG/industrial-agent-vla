@@ -48,6 +48,9 @@ try:
         open_offline_dataset,
         validate_provenance_manifest,
     )
+    from scripts.pi05.lerobot_v2_norm_source import (
+        load_lerobot_v2_norm_source,
+    )
 except ModuleNotFoundError:  # direct ``python scripts/pi05/...`` execution
     from canonical_v1 import (  # type: ignore
         StateMapper,
@@ -62,6 +65,9 @@ except ModuleNotFoundError:  # direct ``python scripts/pi05/...`` execution
         load_provenance,
         open_offline_dataset,
         validate_provenance_manifest,
+    )
+    from lerobot_v2_norm_source import (  # type: ignore
+        load_lerobot_v2_norm_source,
     )
 
 logger = logging.getLogger("compute_norm_stats")
@@ -126,11 +132,11 @@ def compute_stats(
     mask: np.ndarray | None = None,
     key: str = "",
 ) -> dict[str, np.ndarray]:
-    """Compute finite statistics over strict float64[N,D] input."""
+    """Compute finite per-feature statistics over float data shaped [N,...,D]."""
 
     array = np.asarray(arr, dtype=np.float64)
-    if array.ndim != 2:
-        raise ValueError(f"[{key}] expected 2-D [N,D], got {array.shape}")
+    if array.ndim < 2:
+        raise ValueError(f"[{key}] expected [N,...,D], got {array.shape}")
     if not np.all(np.isfinite(array)):
         raise ValueError(f"[{key}] contains NaN or Infinity")
     if mask is not None:
@@ -143,6 +149,7 @@ def compute_stats(
         if valid.dtype != np.bool_:
             raise ValueError(f"[{key}] mask must have boolean dtype")
         array = array[valid]
+    array = array.reshape(-1, array.shape[-1])
     if array.shape[0] < 2:
         raise ValueError(f"[{key}] requires at least two valid samples")
     mean = array.mean(axis=0)
@@ -247,9 +254,10 @@ def validate_dimensions(
 ) -> None:
     state = np.asarray(data["state"])
     actions = np.asarray(data["actions"])
-    if state.ndim != 2 or actions.ndim != 2:
+    if state.ndim != 2 or actions.ndim not in {2, 3}:
         raise ValueError(
-            f"state/actions must be 2-D; got state={state.shape} actions={actions.shape}"
+            "state must be [N,D] and actions must be [N,D] or [N,H,D]; "
+            f"got state={state.shape} actions={actions.shape}"
         )
     if state.shape[0] != actions.shape[0]:
         raise ValueError(
@@ -261,9 +269,9 @@ def validate_dimensions(
         raise ValueError(
             f"state dimension mismatch: {state.shape[1]} != {expected_state_dim}"
         )
-    if actions.shape[1] != expected_action_dim:
+    if actions.shape[-1] != expected_action_dim:
         raise ValueError(
-            f"action dimension mismatch: {actions.shape[1]} != {expected_action_dim}"
+            f"action dimension mismatch: {actions.shape[-1]} != {expected_action_dim}"
         )
     if not np.all(np.isfinite(state)) or not np.all(np.isfinite(actions)):
         raise ValueError("state/actions contain NaN or Infinity")
@@ -523,6 +531,30 @@ def _load_lerobot(
     )
 
 
+def _load_lerobot_v2(
+    path: Path,
+    *,
+    repo_id: str,
+    split_registry: SplitRegistry,
+    manifest_path: Path | None,
+    io_timeout_s: float,
+) -> LoadedDataset:
+    validated = load_lerobot_v2_norm_source(
+        path,
+        repo_id=repo_id,
+        split_registry=split_registry,
+        dataset_opener=open_offline_dataset,
+        manifest_path=manifest_path,
+        io_timeout_s=io_timeout_s,
+    )
+    return LoadedDataset(
+        state=validated.state,
+        actions=validated.actions,
+        mask=None,
+        source_manifest=validated.source_manifest,
+    )
+
+
 def load_dataset(
     path: Path,
     *,
@@ -533,6 +565,7 @@ def load_dataset(
     production: bool = True,
     repo_id: str | None = None,
     manifest_path: Path | None = None,
+    io_timeout_s: float = 300.0,
 ) -> LoadedDataset:
     """Load one explicit format without guessing or legacy fallback."""
 
@@ -558,9 +591,19 @@ def load_dataset(
             provenance_context=provenance_context,
             manifest_path=manifest_path,
         )
+    if input_format == "lerobot-v2":
+        if not repo_id:
+            raise ValueError("repo_id is required for LeRobot V2 input")
+        return _load_lerobot_v2(
+            path,
+            repo_id=repo_id,
+            split_registry=split_registry,
+            manifest_path=manifest_path,
+            io_timeout_s=io_timeout_s,
+        )
     raise ValueError(
-        "input_format must be explicitly canonical-v1 or lerobot; legacy, npz, "
-        "parquet and hdf5 auto-detection are forbidden"
+        "input_format must be explicitly canonical-v1, lerobot or lerobot-v2; "
+        "legacy, npz, parquet and hdf5 auto-detection are forbidden"
     )
 
 
@@ -609,7 +652,7 @@ def write_norm_stats_bundle(
         },
         "counts": {
             "state_rows": int(loaded.state.shape[0]),
-            "action_rows": int(loaded.actions.shape[0]),
+            "action_rows": int(np.prod(loaded.actions.shape[:-1], dtype=np.int64)),
         },
         "norm_stats_sha256": stats_sha,
         "source": loaded.source_manifest,
@@ -702,7 +745,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--dataset-path", required=True)
     parser.add_argument(
-        "--input-format", required=True, choices=("canonical-v1", "lerobot")
+        "--input-format",
+        required=True,
+        choices=("canonical-v1", "lerobot", "lerobot-v2"),
     )
     parser.add_argument("--state-mapper", required=True)
     parser.add_argument("--repo-id", default=None)
@@ -712,6 +757,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--openpi-root", required=True)
     parser.add_argument("--openpi-commit", required=True)
     parser.add_argument("--output-path", required=True)
+    parser.add_argument(
+        "--io-timeout-s",
+        type=float,
+        default=300.0,
+        help="Overall timeout for LeRobot V2 manifest and frame I/O",
+    )
     parser.add_argument("--quiet", action="store_true")
     return parser.parse_args()
 
@@ -742,6 +793,7 @@ def main() -> int:
             production=True,
             repo_id=args.repo_id,
             manifest_path=Path(args.manifest) if args.manifest else None,
+            io_timeout_s=args.io_timeout_s,
         )
         norm_stats, stats_by_key = calculate_norm_stats(
             loaded, state_dim=int(mapper.state_dim)
