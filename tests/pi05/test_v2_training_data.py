@@ -206,6 +206,12 @@ def test_v2_actions_keep_seven_dimensional_norm_stats() -> None:
 
     assert stats["mean"].shape == (7,)
     np.testing.assert_allclose(stats["mean"], actions.reshape(-1, 7).mean(axis=0))
+    np.testing.assert_allclose(
+        stats["q01"], np.quantile(actions.reshape(-1, 7), 0.01, axis=0)
+    )
+    np.testing.assert_allclose(
+        stats["q99"], np.quantile(actions.reshape(-1, 7), 0.99, axis=0)
+    )
     validate_dimensions(
         {
             "state": np.zeros((2, 7), dtype=np.float32),
@@ -213,6 +219,37 @@ def test_v2_actions_keep_seven_dimensional_norm_stats() -> None:
         },
         expected_state_dim=7,
     )
+
+
+def test_sparse_action_quantiles_fall_back_to_observed_range(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    actions = np.zeros((1000, 1, 7), dtype=np.float32)
+    actions[-2, 0, 3] = np.deg2rad(2.0)
+    actions[-1, 0, 3] = np.deg2rad(5.0)
+
+    stats = compute_stats(actions, key="actions")
+
+    assert stats["q01"][3] == pytest.approx(0.0)
+    assert stats["q99"][3] == pytest.approx(np.deg2rad(5.0))
+    assert "sparse quantile fallback at dim=3" in caplog.text
+    normalized = (actions[:, 0, 3] - stats["q01"][3]) / (
+        stats["q99"][3] - stats["q01"][3] + 1e-6
+    ) * 2.0 - 1.0
+    assert normalized[-2] == pytest.approx(-0.2, abs=3e-5)
+    assert normalized[-1] == pytest.approx(1.0, abs=3e-5)
+
+
+def test_constant_action_dimension_keeps_constant_quantiles(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    actions = np.zeros((100, 10, 7), dtype=np.float32)
+
+    stats = compute_stats(actions, key="actions")
+
+    np.testing.assert_array_equal(stats["q01"], np.zeros(7))
+    np.testing.assert_array_equal(stats["q99"], np.zeros(7))
+    assert "sparse quantile fallback" not in caplog.text
 
 
 def test_dimension_validation_rejects_double_windowing() -> None:
