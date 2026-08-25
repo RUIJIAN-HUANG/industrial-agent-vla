@@ -42,7 +42,11 @@
         --exp-name=my_experiment --overwrite
 
 norm stats 计算命令（训练前必跑，方案书 §3.3.1 Para186）：
-    uv run scripts/compute_norm_stats.py --config-name pi05_industrial
+    python scripts/pi05/compute_norm_stats.py --help
+
+V2 预组窗数据训练：
+    PI05_INPUT_FORMAT=lerobot-v2 python scripts/pi05/train.py \
+        --config-name pi05_industrial --exp-name=my_experiment --overwrite
 """
 
 from __future__ import annotations
@@ -94,6 +98,21 @@ STATE_DIM: int = int(os.environ.get("PI05_STATE_DIM", "7"))
 MODEL_ACTION_DIM: int = 32
 CANONICAL_ACTION_DIM: int = 7
 ACTION_HORIZON: int = 10
+SUPPORTED_INPUT_FORMATS = ("lerobot", "lerobot-v2")
+PI05_INPUT_FORMAT: str = os.environ.get("PI05_INPUT_FORMAT", "lerobot").strip().lower()
+
+
+def action_sequence_keys_for_input(input_format: str) -> tuple[str, ...] | None:
+    """Select OpenPI windowing for the explicit LeRobot input format."""
+
+    if input_format not in SUPPORTED_INPUT_FORMATS:
+        raise ValueError(
+            "PI05_INPUT_FORMAT must be one of "
+            f"{SUPPORTED_INPUT_FORMATS!r}, got {input_format!r}"
+        )
+    # Legacy rows contain one [7] action and need OpenPI's default windowing;
+    # V2 rows already contain complete [10,7] windows.
+    return () if input_format == "lerobot-v2" else None
 
 
 def require_frozen_action_horizon(action_horizon: int, *, production: bool) -> int:
@@ -362,11 +381,19 @@ if OPENPI_AVAILABLE:
                 outputs=[IndustrialOutputs()],
             )
             model_transforms = ModelTransformFactory()(model_config)
+            replace_kwargs: dict[str, Any] = {
+                "repack_transforms": repack_transform,
+                "data_transforms": data_transforms,
+                "model_transforms": model_transforms,
+            }
+            action_sequence_keys = action_sequence_keys_for_input(PI05_INPUT_FORMAT)
+            if action_sequence_keys is not None:
+                # V2 rows already contain the frozen [10,7] action window.
+                # Legacy V1 rows retain OpenPI's default windowing behavior.
+                replace_kwargs["action_sequence_keys"] = action_sequence_keys
             return dataclasses.replace(
                 self.create_base_config(assets_dirs, model_config),
-                repack_transforms=repack_transform,
-                data_transforms=data_transforms,
-                model_transforms=model_transforms,
+                **replace_kwargs,
             )
 
 else:
@@ -585,6 +612,7 @@ def _print_summary() -> None:
     )
     print(f"base checkpoint:    {BASE_CHECKPOINT}")
     print(f"dataset repo_id:    {DATASET_REPO_ID}")
+    print(f"input format:       {PI05_INPUT_FORMAT}")
     print(f"output_dir:         {OUTPUT_DIR}")
     print("fsdp_devices:       1   (单卡，方案书 §3.3 JAX 路径)")
     print(f"本地配置已注册:      {_REGISTERED}")
@@ -602,7 +630,7 @@ def _print_summary() -> None:
     print("  XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py \\")
     print("      pi05_industrial --exp-name=my_experiment --overwrite")
     print("norm stats 计算命令（训练前必跑，方案书 §3.3.1 Para186）:")
-    print("  uv run scripts/compute_norm_stats.py --config-name pi05_industrial")
+    print("  python scripts/pi05/compute_norm_stats.py --help")
     print("=" * 64)
 
 
