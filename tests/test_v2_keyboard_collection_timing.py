@@ -16,6 +16,7 @@ from simulation.canonical_recorder_bridge import CanonicalRecorderBridge
 from simulation.run_v2_keyboard_collection import (
     GRIPPER_SETTLE_ACTION_COUNT,
     _collect_p01_terminal_success,
+    _completion_precondition_failures,
     _handoff_precondition_failures,
     _interactive_action_repeat_count,
     _record_and_execute_formal_action,
@@ -36,6 +37,17 @@ def test_handoff_precheck_reports_only_unmet_conditions() -> None:
         {"gripper_open": True, "retreated": False},
     ) == ("RETREAT ARM_A OUTSIDE GREEN ZONE",)
     assert _handoff_precondition_failures(
+        {"pass": True},
+        {"gripper_open": True, "retreated": True},
+    ) == ()
+
+
+def test_completion_precheck_reports_only_unmet_conditions() -> None:
+    assert _completion_precondition_failures(
+        {"pass": True},
+        {"gripper_open": True, "retreated": False},
+    ) == ("RETREAT ARM_B OUTSIDE FINISHED_01 ZONE",)
+    assert _completion_precondition_failures(
         {"pass": True},
         {"gripper_open": True, "retreated": True},
     ) == ()

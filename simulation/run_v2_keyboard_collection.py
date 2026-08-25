@@ -55,6 +55,22 @@ def _handoff_precondition_failures(
     return tuple(failures)
 
 
+def _completion_precondition_failures(
+    placement: dict[str, Any],
+    arm_b: dict[str, Any],
+) -> tuple[str, ...]:
+    """Return actionable reasons why Bin_01 completion cannot proceed yet."""
+
+    failures: list[str] = []
+    if not bool(placement.get("pass")):
+        failures.append("PLACE BIN_01 INSIDE FINISHED_01")
+    if not bool(arm_b.get("gripper_open")):
+        failures.append("OPEN ARM_B GRIPPER WITH G")
+    if not bool(arm_b.get("retreated")):
+        failures.append("RETREAT ARM_B OUTSIDE FINISHED_01 ZONE")
+    return tuple(failures)
+
+
 def _replay_task_actions_from_rows(rows: list[Any]) -> list[Any]:
     """Convert validated rows while removing the frozen terminal hold suffix."""
 
@@ -1163,6 +1179,28 @@ def main() -> int:
                                 bin_config=config["bin"],
                             )
                             arm_b = _arm_readback(controller, arms, config, "Arm_B")
+                            completion_report = {
+                                "placement": placement,
+                                "arm_b_gripper_open": arm_b["gripper_open"],
+                                "arm_b_clear": arm_b["retreated"],
+                            }
+                            _write_json_atomic(
+                                artifact_dir
+                                / "offline_gt"
+                                / "bin01_completion_check.json",
+                                completion_report,
+                            )
+                            completion_failures = _completion_precondition_failures(
+                                placement,
+                                arm_b,
+                            )
+                            if completion_failures:
+                                message = "COMPLETION NOT READY | " + " | ".join(
+                                    completion_failures
+                                )
+                                status_label.text = message + " | THEN PRESS C AGAIN"
+                                print(message)
+                                continue
                             machine.complete(
                                 bin_at_finished=bool(placement["pass"]),
                                 bin_stable=True,
