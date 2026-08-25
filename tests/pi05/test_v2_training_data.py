@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ast
 import hashlib
 import json
 from pathlib import Path
@@ -9,6 +8,7 @@ from typing import Any
 import numpy as np
 import pytest
 
+from configs.pi05.train_config import action_sequence_keys_for_input
 from industrial_agent.data import DatasetSplit, SplitAssignment, SplitRegistry
 from scripts.pi05.compute_norm_stats import compute_stats, validate_dimensions
 from scripts.pi05.convert_openpi_v2 import MANIFEST_SHA256_FILENAME
@@ -226,18 +226,11 @@ def test_dimension_validation_rejects_double_windowing() -> None:
         )
 
 
-def test_training_config_disables_openpi_action_rewindowing() -> None:
-    config_path = Path("configs/pi05/train_config.py")
-    tree = ast.parse(config_path.read_text(encoding="utf-8"), filename=str(config_path))
-    matching_keywords = [
-        keyword
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        for keyword in node.keywords
-        if keyword.arg == "action_sequence_keys"
-    ]
+def test_training_config_selects_action_windowing_by_input_format() -> None:
+    assert action_sequence_keys_for_input("lerobot") is None
+    assert action_sequence_keys_for_input("lerobot-v2") == ()
 
-    assert len(matching_keywords) == 1
-    value = matching_keywords[0].value
-    assert isinstance(value, ast.Tuple)
-    assert value.elts == []
+
+def test_training_config_rejects_unknown_input_format() -> None:
+    with pytest.raises(ValueError, match="PI05_INPUT_FORMAT"):
+        action_sequence_keys_for_input("unknown")
