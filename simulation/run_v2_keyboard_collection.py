@@ -567,6 +567,7 @@ def _record_and_execute_formal_action(
     task_id: str,
     episode_id: str,
     action_index: int,
+    bin_grasp_manager: Any | None = None,
 ) -> None:
     """Record one 100 ms command and execute its real 12 physics ticks."""
     tick = controller.physics_tick_index
@@ -577,7 +578,11 @@ def _record_and_execute_formal_action(
         chunk_id=f"{episode_id}-{action_index:06d}",
         physics_tick=tick,
     )
+    if bin_grasp_manager is not None:
+        bin_grasp_manager.before_action(action, arm_id=arm_id)
     controller.execute_action(action, arm_id=arm_id)
+    if bin_grasp_manager is not None:
+        bin_grasp_manager.after_action(action, arm_id=arm_id)
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -686,6 +691,7 @@ def main() -> int:
     bridge = None
     machine = None
     offline_gt_probe = None
+    bin_grasp_manager = None
     terminal_hold_requested = False
     terminal_success_report = None
     terminal_success_path: Path | None = None
@@ -848,6 +854,15 @@ def main() -> int:
             ),
             ik_backend=args.ik_backend,
         )
+        if preflight.task_id == "BIN01_TO_FINISHED01":
+            from simulation.bin_carry_grasp import (
+                BinCarryGraspManager,
+                UsdFixedJointBinCarryBackend,
+            )
+
+            bin_grasp_manager = BinCarryGraspManager(
+                UsdFixedJointBinCarryBackend(stage=stage, controller=controller)
+            )
         image_cas, recorder = create_recorder(preflight)
         publisher = IsaacRgbCasPublisher.from_scene_config(image_cas, config)
         rgb_pipeline = IsaacRgbObservationPipeline(
@@ -912,6 +927,7 @@ def main() -> int:
                     task_id=preflight.task_id,
                     episode_id=preflight.episode_id,
                     action_index=action_count,
+                    bin_grasp_manager=bin_grasp_manager,
                 )
                 action_count += 1
                 print(
@@ -1161,6 +1177,7 @@ def main() -> int:
                             task_id=preflight.task_id,
                             episode_id=preflight.episode_id,
                             action_index=action_count,
+                            bin_grasp_manager=bin_grasp_manager,
                         )
                         action_count += 1
                         if repeat_count > 1:
@@ -1168,9 +1185,34 @@ def main() -> int:
                                 f"GRIPPER SETTLE {repeat_index + 1}/{repeat_count} "
                                 f"actions={action_count}"
                             )
+                    grasp_status = ""
+                    if bin_grasp_manager is not None and command.key == "g":
+                        gripper_open = float(command.action.values[6]) >= 0.5
+                        if gripper_open:
+                            grasp_status = " | BIN GRASP RELEASED"
+                            print("BIN GRASP RELEASED")
+                        elif bin_grasp_manager.attached_arm == active_arm:
+                            grasp_status = " | BIN GRASP LOCKED"
+                            print(f"BIN GRASP LOCKED: {active_arm}")
+                        else:
+                            distance = bin_grasp_manager.diagnostics()[
+                                "last_attach_distance_m"
+                            ]
+                            distance_text = (
+                                "unknown"
+                                if distance is None
+                                else f"{float(distance) * 1000.0:.1f} mm"
+                            )
+                            grasp_status = " | GRASP NOT LOCKED"
+                            print(
+                                "GRASP NOT LOCKED: align the gripper with "
+                                f"BIN_CARRY_TCP (distance={distance_text}), "
+                                "open with G, reposition, then close with G"
+                            )
                     status_label.text = (
                         f"{machine.token.value} | arm={active_arm} | "
                         f"next={machine.next_part_id} | actions={action_count}"
+                        f"{grasp_status}"
                     )
                     print(f"ACTION {action_count} {active_arm}: {command.description}")
                 except BaseException:
@@ -1251,6 +1293,11 @@ def main() -> int:
                     if terminal_success_report is not None
                     else None
                 ),
+                "bin_grasp": (
+                    bin_grasp_manager.diagnostics()
+                    if bin_grasp_manager is not None
+                    else None
+                ),
             }
         )
         return 0
@@ -1279,6 +1326,12 @@ def main() -> int:
         )
         return 1
     finally:
+        if bin_grasp_manager is not None:
+            try:
+                result.setdefault("bin_grasp", bin_grasp_manager.diagnostics())
+                bin_grasp_manager.detach()
+            except BaseException as grasp_exc:
+                result.setdefault("bin_grasp_cleanup_error", repr(grasp_exc))
         if terminal_success_path is not None:
             result.setdefault("offline_gt_path", str(terminal_success_path))
         if terminal_success_report is not None:
