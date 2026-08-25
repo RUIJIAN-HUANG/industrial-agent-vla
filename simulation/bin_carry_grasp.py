@@ -176,11 +176,12 @@ class UsdFixedJointBinCarryBackend:
         self._hand_paths: dict[str, Any] = {}
 
     def _world_matrix(self, path: Any) -> Any:
-        from pxr import Usd, UsdGeom
+        from pxr import Sdf, Usd, UsdGeom
 
-        prim = self._stage.GetPrimAtPath(path)
+        sdf_path = Sdf.Path(str(path))
+        prim = self._stage.GetPrimAtPath(sdf_path)
         if not prim.IsValid():
-            raise RuntimeError(f"live grasp prim is missing: {path}")
+            raise RuntimeError(f"live grasp prim is missing: {sdf_path}")
         cache = UsdGeom.XformCache(Usd.TimeCode.Default())
         return cache.GetLocalToWorldTransform(prim)
 
@@ -235,7 +236,8 @@ class UsdFixedJointBinCarryBackend:
     def attach(self, arm_id: str) -> None:
         from pxr import Gf, Sdf, UsdPhysics
 
-        if self._stage.GetPrimAtPath(RUNTIME_JOINT_PATH).IsValid():
+        runtime_joint_path = Sdf.Path(RUNTIME_JOINT_PATH)
+        if self._stage.GetPrimAtPath(runtime_joint_path).IsValid():
             raise RuntimeError("Bin_01 runtime grasp joint already exists")
         hand_path = self._hand_path(arm_id)
         hand_world = self._world_matrix(hand_path)
@@ -245,8 +247,8 @@ class UsdFixedJointBinCarryBackend:
         translation = relative.GetTranslation()
         rotation = relative.GetRotation().GetQuat()
 
-        self._stage.DefinePrim(RUNTIME_SCOPE_PATH, "Scope")
-        joint = UsdPhysics.FixedJoint.Define(self._stage, RUNTIME_JOINT_PATH)
+        self._stage.DefinePrim(Sdf.Path(RUNTIME_SCOPE_PATH), "Scope")
+        joint = UsdPhysics.FixedJoint.Define(self._stage, runtime_joint_path)
         joint.CreateBody0Rel().SetTargets([hand_path])
         joint.CreateBody1Rel().SetTargets([Sdf.Path(BIN_PATH)])
         joint.CreateLocalPos0Attr().Set(
@@ -261,6 +263,7 @@ class UsdFixedJointBinCarryBackend:
     def detach(self) -> None:
         from pxr import Sdf
 
-        if self._stage.GetPrimAtPath(RUNTIME_JOINT_PATH).IsValid():
-            if not self._stage.RemovePrim(Sdf.Path(RUNTIME_JOINT_PATH)):
+        runtime_joint_path = Sdf.Path(RUNTIME_JOINT_PATH)
+        if self._stage.GetPrimAtPath(runtime_joint_path).IsValid():
+            if not self._stage.RemovePrim(runtime_joint_path):
                 raise RuntimeError("failed to remove Bin_01 runtime grasp joint")
