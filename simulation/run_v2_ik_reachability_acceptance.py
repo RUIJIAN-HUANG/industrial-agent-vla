@@ -197,11 +197,6 @@ def main() -> int:
         from isaacsim.core.api import World
         from isaacsim.core.prims import SingleArticulation
         from isaacsim.core.utils.types import ArticulationAction
-        from isaacsim.robot_motion.motion_generation import (
-            ArticulationKinematicsSolver,
-            LulaKinematicsSolver,
-            interface_config_loader,
-        )
 
         stage = isaac_compat.create_new_stage()
         franka_asset = isaac_compat.resolve_franka_asset(None)
@@ -250,6 +245,12 @@ def main() -> int:
         ik_records: list[dict[str, Any]] = []
         errors: list[str] = []
         if args.ik_backend == "lula":
+            from isaacsim.robot_motion.motion_generation import (
+                ArticulationKinematicsSolver,
+                LulaKinematicsSolver,
+                interface_config_loader,
+            )
+
             solvers: dict[str, Any] = {}
             for arm_id in ARM_IDS:
                 solver_config = (

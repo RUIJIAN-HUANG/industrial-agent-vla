@@ -9,6 +9,7 @@ import numpy as np
 from simulation.pink_franka_adapter import (
     PinkFrankaAdapter,
     _joint_indices,
+    _resolve_default_franka_urdf,
     _resolve_franka_mesh_root,
     _wxyz_rotation_matrix,
 )
@@ -151,6 +152,7 @@ class PinkFrankaAdapterMathTests(unittest.TestCase):
 
         class Controller:
             pink_configuration = Configuration()
+            isaac_lab_to_pink_ordering = np.arange(8, -1, -1)
 
         pink = object.__new__(PinkFrankaAdapter)
         pink._controllers = {"Arm_B": Controller()}
@@ -166,8 +168,29 @@ class PinkFrankaAdapterMathTests(unittest.TestCase):
         np.testing.assert_allclose(rotation, np.eye(3))
         np.testing.assert_allclose(
             pink._controllers["Arm_B"].pink_configuration.updated,
-            np.arange(7, dtype=float),
+            np.arange(8, -1, -1, dtype=float),
         )
+
+    def test_default_urdf_resolution_does_not_import_lula(self):
+        import unittest.mock
+
+        fake_origin = Path(
+            "C:/opt/isaacsim/exts/isaacsim.core.api/isaacsim/core/api/__init__.py"
+        )
+        fake_urdf = (
+            Path("C:/opt/isaacsim/exts")
+            / "isaacsim.robot_motion.motion_generation"
+            / "motion_policy_configs/franka/lula_franka_gen.urdf"
+        )
+        spec = unittest.mock.Mock(origin=str(fake_origin), submodule_search_locations=[])
+        with (
+            unittest.mock.patch(
+                "simulation.pink_franka_adapter.importlib.util.find_spec",
+                return_value=spec,
+            ),
+            unittest.mock.patch.object(Path, "is_file", return_value=True),
+        ):
+            self.assertEqual(Path(_resolve_default_franka_urdf()), fake_urdf)
 
 
 if __name__ == "__main__":

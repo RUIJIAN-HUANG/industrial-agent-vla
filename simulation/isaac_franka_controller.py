@@ -305,17 +305,6 @@ class IsaacSimFrankaController:
         if ik_backend not in {"lula", "pink"}:
             raise ValueError("ik_backend must be 'lula' or 'pink'")
 
-        try:
-            from isaacsim.robot_motion.motion_generation import (
-                ArticulationKinematicsSolver,
-                LulaKinematicsSolver,
-                interface_config_loader,
-            )
-        except ImportError as exc:
-            raise RuntimeError(
-                "Isaac Sim 5.1 Lula motion-generation extension is unavailable"
-            ) from exc
-
         self._world = world
         self._arms = dict(arms)
         self._physics_dt_s = float(physics_dt_s)
@@ -340,6 +329,79 @@ class IsaacSimFrankaController:
         self._tcp_offsets_local_m: dict[str, np.ndarray] = {}
         self._tcp_definitions: dict[str, dict[str, Any]] = {}
         self._last_motion_diagnostics: dict[str, dict[str, Any]] = {}
+
+        if getattr(self, "_ik_backend", "lula") == "pink":
+            # Loading Isaac Sim's Lula extension before Pinocchio corrupts the
+            # std::vector<std::string> Python binding in Isaac Sim 5.1.  Keep
+            # the Pink path completely independent from that native extension.
+            from simulation.pink_franka_adapter import PinkFrankaAdapter
+
+            self._pink_adapter = PinkFrankaAdapter(
+                arms=self._arms,
+                control_frame_name=end_effector_frame_name,
+                device=pink_device,
+            )
+            for arm_id, arm in self._arms.items():
+                current = np.asarray(arm.get_joint_positions(), dtype=float)
+                control_position, control_rotation = (
+                    self._pink_adapter.control_frame_pose_in_base(
+                        arm_id=arm_id,
+                        joint_positions=current,
+                    )
+                )
+                if virtual_tcp_fingertip_frame_names is None:
+                    self._tcp_offsets_local_m[arm_id] = np.zeros(3, dtype=float)
+                    self._tcp_definitions[arm_id] = {
+                        "mode": "pink_frame",
+                        "control_frame_name": end_effector_frame_name,
+                        "tcp_frame_name": end_effector_frame_name,
+                        "tcp_offset_local_m": [0.0, 0.0, 0.0],
+                    }
+                    continue
+                left_position, _ = self._pink_adapter.frame_pose_in_base(
+                    arm_id=arm_id,
+                    frame_name=virtual_tcp_fingertip_frame_names[0],
+                    joint_positions=current,
+                )
+                right_position, _ = self._pink_adapter.frame_pose_in_base(
+                    arm_id=arm_id,
+                    frame_name=virtual_tcp_fingertip_frame_names[1],
+                    joint_positions=current,
+                )
+                offset = _midpoint_tcp_offset_local(
+                    control_position_world_m=control_position,
+                    control_rotation_world=control_rotation,
+                    left_tip_world_m=left_position,
+                    right_tip_world_m=right_position,
+                )
+                separation_m = float(np.linalg.norm(left_position - right_position))
+                if not 0.0 < separation_m <= 0.20:
+                    raise RuntimeError(
+                        "Pink fingertip separation is invalid for virtual TCP: "
+                        f"{separation_m:.6f} m"
+                    )
+                self._tcp_offsets_local_m[arm_id] = offset
+                self._tcp_definitions[arm_id] = {
+                    "mode": "virtual_two_fingertip_midpoint",
+                    "control_frame_name": end_effector_frame_name,
+                    "fingertip_frame_names": list(
+                        virtual_tcp_fingertip_frame_names
+                    ),
+                    "tcp_offset_local_m": offset.tolist(),
+                    "calibration_fingertip_separation_m": separation_m,
+                }
+            return
+
+        try:
+            from isaacsim.robot_motion.motion_generation import (
+                ArticulationKinematicsSolver,
+                LulaKinematicsSolver,
+                interface_config_loader,
+            )
+        except ImportError as exc:
+            raise RuntimeError(
+                "Isaac Sim 5.1 Lula motion-generation extension is unavailable"
+            ) from exc
         for arm_id, arm in self._arms.items():
             config = (
                 interface_config_loader.load_supported_lula_kinematics_solver_config(
@@ -422,16 +484,6 @@ class IsaacSimFrankaController:
                 "calibration_fingertip_separation_m": separation_m,
             }
 
-        if self._ik_backend == "pink":
-            from simulation.pink_franka_adapter import PinkFrankaAdapter
-
-            self._pink_adapter = PinkFrankaAdapter(
-                arms=self._arms,
-                lula_configs=self._lula_configs,
-                control_frame_name=end_effector_frame_name,
-                device=pink_device,
-            )
-
     @property
     def ik_backend(self) -> str:
         """Return the selected live inverse-kinematics backend."""
@@ -509,13 +561,35 @@ class IsaacSimFrankaController:
             raise RuntimeError(f"unknown Isaac Franka arm: {arm_id!r}")
         arm = self._arms[arm_id]
         base_position, base_orientation = arm.get_world_pose()
-        self._lula_solvers[arm_id].set_robot_base_pose(
-            np.asarray(base_position, dtype=float),
-            np.asarray(base_orientation, dtype=float),
-        )
-        control_position, rotation = self._solvers[arm_id].compute_end_effector_pose()
-        control_position = np.asarray(control_position, dtype=float)
-        rotation = np.asarray(rotation, dtype=float)
+        base_position = np.asarray(base_position, dtype=float)
+        base_orientation = np.asarray(base_orientation, dtype=float)
+        if getattr(self, "_ik_backend", "lula") == "pink":
+            current = np.asarray(arm.get_joint_positions(), dtype=float)
+            control_position_base, rotation_base = (
+                self._pink_adapter.control_frame_pose_in_base(
+                    arm_id=arm_id,
+                    joint_positions=current,
+                )
+            )
+            control_position = base_position + _rotate_vector(
+                base_orientation, control_position_base
+            )
+            rotation = np.column_stack(
+                [
+                    _rotate_vector(base_orientation, rotation_base[:, index])
+                    for index in range(3)
+                ]
+            )
+        else:
+            self._lula_solvers[arm_id].set_robot_base_pose(
+                base_position,
+                base_orientation,
+            )
+            control_position, rotation = (
+                self._solvers[arm_id].compute_end_effector_pose()
+            )
+            control_position = np.asarray(control_position, dtype=float)
+            rotation = np.asarray(rotation, dtype=float)
         if (
             control_position.shape != (3,)
             or not np.all(np.isfinite(control_position))
@@ -774,8 +848,8 @@ class IsaacSimFrankaController:
                     "Isaac Franka controller rejected action after safe-stop"
                 )
             arm = self._arms[arm_id]
-            solver = self._solvers[arm_id]
-            lula_solver = self._lula_solvers[arm_id]
+            solver = self._solvers.get(arm_id)
+            lula_solver = self._lula_solvers.get(arm_id)
             translation = np.asarray(action.values[:3], dtype=float)
             rotation = np.asarray(action.values[3:6], dtype=float)
             control_ticks = self._multi_rate.control_ticks_for_duration_ms(
@@ -789,21 +863,10 @@ class IsaacSimFrankaController:
             base_position, base_orientation = arm.get_world_pose()
             base_position = np.asarray(base_position, dtype=float)
             base_orientation = np.asarray(base_orientation, dtype=float)
-            # Lula assumes its robot base is at the world origin unless this pose is
-            # refreshed.  The frozen scene places two Frankas away from the origin,
-            # so omitting it produces valid-looking but incorrect IK targets.
-            lula_solver.set_robot_base_pose(base_position, base_orientation)
-            control_position, current_rotation = solver.compute_end_effector_pose()
-            control_position = np.asarray(control_position, dtype=float)
-            current_rotation = np.asarray(current_rotation, dtype=float)
             tcp_offset_local = getattr(self, "_tcp_offsets_local_m", {}).get(
                 arm_id, np.zeros(3, dtype=float)
             )
-            current_position = _virtual_tcp_world_position(
-                control_position,
-                current_rotation,
-                tcp_offset_local,
-            )
+            current_position, current_rotation = self.end_effector_pose(arm_id)
             current_orientation = _rotation_matrix_to_quaternion(current_rotation)
             try:
                 from isaacsim.core.utils.types import ArticulationAction
@@ -883,6 +946,11 @@ class IsaacSimFrankaController:
                         ),
                     )
                 else:
+                    if solver is None or lula_solver is None:
+                        raise RuntimeError(f"Lula solver is unavailable for {arm_id}")
+                    lula_solver.set_robot_base_pose(
+                        base_position, base_orientation
+                    )
                     ik_action, success = solver.compute_inverse_kinematics(
                         target_position,
                         target_orientation,

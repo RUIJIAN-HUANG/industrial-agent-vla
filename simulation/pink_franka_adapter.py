@@ -8,6 +8,7 @@ Isaac Lab/Pink must be imported after the SimulationApp has started.
 
 from __future__ import annotations
 
+import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Mapping
@@ -75,6 +76,31 @@ def _resolve_franka_mesh_root(urdf_path: str) -> str:
     )
 
 
+def _resolve_default_franka_urdf() -> str:
+    """Find Lula's Franka URDF without importing its conflicting extension."""
+
+    spec = importlib.util.find_spec("isaacsim.core.api")
+    origins = [] if spec is None else [spec.origin, *list(spec.submodule_search_locations or [])]
+    relative = (
+        Path("isaacsim.robot_motion.motion_generation")
+        / "motion_policy_configs"
+        / "franka"
+        / "lula_franka_gen.urdf"
+    )
+    for origin in origins:
+        if origin is None:
+            continue
+        for parent in Path(origin).resolve().parents:
+            if parent.name != "exts":
+                continue
+            candidate = parent / relative
+            if candidate.is_file():
+                return str(candidate)
+    raise RuntimeError(
+        "Could not locate the Isaac Sim Franka URDF without importing Lula"
+    )
+
+
 # Safety envelope for one canonical keyboard action.  The Pink controller is
 # iterated predictively below because its native output is one differential
 # update.  Without an envelope, those differential updates can accumulate into
@@ -89,7 +115,7 @@ class PinkFrankaAdapter:
         self,
         *,
         arms: Mapping[str, Any],
-        lula_configs: Mapping[str, Mapping[str, Any]],
+        lula_configs: Mapping[str, Mapping[str, Any]] | None = None,
         control_frame_name: str,
         device: str = "cuda:0",
     ) -> None:
@@ -113,11 +139,18 @@ class PinkFrankaAdapter:
         self._control_frame_names: dict[str, str] = {}
         self._controlled_indices: dict[str, list[int]] = {}
         self._diagnostics: dict[str, dict[str, Any]] = {}
+        default_urdf_path = None
+        if lula_configs is None:
+            default_urdf_path = _resolve_default_franka_urdf()
 
         for arm_id, arm in arms.items():
             names = [str(name) for name in arm.dof_names]
             indices = _joint_indices(names)
-            urdf_path = str(lula_configs[arm_id].get("urdf_path", ""))
+            urdf_path = (
+                str(lula_configs[arm_id].get("urdf_path", ""))
+                if lula_configs is not None
+                else str(default_urdf_path)
+            )
             if not urdf_path:
                 raise RuntimeError(f"Lula supplied no Franka URDF path for {arm_id}")
 
@@ -235,15 +268,41 @@ class PinkFrankaAdapter:
         if not indices or max(indices) >= current.size:
             raise ValueError("joint_positions does not cover controlled joints")
 
-        configuration = getattr(
-            self._controllers[arm_id], "pink_configuration", None
+        return self.frame_pose_in_base(
+            arm_id=arm_id,
+            frame_name=self._control_frame_names[arm_id],
+            joint_positions=current,
         )
+
+    def frame_pose_in_base(
+        self,
+        *,
+        arm_id: str,
+        frame_name: str,
+        joint_positions: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Return any Pink frame pose for a virtual full articulation state."""
+
+        current = np.asarray(joint_positions, dtype=float)
+        indices = self._controlled_indices[arm_id]
+        if current.ndim != 1 or not np.all(np.isfinite(current)):
+            raise ValueError("joint_positions must be a finite vector")
+        if not indices or max(indices) >= current.size:
+            raise ValueError("joint_positions does not cover controlled joints")
+        controller = self._controllers[arm_id]
+        configuration = getattr(controller, "pink_configuration", None)
         if configuration is None:
             raise RuntimeError(f"Pink configuration is unavailable for {arm_id}")
-        configuration.update(current[indices])
-        transform = configuration.get_transform_frame_to_world(
-            self._control_frame_names[arm_id]
+        ordering = np.asarray(
+            getattr(controller, "isaac_lab_to_pink_ordering", range(current.size)),
+            dtype=int,
         )
+        if ordering.shape != (current.size,) or set(ordering.tolist()) != set(
+            range(current.size)
+        ):
+            raise RuntimeError(f"Pink joint ordering is invalid for {arm_id}")
+        configuration.update(current[ordering])
+        transform = configuration.get_transform_frame_to_world(frame_name)
         position = np.asarray(transform.translation, dtype=float)
         rotation = np.asarray(transform.rotation, dtype=float)
         if (
