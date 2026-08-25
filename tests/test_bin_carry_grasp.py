@@ -4,6 +4,7 @@ import pytest
 
 from simulation.bin_carry_grasp import (
     BinCarryGraspManager,
+    UsdFixedJointBinCarryBackend,
     distance_m,
     follow_error_m,
 )
@@ -108,3 +109,33 @@ def test_other_arm_cannot_move_an_attached_bin() -> None:
 
     with pytest.raises(RuntimeError, match="attached to Arm_A, not Arm_B"):
         manager.after_action(_CLOSED, arm_id="Arm_B")
+
+
+def test_live_prim_resolution_uses_stage_owned_paths() -> None:
+    class _Path:
+        def __init__(self, value: str) -> None:
+            self.value = value
+
+        def __str__(self) -> str:
+            return self.value
+
+    class _Prim:
+        def __init__(self, path: str) -> None:
+            self.path = _Path(path)
+
+        def GetPath(self) -> _Path:
+            return self.path
+
+    class _Stage:
+        def __init__(self) -> None:
+            self.prims = [_Prim("/World/Bins/Bin_01")]
+
+        def Traverse(self) -> list[_Prim]:
+            return self.prims
+
+        def GetPrimAtPath(self, _path: object) -> None:
+            raise AssertionError("cross-ABI GetPrimAtPath must not be used")
+
+    backend = UsdFixedJointBinCarryBackend(stage=_Stage(), controller=object())
+    prim = backend._prim_at("/World/Bins/Bin_01")
+    assert str(prim.GetPath()) == "/World/Bins/Bin_01"

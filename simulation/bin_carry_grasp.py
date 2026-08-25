@@ -175,13 +175,26 @@ class UsdFixedJointBinCarryBackend:
         self._controller = controller
         self._hand_paths: dict[str, Any] = {}
 
-    def _world_matrix(self, path: Any) -> Any:
-        from pxr import Sdf, Usd, UsdGeom
+    def _prim_at(self, path: Any) -> Any:
+        """Resolve through traversal so the returned path uses the stage ABI.
 
-        sdf_path = Sdf.Path(str(path))
-        prim = self._stage.GetPrimAtPath(sdf_path)
-        if not prim.IsValid():
-            raise RuntimeError(f"live grasp prim is missing: {sdf_path}")
+        The approved Linux environment loads Isaac's OpenUSD alongside Pink's
+        native dependencies.  Constructing ``Sdf.Path`` in Python can therefore
+        produce an object from a different OpenUSD ABI than the live stage.
+        Prim objects and paths returned by ``stage.Traverse()`` are guaranteed
+        to belong to the live stage's ABI.
+        """
+
+        expected = str(path)
+        for prim in self._stage.Traverse():
+            if str(prim.GetPath()) == expected:
+                return prim
+        raise RuntimeError(f"live grasp prim is missing: {expected}")
+
+    def _world_matrix(self, path: Any) -> Any:
+        from pxr import Usd, UsdGeom
+
+        prim = self._prim_at(path)
         cache = UsdGeom.XformCache(Usd.TimeCode.Default())
         return cache.GetLocalToWorldTransform(prim)
 
@@ -200,16 +213,16 @@ class UsdFixedJointBinCarryBackend:
         return self._world_position(HANDLE_TCP_PATH)
 
     def _hand_path(self, arm_id: str) -> Any:
-        from pxr import Sdf, UsdPhysics
+        from pxr import UsdPhysics
 
         cached = self._hand_paths.get(arm_id)
         if cached is not None:
             return cached
-        root = Sdf.Path(f"/World/Robots/{arm_id}")
+        root = f"/World/Robots/{arm_id}/"
         candidates = []
         for prim in self._stage.Traverse():
             path = prim.GetPath()
-            if not path.HasPrefix(root) or prim.GetName() != "panda_hand":
+            if not str(path).startswith(root) or prim.GetName() != "panda_hand":
                 continue
             candidates.append(prim)
             if prim.HasAPI(UsdPhysics.RigidBodyAPI):
@@ -234,12 +247,16 @@ class UsdFixedJointBinCarryBackend:
         )
 
     def attach(self, arm_id: str) -> None:
-        from pxr import Gf, Sdf, UsdPhysics
+        from pxr import Gf, UsdPhysics
 
-        runtime_joint_path = Sdf.Path(RUNTIME_JOINT_PATH)
-        if self._stage.GetPrimAtPath(runtime_joint_path).IsValid():
+        try:
+            self._prim_at(RUNTIME_JOINT_PATH)
+        except RuntimeError:
+            pass
+        else:
             raise RuntimeError("Bin_01 runtime grasp joint already exists")
         hand_path = self._hand_path(arm_id)
+        bin_path = self._prim_at(BIN_PATH).GetPath()
         hand_world = self._world_matrix(hand_path)
         bin_world = self._world_matrix(BIN_PATH)
         bin_in_hand = bin_world * hand_world.GetInverse()
@@ -247,10 +264,10 @@ class UsdFixedJointBinCarryBackend:
         translation = relative.GetTranslation()
         rotation = relative.GetRotation().GetQuat()
 
-        self._stage.DefinePrim(Sdf.Path(RUNTIME_SCOPE_PATH), "Scope")
-        joint = UsdPhysics.FixedJoint.Define(self._stage, runtime_joint_path)
+        self._stage.DefinePrim(RUNTIME_SCOPE_PATH, "Scope")
+        joint = UsdPhysics.FixedJoint.Define(self._stage, RUNTIME_JOINT_PATH)
         joint.CreateBody0Rel().SetTargets([hand_path])
-        joint.CreateBody1Rel().SetTargets([Sdf.Path(BIN_PATH)])
+        joint.CreateBody1Rel().SetTargets([bin_path])
         joint.CreateLocalPos0Attr().Set(
             Gf.Vec3f(
                 float(translation[0]), float(translation[1]), float(translation[2])
@@ -261,9 +278,9 @@ class UsdFixedJointBinCarryBackend:
         joint.CreateLocalRot1Attr().Set(Gf.Quatf(1.0, Gf.Vec3f(0.0, 0.0, 0.0)))
 
     def detach(self) -> None:
-        from pxr import Sdf
-
-        runtime_joint_path = Sdf.Path(RUNTIME_JOINT_PATH)
-        if self._stage.GetPrimAtPath(runtime_joint_path).IsValid():
-            if not self._stage.RemovePrim(runtime_joint_path):
-                raise RuntimeError("failed to remove Bin_01 runtime grasp joint")
+        try:
+            runtime_joint = self._prim_at(RUNTIME_JOINT_PATH)
+        except RuntimeError:
+            return
+        if not self._stage.RemovePrim(runtime_joint.GetPath()):
+            raise RuntimeError("failed to remove Bin_01 runtime grasp joint")
