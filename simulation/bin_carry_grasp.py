@@ -170,26 +170,60 @@ class BinCarryGraspManager:
 class UsdFixedJointBinCarryBackend:
     """Author a temporary fixed joint while preserving the current world poses."""
 
-    def __init__(self, *, stage: Any, controller: Any) -> None:
+    def __init__(
+        self,
+        *,
+        stage: Any,
+        controller: Any,
+        get_prim_at_path: Any | None = None,
+        define_prim: Any | None = None,
+        delete_prim: Any | None = None,
+        set_prim_property: Any | None = None,
+        set_targets: Any | None = None,
+    ) -> None:
+        if any(
+            helper is None
+            for helper in (
+                get_prim_at_path,
+                define_prim,
+                delete_prim,
+                set_prim_property,
+                set_targets,
+            )
+        ):
+            from isaacsim.core.utils.prims import (
+                define_prim as isaac_define_prim,
+                delete_prim as isaac_delete_prim,
+                get_prim_at_path as isaac_get_prim_at_path,
+                set_prim_property as isaac_set_prim_property,
+                set_targets as isaac_set_targets,
+            )
+
+            get_prim_at_path = get_prim_at_path or isaac_get_prim_at_path
+            define_prim = define_prim or isaac_define_prim
+            delete_prim = delete_prim or isaac_delete_prim
+            set_prim_property = set_prim_property or isaac_set_prim_property
+            set_targets = set_targets or isaac_set_targets
         self._stage = stage
         self._controller = controller
-        self._hand_paths: dict[str, Any] = {}
+        self._get_prim_at_path = get_prim_at_path
+        self._define_prim = define_prim
+        self._delete_prim = delete_prim
+        self._set_prim_property = set_prim_property
+        self._set_targets = set_targets
+        self._hand_paths: dict[str, str] = {}
 
-    def _prim_at(self, path: Any) -> Any:
-        """Resolve through traversal so the returned path uses the stage ABI.
+    def _prim_at(self, path: str) -> Any:
+        """Resolve a live prim without calling ABI-sensitive UsdStage methods."""
 
-        The approved Linux environment loads Isaac's OpenUSD alongside Pink's
-        native dependencies.  Constructing ``Sdf.Path`` in Python can therefore
-        produce an object from a different OpenUSD ABI than the live stage.
-        Prim objects and paths returned by ``stage.Traverse()`` are guaranteed
-        to belong to the live stage's ABI.
-        """
+        prim = self._get_prim_at_path(path)
+        if not prim or not prim.IsValid():
+            raise RuntimeError(f"live grasp prim is missing: {path}")
+        return prim
 
-        expected = str(path)
-        for prim in self._stage.Traverse():
-            if str(prim.GetPath()) == expected:
-                return prim
-        raise RuntimeError(f"live grasp prim is missing: {expected}")
+    def _prim_exists(self, path: str) -> bool:
+        prim = self._get_prim_at_path(path)
+        return bool(prim and prim.IsValid())
 
     def _world_matrix(self, path: Any) -> Any:
         from pxr import Usd, UsdGeom
@@ -212,27 +246,22 @@ class UsdFixedJointBinCarryBackend:
     def handle_position(self) -> list[float]:
         return self._world_position(HANDLE_TCP_PATH)
 
-    def _hand_path(self, arm_id: str) -> Any:
-        from pxr import UsdPhysics
-
+    def _hand_path(self, arm_id: str) -> str:
         cached = self._hand_paths.get(arm_id)
         if cached is not None:
             return cached
-        root = f"/World/Robots/{arm_id}/"
-        candidates = []
-        for prim in self._stage.Traverse():
-            path = prim.GetPath()
-            if not str(path).startswith(root) or prim.GetName() != "panda_hand":
-                continue
-            candidates.append(prim)
-            if prim.HasAPI(UsdPhysics.RigidBodyAPI):
+        candidates = (
+            f"/World/Robots/{arm_id}/panda_hand",
+            f"/World/Robots/{arm_id}/franka/panda_hand",
+            f"/World/Robots/{arm_id}/panda_link0/panda_hand",
+        )
+        for path in candidates:
+            if self._prim_exists(path):
                 self._hand_paths[arm_id] = path
                 return path
-        if len(candidates) == 1:
-            path = candidates[0].GetPath()
-            self._hand_paths[arm_id] = path
-            return path
-        raise RuntimeError(f"could not resolve one panda_hand rigid body for {arm_id}")
+        raise RuntimeError(
+            f"could not resolve panda_hand for {arm_id}; checked {list(candidates)}"
+        )
 
     @staticmethod
     def _quatf(value: Any) -> Any:
@@ -247,16 +276,12 @@ class UsdFixedJointBinCarryBackend:
         )
 
     def attach(self, arm_id: str) -> None:
-        from pxr import Gf, UsdPhysics
+        from pxr import Gf
 
-        try:
-            self._prim_at(RUNTIME_JOINT_PATH)
-        except RuntimeError:
-            pass
-        else:
+        if self._prim_exists(RUNTIME_JOINT_PATH):
             raise RuntimeError("Bin_01 runtime grasp joint already exists")
         hand_path = self._hand_path(arm_id)
-        bin_path = self._prim_at(BIN_PATH).GetPath()
+        self._prim_at(BIN_PATH)
         hand_world = self._world_matrix(hand_path)
         bin_world = self._world_matrix(BIN_PATH)
         bin_in_hand = bin_world * hand_world.GetInverse()
@@ -264,23 +289,32 @@ class UsdFixedJointBinCarryBackend:
         translation = relative.GetTranslation()
         rotation = relative.GetRotation().GetQuat()
 
-        self._stage.DefinePrim(RUNTIME_SCOPE_PATH, "Scope")
-        joint = UsdPhysics.FixedJoint.Define(self._stage, RUNTIME_JOINT_PATH)
-        joint.CreateBody0Rel().SetTargets([hand_path])
-        joint.CreateBody1Rel().SetTargets([bin_path])
-        joint.CreateLocalPos0Attr().Set(
+        if not self._prim_exists(RUNTIME_SCOPE_PATH):
+            self._define_prim(RUNTIME_SCOPE_PATH, prim_type="Scope")
+        joint_prim = self._define_prim(
+            RUNTIME_JOINT_PATH, prim_type="PhysicsFixedJoint"
+        )
+        self._set_targets(joint_prim, "physics:body0", [hand_path])
+        self._set_targets(joint_prim, "physics:body1", [BIN_PATH])
+        self._set_prim_property(
+            RUNTIME_JOINT_PATH,
+            "physics:localPos0",
             Gf.Vec3f(
                 float(translation[0]), float(translation[1]), float(translation[2])
-            )
+            ),
         )
-        joint.CreateLocalRot0Attr().Set(self._quatf(rotation))
-        joint.CreateLocalPos1Attr().Set(Gf.Vec3f(0.0, 0.0, 0.0))
-        joint.CreateLocalRot1Attr().Set(Gf.Quatf(1.0, Gf.Vec3f(0.0, 0.0, 0.0)))
+        self._set_prim_property(
+            RUNTIME_JOINT_PATH, "physics:localRot0", self._quatf(rotation)
+        )
+        self._set_prim_property(
+            RUNTIME_JOINT_PATH, "physics:localPos1", Gf.Vec3f(0.0, 0.0, 0.0)
+        )
+        self._set_prim_property(
+            RUNTIME_JOINT_PATH,
+            "physics:localRot1",
+            Gf.Quatf(1.0, Gf.Vec3f(0.0, 0.0, 0.0)),
+        )
 
     def detach(self) -> None:
-        try:
-            runtime_joint = self._prim_at(RUNTIME_JOINT_PATH)
-        except RuntimeError:
-            return
-        if not self._stage.RemovePrim(runtime_joint.GetPath()):
-            raise RuntimeError("failed to remove Bin_01 runtime grasp joint")
+        if self._prim_exists(RUNTIME_JOINT_PATH):
+            self._delete_prim(RUNTIME_JOINT_PATH)

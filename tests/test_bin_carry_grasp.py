@@ -111,31 +111,33 @@ def test_other_arm_cannot_move_an_attached_bin() -> None:
         manager.after_action(_CLOSED, arm_id="Arm_B")
 
 
-def test_live_prim_resolution_uses_stage_owned_paths() -> None:
-    class _Path:
-        def __init__(self, value: str) -> None:
-            self.value = value
-
-        def __str__(self) -> str:
-            return self.value
-
+def test_live_prim_resolution_uses_isaac_public_utility() -> None:
     class _Prim:
-        def __init__(self, path: str) -> None:
-            self.path = _Path(path)
-
-        def GetPath(self) -> _Path:
-            return self.path
+        def IsValid(self) -> bool:
+            return True
 
     class _Stage:
-        def __init__(self) -> None:
-            self.prims = [_Prim("/World/Bins/Bin_01")]
-
-        def Traverse(self) -> list[_Prim]:
-            return self.prims
-
         def GetPrimAtPath(self, _path: object) -> None:
             raise AssertionError("cross-ABI GetPrimAtPath must not be used")
 
-    backend = UsdFixedJointBinCarryBackend(stage=_Stage(), controller=object())
+        def Traverse(self) -> None:
+            raise AssertionError("cross-ABI Traverse must not be used")
+
+    calls: list[str] = []
+
+    def get_prim_at_path(path: str) -> _Prim:
+        calls.append(path)
+        return _Prim()
+
+    backend = UsdFixedJointBinCarryBackend(
+        stage=_Stage(),
+        controller=object(),
+        get_prim_at_path=get_prim_at_path,
+        define_prim=lambda *_args, **_kwargs: None,
+        delete_prim=lambda *_args, **_kwargs: None,
+        set_prim_property=lambda *_args, **_kwargs: None,
+        set_targets=lambda *_args, **_kwargs: None,
+    )
     prim = backend._prim_at("/World/Bins/Bin_01")
-    assert str(prim.GetPath()) == "/World/Bins/Bin_01"
+    assert prim.IsValid()
+    assert calls == ["/World/Bins/Bin_01"]
