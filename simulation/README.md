@@ -222,3 +222,30 @@ simulation/generated/single_bin_scene_v1.usda
 
 最终 Docker 不应依赖比赛现场联网下载 Franka 资产。发布前应在断网环境重新打开
 生成的 USD，并检查两台 Articulation、外部引用和三台相机都完整。
+
+## π0.5 Isaac 闭环评测入口
+
+角色 E 的闭环入口为 `run_pi05_isaac_closed_loop.py`。它复用三相机 CAS
+观测管线、`Pi05Adapter`、7D `ActionSafetyValidator` 和
+`IsaacExecutionEnvironment`，每轮执行：
+
+```text
+Isaac RGB/CAS observation → POST /v1/infer → action_chunk[N,7]
+→ safety validation → Isaac step → fresh observation
+```
+
+运行前必须启动 π0.5 HTTP 服务，并在 `configs/agent.default.json` 中填入真实
+checkpoint/norm-stats SHA。示例命令：
+
+```powershell
+python simulation/run_pi05_isaac_closed_loop.py `
+  --agent-config configs/agent.default.json `
+  --task configs/task.single_bin.pack-handoff.example.json `
+  --max-steps 1 `
+  --headless
+```
+
+`--max-steps` 控制闭环动作预算；`CLOSED_LOOP_PASS` 只表示观测、推理、7D
+动作、安全执行和重新观测链路完成，不等同于任务终端成功。只有在线任务状态
+报告 `bin_at_finished=true` 时才会返回 `TASK_SUCCEEDED`。旧版 DROID 8D
+Runner 不属于当前入口，禁止接入此 7D 合同。
