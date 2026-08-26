@@ -254,6 +254,22 @@ def test_probe_rejects_non_frozen_subtask_id() -> None:
         )
 
 
+@pytest.mark.parametrize("subtask_id", ["P01_TO_S11", "W01_TO_S14"])
+def test_probe_accepts_formal_v2_curriculum_subtask_ids(subtask_id: str) -> None:
+    perception = RecordingYolo()
+
+    summary = probe_yolo_cameras(
+        _observation(),
+        perception,
+        run_id="run-v2",
+        task_id=subtask_id,
+        subtask_id=subtask_id,
+    )
+
+    assert summary["status"] == "ok"
+    assert {call.subtask_id for call in perception.calls} == {subtask_id}
+
+
 def test_probe_durably_appends_one_json_line_after_complete_success(
     tmp_path: Path,
 ) -> None:
