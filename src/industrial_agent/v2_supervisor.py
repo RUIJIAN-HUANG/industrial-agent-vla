@@ -70,7 +70,9 @@ class V2TaskPlanner:
         if task.target_object != spec.target_object:
             raise ValueError("task target_object does not match the frozen V2 catalog")
         if task.target_location != spec.target_slot:
-            raise ValueError("task target_location does not match the frozen V2 catalog")
+            raise ValueError(
+                "task target_location does not match the frozen V2 catalog"
+            )
         if task.metadata.get("profile_id") != V2_PROFILE_ID:
             raise ValueError(f"task metadata.profile_id must be {V2_PROFILE_ID!r}")
         if task.constraints.get("scene_id") != V2_SCENE_ID:
@@ -142,7 +144,9 @@ class V2Supervisor:
         if config.get("scene_id") != V2_SCENE_ID:
             raise ValueError(f"V2 config scene_id must be {V2_SCENE_ID!r}")
         if frozenset(config.get("formal_task_ids", ())) != V2_FORMAL_TASK_IDS:
-            raise ValueError("V2 config formal_task_ids do not match the frozen catalog")
+            raise ValueError(
+                "V2 config formal_task_ids do not match the frozen catalog"
+            )
         verification = config.get("verification")
         recovery = config.get("recovery")
         if not isinstance(verification, Mapping) or not isinstance(recovery, Mapping):
@@ -163,11 +167,20 @@ class V2Supervisor:
         run_id = f"v2-run-{uuid4().hex}"
         if not self._run_lock.acquire(blocking=False):
             busy_fsm = AgentFSM()
-            busy_fsm.transition(AgentState.VALIDATING_TASK, "check V2 Supervisor availability")
+            busy_fsm.transition(
+                AgentState.VALIDATING_TASK, "check V2 Supervisor availability"
+            )
             busy_fsm.transition(AgentState.FAILED, "V2 Supervisor is already running")
             return self._result(
-                run_id, task.task_id, busy_fsm, False, FailureCode.AGENT_BUSY,
-                "V2 Supervisor is already running", None, (), ("NONE",),
+                run_id,
+                task.task_id,
+                busy_fsm,
+                False,
+                FailureCode.AGENT_BUSY,
+                "V2 Supervisor is already running",
+                None,
+                (),
+                ("NONE",),
             )
         fsm = AgentFSM()
         gateway = V2ObservationGateway()
@@ -181,18 +194,35 @@ class V2Supervisor:
                 plan = self.planner.plan(task, run_id)
             except (AgentError, TypeError, ValueError) as exc:
                 fsm.transition(AgentState.FAILED, "V2 task validation failed")
-                code = exc.code if isinstance(exc, AgentError) else FailureCode.INVALID_TASK
+                code = (
+                    exc.code
+                    if isinstance(exc, AgentError)
+                    else FailureCode.INVALID_TASK
+                )
                 return self._result(
-                    run_id, task.task_id, fsm, False, code, str(exc), plan,
-                    executor_history, token_history,
+                    run_id,
+                    task.task_id,
+                    fsm,
+                    False,
+                    code,
+                    str(exc),
+                    plan,
+                    executor_history,
+                    token_history,
                 )
             fsm.transition(AgentState.PLANNING, "V2 task mapped to pi05/Arm_A")
             if not self.executor.health():
                 fsm.transition(AgentState.FAILED, "pi05 health check failed")
                 return self._result(
-                    run_id, task.task_id, fsm, False,
-                    FailureCode.EXECUTOR_UNAVAILABLE, "π0.5 is not ready", plan,
-                    executor_history, token_history,
+                    run_id,
+                    task.task_id,
+                    fsm,
+                    False,
+                    FailureCode.EXECUTOR_UNAVAILABLE,
+                    "π0.5 is not ready",
+                    plan,
+                    executor_history,
+                    token_history,
                 )
             fsm.transition(AgentState.OBSERVING, "read initial V2 observation")
             try:
@@ -202,15 +232,28 @@ class V2Supervisor:
                     if safety_failure:
                         code, reason = safety_failure
                         return self._stop_result(
-                            environment, run_id, task.task_id, fsm, code, reason,
-                            plan, executor_history, token_history,
+                            environment,
+                            run_id,
+                            task.task_id,
+                            fsm,
+                            code,
+                            reason,
+                            plan,
+                            executor_history,
+                            token_history,
                         )
                     terminal, terminal_failure = self._terminal_state(observation, task)
                     if terminal_failure:
                         return self._stop_result(
-                            environment, run_id, task.task_id, fsm,
-                            FailureCode.POSTCONDITION_FAILED, terminal_failure,
-                            plan, executor_history, token_history,
+                            environment,
+                            run_id,
+                            task.task_id,
+                            fsm,
+                            FailureCode.POSTCONDITION_FAILED,
+                            terminal_failure,
+                            plan,
+                            executor_history,
+                            token_history,
                         )
                     if terminal:
                         verified, verify_message = self._verify_terminal_window(
@@ -218,21 +261,38 @@ class V2Supervisor:
                         )
                         if not verified:
                             return self._stop_result(
-                                environment, run_id, task.task_id, fsm,
+                                environment,
+                                run_id,
+                                task.task_id,
+                                fsm,
                                 FailureCode.VERIFICATION_UNCERTAIN,
-                                verify_message, plan, executor_history, token_history,
+                                verify_message,
+                                plan,
+                                executor_history,
+                                token_history,
                             )
-                        fsm.transition(AgentState.SUCCEEDED, "V2 terminal evidence accepted")
+                        fsm.transition(
+                            AgentState.SUCCEEDED, "V2 terminal evidence accepted"
+                        )
                         plan.subtasks[0].status = SubtaskStatus.VERIFIED
                         token_history.append("NONE")
                         return self._result(
-                            run_id, task.task_id, fsm, True, FailureCode.NONE,
-                            "V2 task completed", plan, executor_history, token_history,
+                            run_id,
+                            task.task_id,
+                            fsm,
+                            True,
+                            FailureCode.NONE,
+                            "V2 task completed",
+                            plan,
+                            executor_history,
+                            token_history,
                         )
 
                     fsm.transition(AgentState.ASSIGNING_ROLE, "grant A_ONLY to pi05")
                     token_history.append(V2_CONTROL_TOKEN)
-                    fsm.transition(AgentState.EXECUTING, "request and execute one 7D action")
+                    fsm.transition(
+                        AgentState.EXECUTING, "request and execute one 7D action"
+                    )
                     context = ExecutionContext(
                         run_id=run_id,
                         strategy_attempt=0,
@@ -244,12 +304,22 @@ class V2Supervisor:
                     chunk = self.executor.plan(task, observation, context)
                     executor_history.append("pi05")
                     decision = self.safety.validate_and_limit(
-                        chunk, observation, arm_id="Arm_A", control_token=V2_CONTROL_TOKEN
+                        chunk,
+                        observation,
+                        arm_id="Arm_A",
+                        control_token=V2_CONTROL_TOKEN,
                     )
                     if not decision.accepted or decision.chunk is None:
                         return self._stop_result(
-                            environment, run_id, task.task_id, fsm, decision.code,
-                            decision.reason, plan, executor_history, token_history,
+                            environment,
+                            run_id,
+                            task.task_id,
+                            fsm,
+                            decision.code,
+                            decision.reason,
+                            plan,
+                            executor_history,
+                            token_history,
                         )
                     action = decision.chunk.steps[0]
                     motion_started = True
@@ -267,9 +337,15 @@ class V2Supervisor:
                     terminal, terminal_failure = self._terminal_state(observation, task)
                     if terminal_failure:
                         return self._stop_result(
-                            environment, run_id, task.task_id, fsm,
-                            FailureCode.POSTCONDITION_FAILED, terminal_failure,
-                            plan, executor_history, token_history,
+                            environment,
+                            run_id,
+                            task.task_id,
+                            fsm,
+                            FailureCode.POSTCONDITION_FAILED,
+                            terminal_failure,
+                            plan,
+                            executor_history,
+                            token_history,
                         )
                     if terminal:
                         verified, verify_message = self._verify_terminal_window(
@@ -277,38 +353,88 @@ class V2Supervisor:
                         )
                         if not verified:
                             return self._stop_result(
-                                environment, run_id, task.task_id, fsm,
+                                environment,
+                                run_id,
+                                task.task_id,
+                                fsm,
                                 FailureCode.VERIFICATION_UNCERTAIN,
-                                verify_message, plan, executor_history, token_history,
+                                verify_message,
+                                plan,
+                                executor_history,
+                                token_history,
                             )
-                        fsm.transition(AgentState.SUCCEEDED, "V2 terminal evidence accepted")
+                        fsm.transition(
+                            AgentState.SUCCEEDED, "V2 terminal evidence accepted"
+                        )
                         plan.subtasks[0].status = SubtaskStatus.VERIFIED
                         return self._result(
-                            run_id, task.task_id, fsm, True, FailureCode.NONE,
-                            "V2 task completed", plan, executor_history, token_history,
+                            run_id,
+                            task.task_id,
+                            fsm,
+                            True,
+                            FailureCode.NONE,
+                            "V2 task completed",
+                            plan,
+                            executor_history,
+                            token_history,
                         )
                     if step_id + 1 < self.max_decisions:
                         fsm.transition(AgentState.REPLANNING, "terminal not reached")
                         fsm.transition(AgentState.OBSERVING, "continue V2 closed loop")
 
                 return self._stop_result(
-                    environment, run_id, task.task_id, fsm,
+                    environment,
+                    run_id,
+                    task.task_id,
+                    fsm,
                     FailureCode.RECOVERY_EXHAUSTED,
                     f"V2 decision budget exhausted after {self.max_decisions} actions",
-                    plan, executor_history, token_history,
+                    plan,
+                    executor_history,
+                    token_history,
                 )
-            except (AgentError, OSError, RuntimeError, TimeoutError, TypeError, ValueError) as exc:
-                code = exc.code if isinstance(exc, AgentError) else FailureCode.SYSTEM_FAULT
-                if motion_started or fsm.state not in {AgentState.PLANNING, AgentState.FAILED}:
+            except (
+                AgentError,
+                OSError,
+                RuntimeError,
+                TimeoutError,
+                TypeError,
+                ValueError,
+            ) as exc:
+                code = (
+                    exc.code
+                    if isinstance(exc, AgentError)
+                    else FailureCode.SYSTEM_FAULT
+                )
+                if motion_started or fsm.state not in {
+                    AgentState.PLANNING,
+                    AgentState.FAILED,
+                }:
                     return self._stop_result(
-                        environment, run_id, task.task_id, fsm, code, str(exc),
-                        plan, executor_history, token_history,
+                        environment,
+                        run_id,
+                        task.task_id,
+                        fsm,
+                        code,
+                        str(exc),
+                        plan,
+                        executor_history,
+                        token_history,
                     )
                 if fsm.state != AgentState.FAILED:
-                    fsm.transition(AgentState.FAILED, "V2 execution failed before motion")
+                    fsm.transition(
+                        AgentState.FAILED, "V2 execution failed before motion"
+                    )
                 return self._result(
-                    run_id, task.task_id, fsm, False, code, str(exc), plan,
-                    executor_history, token_history,
+                    run_id,
+                    task.task_id,
+                    fsm,
+                    False,
+                    code,
+                    str(exc),
+                    plan,
+                    executor_history,
+                    token_history,
                 )
         finally:
             self._run_lock.release()
@@ -385,8 +511,15 @@ class V2Supervisor:
         fsm.force_safety_terminal(target, message)
         token_history.append("NONE")
         return self._result(
-            run_id, task_id, fsm, False, code, message, plan,
-            executor_history, token_history,
+            run_id,
+            task_id,
+            fsm,
+            False,
+            code,
+            message,
+            plan,
+            executor_history,
+            token_history,
         )
 
     @staticmethod
@@ -418,4 +551,9 @@ class V2Supervisor:
         )
 
 
-__all__ = ["V2_CONTROL_TOKEN", "V2Supervisor", "V2TaskPlanner", "v2_safety_policy_from_config"]
+__all__ = [
+    "V2_CONTROL_TOKEN",
+    "V2Supervisor",
+    "V2TaskPlanner",
+    "v2_safety_policy_from_config",
+]

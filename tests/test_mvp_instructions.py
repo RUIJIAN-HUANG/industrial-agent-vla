@@ -48,9 +48,7 @@ def test_task_id_resolves_to_same_option() -> None:
 
 def test_user_instruction_resolves_to_task_id_for_supervisor() -> None:
     assert (
-        mvp_task_id_for_instruction(
-            "请将螺母 P01 放置到料箱的 S11 格子中。"
-        )
+        mvp_task_id_for_instruction("请将螺母 P01 放置到料箱的 S11 格子中。")
         == "P01_TO_S11"
     )
 

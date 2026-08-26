@@ -67,9 +67,7 @@ class V2ObservationGateway:
                 f"online V2 observation is missing required fields: {sorted(missing)}"
             )
         if raw.get("observation_version") != V2_OBSERVATION_VERSION:
-            self._invalid(
-                "formal V2 runtime requires observation_version='2.0'"
-            )
+            self._invalid("formal V2 runtime requires observation_version='2.0'")
 
         observation_id = raw.get("observation_id")
         if not isinstance(observation_id, str) or not observation_id:
@@ -79,7 +77,11 @@ class V2ObservationGateway:
                 f"observation_id must be fresh within a run: {observation_id}"
             )
         timestamp = raw.get("timestamp_ms")
-        if isinstance(timestamp, bool) or not isinstance(timestamp, int) or timestamp < 0:
+        if (
+            isinstance(timestamp, bool)
+            or not isinstance(timestamp, int)
+            or timestamp < 0
+        ):
             self._invalid("timestamp_ms must be a non-negative integer")
         if self._last_timestamp_ms is not None and timestamp < self._last_timestamp_ms:
             self._invalid("timestamp_ms moved backwards within a run")
@@ -151,11 +153,15 @@ class V2ObservationGateway:
             arm = value.get(arm_key)
             if not isinstance(arm, Mapping):
                 cls._invalid(f"robot.{arm_key} must be an object")
-            if not isinstance(arm.get("tcp_pose_m_rad"), (list, tuple)) or len(
-                arm["tcp_pose_m_rad"]
-            ) != 6:
+            if (
+                not isinstance(arm.get("tcp_pose_m_rad"), (list, tuple))
+                or len(arm["tcp_pose_m_rad"]) != 6
+            ):
                 cls._invalid(f"robot.{arm_key}.tcp_pose_m_rad must have 6 values")
-            if not isinstance(arm.get("state"), (list, tuple)) or len(arm["state"]) != 7:
+            if (
+                not isinstance(arm.get("state"), (list, tuple))
+                or len(arm["state"]) != 7
+            ):
                 cls._invalid(f"robot.{arm_key}.state must have 7 values")
             for flag in ("retreated", "gripper_open", "stationary"):
                 if not isinstance(arm.get(flag), bool):

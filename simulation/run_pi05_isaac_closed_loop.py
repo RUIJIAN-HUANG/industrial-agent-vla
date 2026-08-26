@@ -356,7 +356,10 @@ def _run_closed_loop(args: argparse.Namespace) -> dict[str, Any]:
                 scene_config=scene_config,
             )
         else:
-            task_state_provider = lambda: build_task_state(task_spec)
+
+            def task_state_provider() -> dict[str, Any]:
+                return build_task_state(task_spec)
+
         observation_counter = 0
 
         def guarded_state() -> dict[str, Any]:

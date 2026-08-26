@@ -120,7 +120,9 @@ def v2_task_from_mapping(value: Mapping[str, Any]) -> V2TaskSpec:
     )
     expected = v2_task(task.task_id)
     if task != expected:
-        raise ValueError(f"V2 task catalog entry does not match frozen task {task.task_id!r}")
+        raise ValueError(
+            f"V2 task catalog entry does not match frozen task {task.task_id!r}"
+        )
     return task
 
 
