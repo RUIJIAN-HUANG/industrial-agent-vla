@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+from unittest.mock import Mock
+
+import pytest
 
 from simulation.run_pi05_isaac_closed_loop import (
     _safety_policy_from_config,
+    _update_ui_without_advancing_physics,
     build_observation,
     build_task_state,
 )
@@ -65,6 +69,51 @@ def test_isaac_runtime_imports_are_deferred_until_after_kit_startup() -> None:
         for final_node in try_block.finalbody
         for node in ast.walk(final_node)
     )
+
+
+def test_idle_update_pauses_playing_world_before_update() -> None:
+    events: list[str] = []
+    world = Mock()
+    world.is_playing.return_value = True
+    world.pause.side_effect = lambda: events.append("pause")
+    simulation_app = Mock()
+    simulation_app.update.side_effect = lambda: events.append("update")
+
+    _update_ui_without_advancing_physics(
+        world=world,
+        simulation_app=simulation_app,
+    )
+
+    assert events == ["pause", "update"]
+
+
+def test_idle_update_does_not_repause_paused_world() -> None:
+    world = Mock()
+    world.is_playing.return_value = False
+    simulation_app = Mock()
+
+    _update_ui_without_advancing_physics(
+        world=world,
+        simulation_app=simulation_app,
+    )
+
+    world.pause.assert_not_called()
+    simulation_app.update.assert_called_once_with()
+
+
+def test_idle_update_propagates_pause_failure_without_update() -> None:
+    world = Mock()
+    world.is_playing.return_value = True
+    world.pause.side_effect = RuntimeError("pause failed")
+    simulation_app = Mock()
+
+    with pytest.raises(RuntimeError, match="pause failed"):
+        _update_ui_without_advancing_physics(
+            world=world,
+            simulation_app=simulation_app,
+        )
+
+    simulation_app.update.assert_not_called()
 
 
 def test_build_task_state_contains_no_ground_truth_fields() -> None:

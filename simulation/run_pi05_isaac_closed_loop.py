@@ -19,6 +19,7 @@ import argparse
 from collections.abc import Mapping
 import importlib
 import json
+import logging
 from pathlib import Path
 import sys
 import time
@@ -34,6 +35,7 @@ DEFAULT_SCENE_CONFIG = SCRIPT_DIR / "configs" / "single_bin_scene_v2.json"
 DEFAULT_AGENT_CONFIG = REPOSITORY_ROOT / "configs" / "agent.default.json"
 DEFAULT_TASK = REPOSITORY_ROOT / "configs" / "task.v2.p01-to-s11.example.json"
 DEFAULT_ARTIFACT_ROOT = REPOSITORY_ROOT / "artifacts" / "pi05-isaac-closed-loop"
+logger = logging.getLogger(__name__)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -199,6 +201,18 @@ def _safety_policy_from_config(raw_config: Mapping[str, Any]):
         arm_b_workspace_max_m=bounds("Arm_B", "max_m"),
         max_chunk_steps=int(raw.get("max_chunk_steps", 32)),
     )
+
+
+def _update_ui_without_advancing_physics(*, world: Any, simulation_app: Any) -> None:
+    """Keep Kit responsive while holding the physics world during inference."""
+
+    if world.is_playing():
+        try:
+            world.pause()
+        except Exception:
+            logger.exception("Failed to pause Isaac physics before idle update")
+            raise
+    simulation_app.update()
 
 
 def _run_closed_loop(args: argparse.Namespace) -> dict[str, Any]:
@@ -497,7 +511,10 @@ def _run_closed_loop(args: argparse.Namespace) -> dict[str, Any]:
         phase = "closed_loop"
         loop_result = gate.run_worker_until_complete(
             worker_loop,
-            idle_callback=simulation_app.update,
+            idle_callback=lambda: _update_ui_without_advancing_physics(
+                world=world,
+                simulation_app=simulation_app,
+            ),
         )
         phase = "safe_stop"
         receipt = environment.safe_stop("π0.5 Isaac closed-loop evaluation completed")
