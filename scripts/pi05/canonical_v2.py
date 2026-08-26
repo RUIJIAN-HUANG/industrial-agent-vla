@@ -6,7 +6,7 @@ import hashlib
 import json
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Iterator, Mapping, Self
+from typing import Any, Iterator, Mapping
 
 import h5py
 import numpy as np
@@ -425,7 +425,7 @@ class CanonicalV2Reader:
         if self._h5 is not None and self._h5.id.valid:
             self._h5.close()
 
-    def __enter__(self) -> Self:
+    def __enter__(self) -> CanonicalV2Reader:
         return self
 
     def __exit__(
