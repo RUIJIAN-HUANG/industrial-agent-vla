@@ -16,7 +16,7 @@ observation.
 from __future__ import annotations
 
 import argparse
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 import importlib
 import json
 import logging
@@ -203,16 +203,53 @@ def _safety_policy_from_config(raw_config: Mapping[str, Any]):
     )
 
 
+def _pause_physics_world(*, world: Any) -> None:
+    """Pause Isaac physics on the owner thread before stable observation work."""
+
+    try:
+        if world.is_playing():
+            world.pause()
+    except (AttributeError, RuntimeError):
+        logger.exception("Failed to pause Isaac physics")
+        raise
+
+
 def _update_ui_without_advancing_physics(*, world: Any, simulation_app: Any) -> None:
     """Keep Kit responsive while holding the physics world during inference."""
 
-    if world.is_playing():
-        try:
-            world.pause()
-        except Exception:
-            logger.exception("Failed to pause Isaac physics before idle update")
-            raise
+    _pause_physics_world(world=world)
     simulation_app.update()
+
+
+def _capture_stable_observation_inputs(
+    *,
+    world: Any,
+    capture_camera: Callable[[], Mapping[str, Any]],
+    capture_state: Callable[[], Mapping[str, Any]],
+) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
+    """Capture camera and guarded state without allowing physics to drift."""
+
+    _pause_physics_world(world=world)
+
+    try:
+        camera = capture_camera()
+    except (RuntimeError, OSError, TimeoutError):
+        logger.exception("Failed to capture Isaac RGB observation")
+        raise
+
+    # Camera rendering may advance or otherwise change the Isaac timeline.
+    _pause_physics_world(world=world)
+
+    try:
+        state = capture_state()
+    except (RuntimeError, OSError, TimeoutError):
+        logger.exception("Failed to capture Isaac guarded state")
+        raise
+
+    if world.is_playing():
+        raise RuntimeError("Isaac physics resumed during stable observation capture")
+
+    return camera, state
 
 
 def _run_closed_loop(args: argparse.Namespace) -> dict[str, Any]:
@@ -409,10 +446,14 @@ def _run_closed_loop(args: argparse.Namespace) -> dict[str, Any]:
 
         def observation_source() -> dict[str, Any]:
             nonlocal observation_counter
+            camera, state = _capture_stable_observation_inputs(
+                world=world,
+                capture_camera=lambda: rgb_pipeline.capture(args.arm_id),
+                capture_state=guarded_state,
+            )
             observation_counter += 1
-            state = guarded_state()
             return build_observation(
-                camera=rgb_pipeline.capture(args.arm_id),
+                camera=camera,
                 robot=state["robot"],
                 task=state["task"],
                 observation_id=f"{episode_id}-obs-{observation_counter:06d}",
@@ -540,16 +581,32 @@ def _run_closed_loop(args: argparse.Namespace) -> dict[str, Any]:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return result
     except BaseException as exc:
+        failure_phase = phase
+        safe_stop_confirmed: bool | None = None
+        if environment is not None:
+            try:
+                phase = "safe_stop"
+                receipt = environment.safe_stop(
+                    f"π0.5 Isaac closed-loop failure during {failure_phase}"
+                )
+                safe_stop_confirmed = bool(receipt.confirmed)
+            except BaseException:
+                logger.exception(
+                    "Failed to confirm Isaac safe-stop after closed-loop failure"
+                )
+                safe_stop_confirmed = False
         result = {
             "status": "FAIL",
             "episode_id": episode_id,
-            "phase": phase,
+            "phase": failure_phase,
             "error_type": type(exc).__name__,
             "error": str(exc),
             "traceback": traceback.format_exc(),
             "executed_steps": len(records),
             "steps": records,
         }
+        if safe_stop_confirmed is not None:
+            result["safe_stop_confirmed"] = safe_stop_confirmed
         _write_json(result_path, result)
         print(json.dumps(result, ensure_ascii=False, indent=2), file=sys.stderr)
         raise
