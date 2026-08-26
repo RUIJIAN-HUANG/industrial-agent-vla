@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class DocumentationContractTests(unittest.TestCase):
     def test_frozen_task_examples_use_the_machine_truth_source(self) -> None:
         config = json.loads(
-            (ROOT / "configs" / "agent.default.json").read_text(encoding="utf-8")
+            (ROOT / "configs" / "agent.v1.legacy.json").read_text(encoding="utf-8")
         )
         profile = config["lifecycle"]["task_profile"]
         interface_contract = (

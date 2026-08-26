@@ -29,7 +29,7 @@ class ConfigTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         root = Path(__file__).resolve().parents[1]
         cls.config = json.loads(
-            (root / "configs" / "agent.default.json").read_text(encoding="utf-8")
+            (root / "configs" / "agent.v1.legacy.json").read_text(encoding="utf-8")
         )
         cls.schema = json.loads(
             (root / "schemas" / "agent-config.schema.json").read_text(encoding="utf-8")

@@ -5,17 +5,20 @@ from simulation.run_pi05_isaac_closed_loop import (
     build_observation,
     build_task_state,
 )
-from industrial_agent.observation import ObservationGateway
+from industrial_agent.v2_observation import V2ObservationGateway
+from industrial_agent.v2_task_profile import require_formal_v2_task
 
 
 def test_build_task_state_contains_no_ground_truth_fields() -> None:
-    task = build_task_state()
+    task = build_task_state(require_formal_v2_task("P01_TO_S11"))
     assert task == {
-        "packed_part_count": 0,
-        "bin_at_handoff": False,
-        "bin_at_finished": False,
-        "bin_speed_m_s": 0.0,
-        "status": "pi05_isaac_closed_loop",
+        "task_id": "P01_TO_S11",
+        "target_object_id": "P01",
+        "target_slot_id": "S11",
+        "status": "ACTIVE",
+        "terminal": False,
+        "terminal_confidence": 0.0,
+        "verification_votes": 0,
     }
 
 
@@ -69,11 +72,11 @@ def test_build_observation_is_accepted_by_online_gateway() -> None:
                 "stationary": True,
             },
         },
-        task=build_task_state(),
+        task=build_task_state(require_formal_v2_task("P01_TO_S11")),
         observation_id="closed-loop-obs-000001",
         timestamp_ms=1,
     )
-    result = ObservationGateway().ingest_online(observation)
+    result = V2ObservationGateway().ingest_online(observation)
     assert result.observation_id == "closed-loop-obs-000001"
     assert result.data["camera"]["wrist_image"] is None
 

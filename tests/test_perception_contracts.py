@@ -415,7 +415,7 @@ class PerceptionContractTests(unittest.TestCase):
     def test_factory_consumes_yolo_url_and_pinned_identity(self) -> None:
         root = Path(__file__).resolve().parents[1]
         config = json.loads(
-            (root / "configs" / "agent.default.json").read_text(encoding="utf-8")
+            (root / "configs" / "agent.v1.legacy.json").read_text(encoding="utf-8")
         )
         config["perception"]["checkpoint_sha"] = CHECKPOINT_SHA
         config["perception"]["class_map_sha"] = CLASS_MAP_SHA
@@ -438,7 +438,7 @@ class PerceptionContractTests(unittest.TestCase):
     def test_factory_rejects_unpinned_yolo_artifacts(self) -> None:
         root = Path(__file__).resolve().parents[1]
         config = json.loads(
-            (root / "configs" / "agent.default.json").read_text(encoding="utf-8")
+            (root / "configs" / "agent.v1.legacy.json").read_text(encoding="utf-8")
         )
         with self.assertRaisesRegex(ValueError, "unsafe placeholder"):
             build_perception_from_config(
@@ -449,7 +449,7 @@ class PerceptionContractTests(unittest.TestCase):
     def test_factory_rejects_configurable_task_types(self) -> None:
         root = Path(__file__).resolve().parents[1]
         config = json.loads(
-            (root / "configs" / "agent.default.json").read_text(encoding="utf-8")
+            (root / "configs" / "agent.v1.legacy.json").read_text(encoding="utf-8")
         )
         config["perception"]["task_types"] = ["object_localization"]
         with self.assertRaisesRegex(ValueError, "task_types are frozen"):

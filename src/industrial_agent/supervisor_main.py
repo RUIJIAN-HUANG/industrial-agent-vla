@@ -1,4 +1,4 @@
-"""Production composition root for the fixed four-Agent Supervisor.
+"""Production composition root for the formal V2 π0.5 Supervisor.
 
 The platform-specific environment is injected through a factory so this module
 does not import Isaac Sim, model weights, or simulator APIs into the Supervisor
@@ -31,13 +31,10 @@ from typing import Any, Protocol, TypeVar, cast, runtime_checkable
 from .contracts import TaskSchema
 from .environment import ExecutionEnvironment, SafeStopReceipt
 from .errors import AgentError
-from .executor import (
-    ProcessTransport,
-    build_executors_from_config,
-)
+from .executor import EXECUTOR_CONFIG_FIELDS, Pi05Adapter, ProcessTransport
 from .http_transport import BoundedHTTPTransport, HTTPTransportError
-from .orchestrator import IndustrialAgent, RunResult
-from .perception import PerceptionTransport, build_perception_from_config
+from .orchestrator import RunResult
+from .v2_supervisor import V2Supervisor
 
 
 LOGGER = logging.getLogger(__name__)
@@ -151,17 +148,17 @@ def load_task(path: Path) -> TaskSchema:
 def build_supervisor(
     config: Mapping[str, Any],
     *,
-    transport_factory: (
-        Callable[[str, str], ProcessTransport | PerceptionTransport] | None
-    ) = None,
-) -> IndustrialAgent:
-    """Wire both VLA adapters, YOLO, and the Supervisor from one config."""
+    transport_factory: (Callable[[str, str], ProcessTransport] | None) = None,
+) -> V2Supervisor:
+    """Wire the only formal runtime: V2 π0.5/Arm_A.
 
-    # 从同一份配置装配出完整系统:
-    #   - build_executors_from_config: 两个 VLA 执行器(ProcessTransport);
-    #   - build_perception_from_config: YOLO 感知服务(PerceptionTransport);
-    #   - IndustrialAgent.from_config: 组装成固定四 Agent 监督器。
-    # transport_factory 可注入自定义传输工厂(便于测试替换为 mock)。
+    V1 is intentionally rejected here. Historical V1 classes remain importable
+    for archived regression tests but cannot be composed by the production
+    entry point.
+    """
+
+    # 从同一份 V2 配置只装配 π0.5 ProcessTransport 与单臂 Supervisor。
+    # transport_factory 可注入自定义传输工厂，便于契约测试替换为 mock。
     if not isinstance(config, Mapping):
         raise TypeError("config must be a mapping")
     if transport_factory is not None and not callable(transport_factory):
@@ -176,21 +173,33 @@ def build_supervisor(
             raise ValueError("service_name must be a non-empty string")
         return BoundedHTTPTransport(base_url)
 
+    if str(config.get("config_version", "")).split(".", 1)[0] != "2":
+        raise ValueError(
+            "V1 is abolished; production build requires config_version 2.x"
+        )
+    raw_executors = config.get("executors")
+    if not isinstance(raw_executors, Mapping) or set(raw_executors) != {"pi05"}:
+        raise ValueError("formal V2 config must contain only executors.pi05")
+    raw_pi05 = raw_executors.get("pi05")
+    if not isinstance(raw_pi05, Mapping) or set(raw_pi05) != EXECUTOR_CONFIG_FIELDS:
+        raise ValueError(
+            f"executors.pi05 must contain exactly {sorted(EXECUTOR_CONFIG_FIELDS)}"
+        )
+    if raw_pi05.get("enabled") is not True:
+        raise ValueError("formal V2 requires executors.pi05.enabled=true")
+    base_url = raw_pi05.get("base_url")
+    if not isinstance(base_url, str) or not base_url.startswith(
+        ("http://", "https://")
+    ):
+        raise ValueError("executors.pi05.base_url must be an HTTP(S) URL")
     factory = transport_factory or default_transport_factory
-    executors = build_executors_from_config(
-        config,
-        cast(Callable[[str, str], ProcessTransport], factory),
+    transport = cast(ProcessTransport, factory("pi05", base_url))
+    executor = Pi05Adapter(
+        transport,
+        checkpoint_sha=str(raw_pi05.get("checkpoint_sha", "")),
+        norm_stats_sha=str(raw_pi05.get("norm_stats_sha", "")),
     )
-    perception = build_perception_from_config(
-        config,
-        cast(Callable[[str, str], PerceptionTransport], factory),
-    )
-    return IndustrialAgent.from_config(
-        executors,
-        config,
-        perception=perception,
-        require_perception=True,  # 感知(视觉)是硬性依赖,缺失则启动失败
-    )
+    return V2Supervisor.from_config(executor, config)
 
 
 def resolve_environment_host(
@@ -336,7 +345,7 @@ def _argument_parser() -> argparse.ArgumentParser:
     #                                INDUSTRIAL_AGENT_ENVIRONMENT_FACTORY 兜底;
     #   --log-level                  日志级别。
     parser = argparse.ArgumentParser(
-        description="Run the fixed four-Agent Supervisor against a platform host."
+        description="Run the formal V2 π0.5/Arm_A Supervisor against a platform host."
     )
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--task", type=Path, required=True)
@@ -423,9 +432,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         OSError,
         TypeError,
         ValueError,
-    ) as exc:
+    ):
         # 启动或运行期错误:记录堆栈,若 host 已建立则尽力安全停机
-        LOGGER.exception("Supervisor startup or execution failed: %s", exc)
+        LOGGER.exception("Supervisor startup or execution failed")
         if host is not None:
             _attempt_safe_stop(host.environment, "Supervisor failed before clean exit")
         return 2

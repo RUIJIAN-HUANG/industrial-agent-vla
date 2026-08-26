@@ -1,15 +1,14 @@
 # π0.5 / openpi Service
 
-> 场景口径（2026-08-18）：下述“抓取四个零件、2×3 料箱”是 V1
-> `single_bin_pack_handoff_v1` 的冻结 TaskProfile。当前 V2 训练域是 8 工件、2×4
-> 料箱的人工工业采集场景；V2 Canonical 数据合同和 N−9 转换 Gate 已实现，但 B
-> 侧 GUI/物理采集入口仍缺失，尚未宣称 π0.5 已自动控制该场景。
+> 正式场景口径：V2 `single_bin_manual_industrial_v2`。V1 已废除，相关转换器和
+> 测试只作为历史数据审计材料，不能启动生产服务或生成新的正式模型。
 
-负责人：E。当前状态：接口占位，真实模型尚未集成。
+负责人：E。V2 正式演示必须显式设置 `PI05_TASK_PROFILE_VERSION=v2`；未设置或
+设置为 `v1` 时服务拒绝启动。
 
-冻结定位：π0.5 是 Arm_A 的唯一 VLA。它直接接收预设的上游自然语言、
-`CAM_A_TOP` 完整图像和 Arm_A 状态，负责抓取四个零件、纠正倒放零件、
-装入 2×3 料箱、把满箱放到 `HANDOFF_CENTER` 并退回 `HOME_A`。
+冻结定位：π0.5 是 Arm_A 的唯一 VLA。V2 模式下它接收 V2 task_id 对应的
+精确用户指令、`CAM_A_TOP` 完整图像和 Arm_A 状态，完成当前正式支持的
+`P01_TO_S11` 或 `W01_TO_S14` 单件装箱任务。
 YOLO DetectionPacket 不是推理前置条件。π0.5 必须针对这一固定角色完成工业
 场景微调并提供 base/tuned 同协议对照。
 
@@ -57,6 +56,23 @@ python scripts\pi05\convert_openpi_v2.py `
   --repo-id <ORG/REPO_ID>
 ```
 
+V2 Train-only norm stats 必须使用 `lerobot-v2` 和 V2 mapper 身份，不得继续
+记录 V1 `CanonicalPi05StateMapper`：
+
+```powershell
+python scripts\pi05\compute_norm_stats.py `
+  --dataset-path <LEROBOT_DATASET_ROOT> `
+  --input-format lerobot-v2 `
+  --state-mapper scripts.pi05.canonical_v2:CanonicalV2StateMapper `
+  --repo-id <ORG/REPO_ID> `
+  --split-registry <SPLIT_REGISTRY_JSON> `
+  --project-root <PROJECT_GIT_ROOT> `
+  --openpi-root <CLEAN_OPENPI_GIT_ROOT> `
+  --openpi-commit <PINNED_OPENPI_COMMIT> `
+  --manifest <LEROBOT_DATASET_ROOT>/conversion_manifest.json `
+  --output-path <OUTPUT_DIR>/norm_stats.json
+```
+
 动作流必须连续 10 Hz；N 条动作严格生成 N−9 个 `[10,7]` 窗口。N<10、缺失
 精确 tick 观测、padding 或任何动作数值变化都会阻止发布。
 
@@ -64,9 +80,9 @@ python scripts\pi05\convert_openpi_v2.py `
 `POST /v1/infer` 强制入口核心：它先解析并校验 CAS，再把只读 RGB 数组替换进
 `model_input` 后调用注入的 π0.5 backend。HTTP/WebSocket 外壳不得绕过该 handler。
 
-## Canonical v1 数据 Gate
+## 历史 Canonical v1 数据 Gate（禁止用于正式训练）
 
-`scripts/pi05/canonical_v1.py` 是角色 E 的薄适配层，底层强制复用主线
+以下内容仅用于验证旧数据可读性。`scripts/pi05/canonical_v1.py` 是角色 E 的薄适配层，底层强制复用主线
 `industrial_agent.data.CanonicalEpisodeReader`。只接受权威
 `episode.h5 + structure.json` Canonical Episode 和经过 SHA 校验的外部 Split
 Registry；不得复制 Reader 或另建 Canonical 格式。旧的

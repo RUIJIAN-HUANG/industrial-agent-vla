@@ -71,6 +71,8 @@ def load_config(config_dir: str | Path | None = None) -> dict[str, Any]:
     base_dir = (
         Path(config_dir) if config_dir is not None else service_root() / "configs"
     )
+    # Standalone OpenVLA historical tests use this service-local fixture. It is
+    # never consumed by the V2 production Supervisor composition root.
     agent_config = _read_json(base_dir / "agent.default.json")
     model_config = _read_json(base_dir / "openvla.default.json")
     config = _merge(agent_config, model_config)

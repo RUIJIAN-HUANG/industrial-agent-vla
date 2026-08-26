@@ -12,8 +12,7 @@ from industrial_agent.contracts import ActionStep, Postcondition, TaskSchema
 from industrial_agent.environment import SafeStopReceipt
 from industrial_agent.errors import FailureCode
 from industrial_agent.fsm import AgentState
-from industrial_agent.lifecycle import FixedTaskProfile
-from industrial_agent.orchestrator import IndustrialAgent, RunResult
+from industrial_agent.orchestrator import RunResult
 from industrial_agent.supervisor_main import (
     DirectEnvironmentHost,
     build_supervisor,
@@ -23,19 +22,18 @@ from industrial_agent.supervisor_main import (
     resolve_environment_host,
     run_result_to_dict,
 )
+from industrial_agent.v2_supervisor import V2Supervisor
+from industrial_agent.v2_task_profile import require_formal_v2_task
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = REPOSITORY_ROOT / "configs" / "agent.default.json"
-TASK_EXAMPLE_PATH = REPOSITORY_ROOT / "configs" / "task.single_bin.example.json"
+TASK_EXAMPLE_PATH = REPOSITORY_ROOT / "configs" / "task.v2.p01-to-s11.example.json"
 PINNED_SHA = f"sha256:{'a' * 64}"
 
 
 def _production_config() -> dict[str, Any]:
     config = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-    config["perception"]["checkpoint_sha"] = PINNED_SHA
-    config["perception"]["class_map_sha"] = PINNED_SHA
-    config["perception"]["config_sha"] = PINNED_SHA
     for executor in config["executors"].values():
         executor["checkpoint_sha"] = PINNED_SHA
         executor["norm_stats_sha"] = PINNED_SHA
@@ -116,7 +114,7 @@ class _Supervisor:
         return self.result
 
 
-def test_build_supervisor_wires_all_three_remote_services() -> None:
+def test_build_supervisor_wires_only_formal_v2_pi05_service() -> None:
     config = _production_config()
     calls: list[tuple[str, str]] = []
 
@@ -125,12 +123,8 @@ def test_build_supervisor_wires_all_three_remote_services() -> None:
         return _RecordingTransport()
 
     supervisor = build_supervisor(config, transport_factory=factory)
-    assert isinstance(supervisor, IndustrialAgent)
-    assert calls == [
-        ("openvla_oft", "http://127.0.0.1:8102"),
-        ("pi05", "http://127.0.0.1:8101"),
-        ("yolo", "http://127.0.0.1:8103"),
-    ]
+    assert isinstance(supervisor, V2Supervisor)
+    assert calls == [("pi05", "http://127.0.0.1:8101")]
 
 
 def test_build_supervisor_rejects_artifact_placeholders() -> None:
@@ -168,7 +162,7 @@ def test_loaders_require_bounded_json_objects(tmp_path: Path) -> None:
         json.dumps(_production_config(), ensure_ascii=False),
         encoding="utf-8",
     )
-    assert load_agent_config(config_path)["config_version"] == "1.3"
+    assert load_agent_config(config_path)["config_version"] == "2.0"
 
     task_path = tmp_path / "task.json"
     task = TaskSchema(
@@ -200,12 +194,13 @@ def test_loaders_require_bounded_json_objects(tmp_path: Path) -> None:
         load_agent_config(scalar_path)
 
 
-def test_repository_task_example_matches_frozen_profile() -> None:
+def test_repository_task_example_matches_frozen_v2_profile() -> None:
     task = load_task(TASK_EXAMPLE_PATH)
-    profile = FixedTaskProfile()
-    assert task.instruction == profile.arm_a_instruction
-    assert task.target_location == profile.finished_zone
-    assert task.postconditions[0].required_votes == profile.handoff_required_votes
+    profile = require_formal_v2_task("P01_TO_S11")
+    assert task.instruction == profile.instruction
+    assert task.target_object == profile.target_object
+    assert task.target_location == profile.target_slot
+    assert task.postconditions[0].required_votes == 2
 
 
 def test_run_result_serialization_converts_enums() -> None:

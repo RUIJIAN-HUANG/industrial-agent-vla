@@ -43,10 +43,10 @@ class V2SceneContractTests(unittest.TestCase):
         self.assertEqual(
             states,
             {
-                "P01": "upright",
                 "P02": "upright",
                 "P03": "inverted",
                 "P04": "inverted",
+                "N01": "upright",
             },
         )
 

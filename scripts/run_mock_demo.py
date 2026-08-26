@@ -14,9 +14,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 _TASK_PROFILE = json.loads(
-    (Path(__file__).resolve().parents[1] / "configs" / "agent.default.json").read_text(
-        encoding="utf-8"
-    )
+    (
+        Path(__file__).resolve().parents[1] / "configs" / "agent.v1.legacy.json"
+    ).read_text(encoding="utf-8")
 )["lifecycle"]["task_profile"]
 ARM_A_INSTRUCTION = _TASK_PROFILE["arm_a_instruction"]
 ARM_B_INSTRUCTION = _TASK_PROFILE["arm_b_instruction"]

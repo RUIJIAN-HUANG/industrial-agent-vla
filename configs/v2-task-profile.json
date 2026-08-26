@@ -1,0 +1,47 @@
+{
+  "profile_id": "single_bin_manual_industrial_v2",
+  "scene_id": "single_bin_manual_industrial_v2",
+  "formal_task_ids": ["P01_TO_S11", "W01_TO_S14"],
+  "tasks": [
+    {
+      "task_id": "P01_TO_S11",
+      "instruction": "请将螺母 P01 放置到料箱的 S11 格子中。",
+      "target_object": "P01",
+      "target_slot": "S11",
+      "active_arm": "Arm_A",
+      "formal_data": true
+    },
+    {
+      "task_id": "W01_TO_S14",
+      "instruction": "请将扳手 W01 放置到料箱的 S14 格子中。",
+      "target_object": "W01",
+      "target_slot": "S14",
+      "active_arm": "Arm_A",
+      "formal_data": true
+    },
+    {
+      "task_id": "P03_UPRIGHT_TO_S12",
+      "instruction": "请将倒立的轴件 P03 翻正后，放置到料箱的 S12 格子中。",
+      "target_object": "P03",
+      "target_slot": "S12",
+      "active_arm": "Arm_A",
+      "formal_data": false
+    },
+    {
+      "task_id": "BIN01_TO_FINISHED01",
+      "instruction": "请将料箱 Bin_01 搬运到成品区 FINISHED_01。",
+      "target_object": "Bin_01",
+      "target_slot": null,
+      "active_arm": "Arm_B",
+      "formal_data": false
+    },
+    {
+      "task_id": "PACK_ALL_AND_FINISH",
+      "instruction": "请将所有零件按指定位置装入料箱 Bin_01，再将料箱 Bin_01 搬运到成品区 FINISHED_01。",
+      "target_object": "Bin_01",
+      "target_slot": null,
+      "active_arm": "Arm_A",
+      "formal_data": false
+    }
+  ]
+}

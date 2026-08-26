@@ -1,12 +1,10 @@
 # Model Services
 
-> 当前场景边界：下述四零件双 VLA 串行流程是 V1 自动闭环兼容合同。V2
-> `single_bin_manual_industrial_v2` 目前用于 8 工件人工示教和 Canonical Episode
-> 采集，为后续训练提供数据，不改变现有服务 API，也不代表已接通自动推理控制。
+> 正式场景边界：V2 `single_bin_manual_industrial_v2`。生产总控只装配 π0.5；
+> OpenVLA-OFT 与旧 YOLO/V1 编排服务不属于当前正式运行图。
 
-模型运行时必须与轻量总控 Agent 分离，避免 YOLO/PyTorch/CUDA 与 JAX/openpi
-的依赖冲突。系统固定为四个 Agent：总控、YOLO、OpenVLA-OFT 和 π0.5；
-Verifier、环境和离线 mAP 评测器不是 Agent。
+模型运行时必须与轻量总控 Agent 分离。正式系统由总控、π0.5 和 Isaac 环境边界
+组成；在线终局提供器只输出传感证据，不读取 GT。
 
 | 目录 | 责任角色 | 内容 |
 |---|---|---|
@@ -14,14 +12,12 @@ Verifier、环境和离线 mAP 评测器不是 Agent。
 | `openvla_oft/` | D | OpenVLA-OFT 训练、推理服务和相机适配 |
 | `pi05/` | E | π0.5/openpi 训练、推理服务和动作适配 |
 
-两个 VLA 在同一任务中固定串行调用，不做在线路由：
+正式 V2 调用链：
 
-1. 总控把预设的上游自然语言、Arm_A 图像和状态原样交给 `pi05/`；
-2. π0.5 完成四零件装箱、把料箱放到 `HANDOFF_CENTER` 并让 Arm_A 退出；
-3. Supervisor 用三张新鲜图像完成至少两票交接核验，先持久化
-   `handoff.ready`，成功返回后才把令牌切为 `B_ONLY`；
-4. 总控把预设的下游协作指令、Arm_B 图像和状态原样交给
-   `openvla_oft/`，由其把满箱搬到 `FINISHED_01`。
+1. 总控验证 V2 task_id 与冻结指令一一对应；
+2. π0.5 接收 Arm_A 图像与状态并返回 7D 动作；
+3. 总控安全执行一个动作并重新观测；
+4. 在线终局证据达到 3 帧至少 2 票后结束，否则在预算内继续。
 
 不设置 NLP Agent；Supervisor 不解释或改写两个固定指令。两个 VLA 都必须完成
 各自固定角色的工业场景微调。一个 VLA 的失败只能在自己的阶段有界重试，不得

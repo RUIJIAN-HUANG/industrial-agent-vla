@@ -82,11 +82,11 @@ def _votes(*passed: bool) -> list[dict[str, object]]:
     ]
 
 
-def test_vertical_error_uses_directed_axis_and_includes_boundary() -> None:
+def test_vertical_error_uses_unsigned_nut_axis_and_includes_boundary() -> None:
     angle = math.radians(15.0)
     measured = vertical_error_rad((math.sin(angle), 0.0, math.cos(angle)), (0, 0, 1))
     assert measured == pytest.approx(P01_MAX_VERTICAL_ERROR_RAD)
-    assert vertical_error_rad((0, 0, -1), (0, 0, 1)) == pytest.approx(math.pi)
+    assert vertical_error_rad((0, 0, -1), (0, 0, 1)) == pytest.approx(0.0)
 
 
 def test_vertical_error_rejects_zero_or_nonfinite_vectors() -> None:

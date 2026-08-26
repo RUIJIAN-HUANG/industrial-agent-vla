@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://industrial-agent.local/schemas/agent-config-v2.schema.json",
+  "title": "V2 Single-Arm Supervisor Configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "config_version", "profile_id", "scene_id", "task_profile",
+    "formal_task_ids", "verification", "executor_timeout_ms", "image_cas",
+    "recovery", "safety", "telemetry", "executors"
+  ],
+  "properties": {
+    "config_version": {"type": "string", "pattern": "^2\\.[0-9]+$"},
+    "profile_id": {"const": "single_bin_manual_industrial_v2"},
+    "scene_id": {"const": "single_bin_manual_industrial_v2"},
+    "task_profile": {"const": "configs/v2-task-profile.json"},
+    "formal_task_ids": {
+      "const": ["P01_TO_S11", "W01_TO_S14"]
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["frames", "required_votes", "min_confidence"],
+      "properties": {
+        "frames": {"const": 3},
+        "required_votes": {"const": 2},
+        "min_confidence": {"type": "number", "minimum": 0.6, "maximum": 1}
+      }
+    },
+    "executor_timeout_ms": {"type": "integer", "minimum": 1, "maximum": 300000},
+    "image_cas": {"$ref": "#/$defs/imageCas"},
+    "recovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["clear_action_queue_on_recovery", "max_decisions_per_task"],
+      "properties": {
+        "clear_action_queue_on_recovery": {"const": true},
+        "max_decisions_per_task": {"type": "integer", "minimum": 1, "maximum": 1000}
+      }
+    },
+    "safety": {"$ref": "#/$defs/safety"},
+    "telemetry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event_jsonl_path", "require_durable_commands"],
+      "properties": {
+        "event_jsonl_path": {"type": "string", "minLength": 1},
+        "require_durable_commands": {"const": true}
+      }
+    },
+    "executors": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pi05"],
+      "properties": {"pi05": {"$ref": "#/$defs/executor"}}
+    }
+  },
+  "$defs": {
+    "configuredDigest": {
+      "oneOf": [
+        {"const": "REPLACE_WITH_V2_PINNED_SHA"},
+        {"type": "string", "pattern": "^sha256:[0-9a-fA-F]{64}$"}
+      ]
+    },
+    "executor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "base_url", "checkpoint_sha", "norm_stats_sha"],
+      "properties": {
+        "enabled": {"const": true},
+        "base_url": {"type": "string", "pattern": "^https?://"},
+        "checkpoint_sha": {"$ref": "#/$defs/configuredDigest"},
+        "norm_stats_sha": {"$ref": "#/$defs/configuredDigest"}
+      }
+    },
+    "imageCas": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["root", "layout", "encoding", "digest_scope", "max_blob_bytes", "max_pixels", "cache_max_bytes", "missing_retry_count", "missing_retry_delay_ms"],
+      "properties": {
+        "root": {"type": "string", "minLength": 1},
+        "layout": {"const": "sha256-v1"},
+        "encoding": {"const": "png"},
+        "digest_scope": {"const": "encoded_bytes"},
+        "max_blob_bytes": {"type": "integer", "minimum": 1, "maximum": 134217728},
+        "max_pixels": {"type": "integer", "minimum": 1, "maximum": 100000000},
+        "cache_max_bytes": {"type": "integer", "minimum": 0, "maximum": 1073741824},
+        "missing_retry_count": {"type": "integer", "minimum": 0, "maximum": 2},
+        "missing_retry_delay_ms": {"type": "integer", "minimum": 0, "maximum": 1000}
+      }
+    },
+    "workspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["frame", "min_m", "max_m"],
+      "properties": {
+        "frame": {"const": "robot_base"},
+        "min_m": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"type": "number"}},
+        "max_m": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"type": "number"}}
+      }
+    },
+    "safety": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action_contract_version", "axis_abs_limits", "workspace_by_arm", "max_chunk_steps", "safe_stop_timeout_ms"],
+      "properties": {
+        "action_contract_version": {"const": "1.0"},
+        "axis_abs_limits": {
+          "type": "array", "minItems": 7, "maxItems": 7,
+          "prefixItems": [
+            {"type": "number", "exclusiveMinimum": 0}, {"type": "number", "exclusiveMinimum": 0},
+            {"type": "number", "exclusiveMinimum": 0}, {"type": "number", "exclusiveMinimum": 0},
+            {"type": "number", "exclusiveMinimum": 0}, {"type": "number", "exclusiveMinimum": 0},
+            {"type": "number", "exclusiveMinimum": 0, "maximum": 1}
+          ],
+          "items": false
+        },
+        "workspace_by_arm": {
+          "type": "object", "additionalProperties": false, "required": ["Arm_A", "Arm_B"],
+          "properties": {"Arm_A": {"$ref": "#/$defs/workspace"}, "Arm_B": {"$ref": "#/$defs/workspace"}}
+        },
+        "max_chunk_steps": {"type": "integer", "minimum": 1, "maximum": 32},
+        "safe_stop_timeout_ms": {"type": "integer", "minimum": 1, "maximum": 30000}
+      }
+    }
+  }
+}

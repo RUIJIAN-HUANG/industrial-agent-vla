@@ -14,7 +14,8 @@
 - §3.4：动作 7 维 [dx,dy,dz,dax,day,daz,gripper]，robot_base，axis-angle，control_hz=10。
 - §3.3：LIBERO 配置动作块常为 10，其他域可能不同；以本项目 checkpoint 配置为准，
   不照抄论文动作长度。
-- §5.4：canonical → LeRobot 数据转换由 scripts/pi05/convert_openpi.py 完成。
+- §5.4：正式 V2 canonical → LeRobot 数据转换由 scripts/pi05/convert_openpi_v2.py 完成；
+  scripts/pi05/convert_openpi.py 仅保留 V1 兼容链路。
 - §6.3：首轮微调 100—500 条/核心技能；LoRA；1—2 组超参；ID val 成功≥60%。
 
 配置体系说明（必须遵循 openpi 官方）：
@@ -58,11 +59,6 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
-
-try:
-    from configs.pi05.constants import OPENPI_COMMIT as OPENPI_COMMIT
-except ModuleNotFoundError:  # direct ``python configs/pi05/train_config.py`` execution
-    from constants import OPENPI_COMMIT as OPENPI_COMMIT  # type: ignore[no-redef]
 
 # ---------------------------------------------------------------------------
 # 日志
@@ -438,8 +434,6 @@ else:
     class IndustrialLeRobotDataConfig(DataConfigFactory):
         """Fallback config used only when OpenPI isn't installed."""
 
-        pass
-
 
 # ---------------------------------------------------------------------------
 # 配置实例：pi05_industrial
@@ -469,7 +463,7 @@ def _build_pi05_industrial_config() -> TrainConfig:
             action_expert_variant="gemma_300m_lora",
         ),
         # ---- 数据配置 ----
-        # 方案书 §5.4：canonical → LeRobot 转换由 scripts/pi05/convert_openpi.py 完成。
+        # 正式 V2 训练数据必须来自 convert_openpi_v2.py；V1 转换器仅用于兼容回归。
         # 方案书 §3.3.1 Para186：norm stats 用 compute_norm_stats 单独生成本项目自有统计。
         data=IndustrialLeRobotDataConfig(
             repo_id=DATASET_REPO_ID,

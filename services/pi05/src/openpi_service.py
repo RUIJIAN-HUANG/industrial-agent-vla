@@ -15,9 +15,11 @@
 - PI05_SERVICE_MODE=dummy 时不 import openpi，适合本地全流程联调。
 
 启动：
-    uvicorn services.pi05.src.openpi_service:app --reload
+    PI05_SERVICE_MODE=real PI05_TASK_PROFILE_VERSION=v2 \
+      uvicorn services.pi05.src.openpi_service:app --reload
 或：
-    python -m services.pi05.src.openpi_service
+    PI05_SERVICE_MODE=real PI05_TASK_PROFILE_VERSION=v2 \
+      python -m services.pi05.src.openpi_service
 """
 
 from __future__ import annotations
@@ -93,7 +95,11 @@ SCHEMA_VERSION = "v1"
 # 对齐 schemas/*.json 的 schema_version pattern "^1\.[0-9]+$"（方案书 §4 公共标识）
 CONTRACT_SCHEMA_VERSION = "1.0"
 POLICY_ID = "pi05"
-EXPECTED_SUBTASK_ID = "S01_ARM_A_PACK_HANDOFF"
+TASK_PROFILE_VERSION = os.environ.get("PI05_TASK_PROFILE_VERSION", "").strip().lower()
+if TASK_PROFILE_VERSION != "v2":
+    raise RuntimeError(
+        "V1 is abolished; PI05_TASK_PROFILE_VERSION must be explicitly set to v2"
+    )
 DEFAULT_CONTROL_HZ = MODEL_INFERENCE_HZ
 DEFAULT_EXPIRES_AFTER_MS = 1000
 EXPECTED_FULL_IMAGE_SIZE = (1280, 720)
@@ -118,25 +124,6 @@ _CANCEL_SCHEMA_PATH = _PROJECT_ROOT / "schemas" / "executor-cancel.schema.json"
 _AGENT_CONFIG_PATH = _PROJECT_ROOT / "configs" / "agent.default.json"
 
 
-def _load_expected_prompt() -> str:
-    """从框架机读配置加载冻结的 Arm_A 指令。"""
-    agent_config = json.loads(_AGENT_CONFIG_PATH.read_text(encoding="utf-8"))
-    lifecycle = agent_config.get("lifecycle")
-    task_profile = (
-        lifecycle.get("task_profile") if isinstance(lifecycle, dict) else None
-    )
-    prompt = (
-        task_profile.get("arm_a_instruction")
-        if isinstance(task_profile, dict)
-        else None
-    )
-    if not isinstance(prompt, str) or not prompt.strip():
-        raise RuntimeError(
-            "agent.default.json 缺少 lifecycle.task_profile.arm_a_instruction"
-        )
-    return prompt
-
-
 def _load_request_validator(schema_path: Path) -> Draft202012Validator:
     """从 $defs/request 提取并编译 JSON Schema 校验器。"""
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
@@ -151,7 +138,6 @@ def _load_request_validator(schema_path: Path) -> Draft202012Validator:
 
 _INFER_REQUEST_VALIDATOR = _load_request_validator(_INFER_SCHEMA_PATH)
 _CANCEL_REQUEST_VALIDATOR = _load_request_validator(_CANCEL_SCHEMA_PATH)
-EXPECTED_PROMPT = _load_expected_prompt()
 
 # ---------------------------------------------------------------------------
 # 日志
@@ -830,21 +816,35 @@ async def http_infer(request: Request) -> JSONResponse:
         )
         return JSONResponse(status_code=400, content=err_body)
 
-    # ---- subtask 与 prompt 必须匹配冻结的 Arm_A S01 配置 ----
-    if req["subtask_id"] != EXPECTED_SUBTASK_ID:
+    # ---- V2 task_id/subtask_id/prompt 必须逐字匹配冻结目录 ----
+    try:
+        from industrial_agent.v2_task_profile import require_formal_v2_task
+
+        expected_v2_task = require_formal_v2_task(str(req["task_id"]))
+    except (ImportError, TypeError, ValueError) as exc:
         err_body = _make_infer_error_body(
             req,
             code=_failure_code_value(FailureCode.INVALID_TASK),
-            message=f"subtask_id 不匹配：期望 {EXPECTED_SUBTASK_ID!r}，"
-            f"收到 {req['subtask_id']!r}",
+            message=f"不支持的 V2 task_id：{req['task_id']!r}；{exc}",
             retryable=False,
         )
         return JSONResponse(status_code=400, content=err_body)
-    if req["model_input"]["prompt"] != EXPECTED_PROMPT:
+    if req["subtask_id"] != expected_v2_task.task_id:
         err_body = _make_infer_error_body(
             req,
             code=_failure_code_value(FailureCode.INVALID_TASK),
-            message="model_input.prompt 与冻结的 Arm_A 指令不匹配",
+            message=(
+                f"V2 subtask_id 必须等于 task_id {expected_v2_task.task_id!r}，"
+                f"收到 {req['subtask_id']!r}"
+            ),
+            retryable=False,
+        )
+        return JSONResponse(status_code=400, content=err_body)
+    if req["model_input"]["prompt"] != expected_v2_task.instruction:
+        err_body = _make_infer_error_body(
+            req,
+            code=_failure_code_value(FailureCode.INVALID_TASK),
+            message="V2 model_input.prompt 与 task_id 指令不匹配",
             retryable=False,
         )
         return JSONResponse(status_code=400, content=err_body)

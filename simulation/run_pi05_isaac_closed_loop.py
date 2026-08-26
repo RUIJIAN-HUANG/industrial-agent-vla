@@ -8,8 +8,8 @@ components without duplicating their contracts:
 
 It is deliberately an evaluation runner, not the frozen four-Agent lifecycle
 runner.  It reports a closed-loop pass after the requested action budget is
-completed; task-terminal success is reported separately when the online task
-state says ``bin_at_finished``.  No ground-truth state is added to the online
+completed; task-terminal success is reported only when a detector-backed V2
+task state says ``terminal`` with sufficient evidence. No ground-truth state is added to the online
 observation.
 """
 
@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Mapping
+import importlib
 import json
 from pathlib import Path
 import sys
@@ -31,10 +32,8 @@ REPOSITORY_ROOT = SCRIPT_DIR.parent
 SOURCE_DIR = REPOSITORY_ROOT / "src"
 DEFAULT_SCENE_CONFIG = SCRIPT_DIR / "configs" / "single_bin_scene_v2.json"
 DEFAULT_AGENT_CONFIG = REPOSITORY_ROOT / "configs" / "agent.default.json"
-DEFAULT_TASK = REPOSITORY_ROOT / "configs" / "task.single_bin.pack-handoff.example.json"
-DEFAULT_ARTIFACT_ROOT = (
-    REPOSITORY_ROOT / "artifacts" / "pi05-isaac-closed-loop"
-)
+DEFAULT_TASK = REPOSITORY_ROOT / "configs" / "task.v2.p01-to-s11.example.json"
+DEFAULT_ARTIFACT_ROOT = REPOSITORY_ROOT / "artifacts" / "pi05-isaac-closed-loop"
 
 
 def _parse_args() -> argparse.Namespace:
@@ -56,7 +55,14 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--require-terminal",
         action="store_true",
-        help="Return failure unless online task state reaches bin_at_finished.",
+        help="Return failure unless detector-backed V2 task state reaches terminal.",
+    )
+    parser.add_argument(
+        "--task-state-factory",
+        help=(
+            "Optional module:callable factory returning a zero-argument, sensor-only "
+            "V2 task-state provider. Required with --require-terminal."
+        ),
     )
     parser.add_argument("--result-file", type=Path)
     return parser.parse_args()
@@ -78,19 +84,61 @@ def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
     )
 
 
-def build_task_state() -> dict[str, Any]:
+def resolve_task_state_provider(
+    reference: str,
+    *,
+    task_spec: Any,
+    controller: Any,
+    arms: Mapping[str, Any],
+    scene_config: Mapping[str, Any],
+):
+    """Load the deployment-owned sensor verifier without importing it globally."""
+
+    module_name, separator, attribute_name = reference.partition(":")
+    if (
+        separator != ":"
+        or not module_name
+        or not attribute_name
+        or ":" in attribute_name
+    ):
+        raise ValueError(
+            "task-state factory must use exact form 'module.path:callable'"
+        )
+    module = importlib.import_module(module_name)
+    factory = getattr(module, attribute_name)
+    if not callable(factory):
+        raise TypeError("task-state factory reference is not callable")
+    provider = factory(
+        task_spec=task_spec,
+        controller=controller,
+        arms=arms,
+        scene_config=scene_config,
+    )
+    if not callable(provider):
+        raise TypeError("task-state factory must return a zero-argument callable")
+    return provider
+
+
+def build_task_state(task_spec: Any | None = None) -> dict[str, Any]:
     """Return the non-GT task fields required by the online contract.
 
-    A deployment-specific online task-state provider may replace this function
-    later with detector-backed facts.  It must never read Isaac GT coordinates.
+    A deployment-specific online task-state provider may replace the static
+    ``terminal=false`` value with detector-backed facts. It must never read
+    Isaac GT coordinates.
     """
 
+    task_id = getattr(task_spec, "task_id", "")
+    target_object = getattr(task_spec, "target_object", "")
+    target_slot = getattr(task_spec, "target_slot", None)
+
     return {
-        "packed_part_count": 0,
-        "bin_at_handoff": False,
-        "bin_at_finished": False,
-        "bin_speed_m_s": 0.0,
-        "status": "pi05_isaac_closed_loop",
+        "task_id": task_id,
+        "target_object_id": target_object,
+        "target_slot_id": target_slot,
+        "status": "ACTIVE",
+        "terminal": False,
+        "terminal_confidence": 0.0,
+        "verification_votes": 0,
     }
 
 
@@ -105,7 +153,7 @@ def build_observation(
     """Build the allow-listed online observation envelope."""
 
     return {
-        "observation_version": "1.0",
+        "observation_version": "2.0",
         "observation_id": observation_id,
         "timestamp_ms": timestamp_ms,
         "camera": dict(camera),
@@ -164,8 +212,9 @@ def _run_closed_loop(args: argparse.Namespace) -> dict[str, Any]:
     from industrial_agent.executor import ExecutionContext, Pi05Adapter
     from industrial_agent.http_transport import BoundedHTTPTransport
     from industrial_agent.image_cas import ImageCas, ImageCasConfig
-    from industrial_agent.observation import ObservationGateway
+    from industrial_agent.v2_observation import V2ObservationGateway
     from industrial_agent.safety import ActionSafetyValidator
+    from industrial_agent.v2_task_profile import require_formal_v2_task
     from industrial_agent.isaac_environment import IsaacExecutionEnvironment
     from industrial_agent.isaac_runtime import IsaacMainThreadGate
     from industrial_agent.environment import execution_guard_digest
@@ -184,21 +233,25 @@ def _run_closed_loop(args: argparse.Namespace) -> dict[str, Any]:
 
     require_valid_config(scene_config)
     agent_config = _read_json(args.agent_config)
+    if agent_config.get("profile_id") != "single_bin_manual_industrial_v2":
+        raise ValueError(
+            "role-E closed-loop runner requires the V2 agent config; "
+            "use configs/agent.default.json"
+        )
     task_payload = _read_json(args.task)
     task = TaskSchema.from_dict(task_payload)
-    profile = agent_config["lifecycle"]["task_profile"]
-    expected_instruction = str(profile["arm_a_instruction"])
-    if task.instruction != expected_instruction:
-        raise ValueError(
-            "task instruction must equal the frozen Arm_A instruction; "
-            "use configs/task.single_bin.pack-handoff.example.json"
-        )
+    task_spec = require_formal_v2_task(task.task_id)
+    if task.instruction != task_spec.instruction:
+        raise ValueError("task instruction does not match the frozen V2 task catalog")
     task = TaskSchema.from_dict(
         {
             **task.to_dict(),
+            "target_object": task_spec.target_object,
+            "target_location": task_spec.target_slot,
             "metadata": {
                 **dict(task.metadata),
-                "subtask_id": "S01_ARM_A_PACK_HANDOFF",
+                "profile_id": "single_bin_manual_industrial_v2",
+                "subtask_id": task_spec.task_id,
             },
         }
     )
@@ -294,7 +347,16 @@ def _run_closed_loop(args: argparse.Namespace) -> dict[str, Any]:
             publisher=publisher,
         )
         gate = IsaacMainThreadGate()
-        task_state = build_task_state()
+        if args.task_state_factory:
+            task_state_provider = resolve_task_state_provider(
+                args.task_state_factory,
+                task_spec=task_spec,
+                controller=controller,
+                arms=arms,
+                scene_config=scene_config,
+            )
+        else:
+            task_state_provider = lambda: build_task_state(task_spec)
         observation_counter = 0
 
         def guarded_state() -> dict[str, Any]:
@@ -303,11 +365,17 @@ def _run_closed_loop(args: argparse.Namespace) -> dict[str, Any]:
                 "robot": {
                     "active_arm": args.arm_id,
                     "arm_a": _arm_state(
-                        controller, "Arm_A", arms["Arm_A"], scene_config,
+                        controller,
+                        "Arm_A",
+                        arms["Arm_A"],
+                        scene_config,
                         continuous_state=True,
                     ),
                     "arm_b": _arm_state(
-                        controller, "Arm_B", arms["Arm_B"], scene_config,
+                        controller,
+                        "Arm_B",
+                        arms["Arm_B"],
+                        scene_config,
                         continuous_state=True,
                     ),
                 },
@@ -316,7 +384,7 @@ def _run_closed_loop(args: argparse.Namespace) -> dict[str, Any]:
                     "protective_stop": False,
                     "system_fault": None,
                 },
-                "task": dict(task_state),
+                "task": dict(task_state_provider()),
                 "quality": {"confidence": 1.0},
             }
 
@@ -343,12 +411,12 @@ def _run_closed_loop(args: argparse.Namespace) -> dict[str, Any]:
             runtime_action_timeout_s=max(10.0, args.deadline_ms / 1000 + 5.0),
             runtime_stop_timeout_s=2.0,
         )
-        gateway = ObservationGateway()
+        gateway = V2ObservationGateway()
         safety = ActionSafetyValidator(_safety_policy_from_config(agent_config))
         executor_task = TaskSchema.from_dict(
             {
                 **task.to_dict(),
-                "task_id": f"{task.task_id}:S01_ARM_A_PACK_HANDOFF",
+                "task_id": task.task_id,
             }
         )
         run_id = episode_id
@@ -394,7 +462,10 @@ def _run_closed_loop(args: argparse.Namespace) -> dict[str, Any]:
                 next_task = next_observation.data.get("task", {})
                 terminal = (
                     isinstance(next_task, Mapping)
-                    and next_task.get("bin_at_finished") is True
+                    and next_task.get("terminal") is True
+                    and next_task.get("status") == "SUCCEEDED"
+                    and float(next_task.get("terminal_confidence", 0.0)) >= 0.6
+                    and int(next_task.get("verification_votes", 0)) >= 2
                 )
                 records.append(
                     {
@@ -433,7 +504,7 @@ def _run_closed_loop(args: argparse.Namespace) -> dict[str, Any]:
             "episode_id": episode_id,
             "isaac_sim_version": isaac_version,
             "task_id": executor_task.task_id,
-            "subtask_id": "S01_ARM_A_PACK_HANDOFF",
+            "subtask_id": task_spec.task_id,
             "arm_id": args.arm_id,
             "requested_steps": args.max_steps,
             "executed_steps": len(records),
@@ -477,6 +548,11 @@ def main() -> int:
         raise ValueError("--max-steps must be positive")
     if args.deadline_ms < 1:
         raise ValueError("--deadline-ms must be positive")
+    if args.require_terminal and not args.task_state_factory:
+        raise ValueError(
+            "--require-terminal requires --task-state-factory; static task state "
+            "cannot claim V2 task success"
+        )
     result = _run_closed_loop(args)
     if result["status"] in {"FAIL", "SAFE_STOP_UNCONFIRMED"}:
         return 1

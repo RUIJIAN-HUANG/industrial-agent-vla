@@ -5,7 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from typing import Any, Iterator, Mapping
+from types import TracebackType
+from typing import Any, Iterator, Mapping, Self
 
 import h5py
 import numpy as np
@@ -43,6 +44,38 @@ class CanonicalV2Error(ValueError):
         self.episode_id = episode_id
         self.field = field
         super().__init__(f"episode_id={episode_id!r} field={field!r}: {message}")
+
+
+class CanonicalV2StateMapper:
+    """Explicit V2 identity mapper used for V2 norm-stat provenance.
+
+    LeRobot V2 rows already contain the validated 7-D state stream, so the
+    norm-stat loader does not call ``map_state``.  Keeping a distinct mapper
+    identity prevents a V1 mapper from being recorded in a V2 artifact.
+    """
+
+    name = "canonical_pi05_state_7d_hdf5_v2"
+    version = "2.0"
+    state_dim = STATE_DIM
+    approved_for_production = True
+
+    def map_state(self, episode: object, step: object) -> np.ndarray:
+        del episode
+        state = getattr(step, "state_7d", None)
+        if state is None:
+            raise CanonicalV2Error(
+                "V2 state mapper requires a step with state_7d",
+                episode_id="<unknown>",
+                field="robot_state.Arm_A.state_7d",
+            )
+        values = np.asarray(state, dtype=np.float32)
+        if values.shape != (STATE_DIM,) or not np.all(np.isfinite(values)):
+            raise CanonicalV2Error(
+                "V2 state must be finite float32[7]",
+                episode_id="<unknown>",
+                field="robot_state.Arm_A.state_7d",
+            )
+        return values.copy()
 
 
 def _sha256_file(path: Path) -> str:
@@ -392,10 +425,15 @@ class CanonicalV2Reader:
         if self._h5 is not None and self._h5.id.valid:
             self._h5.close()
 
-    def __enter__(self) -> CanonicalV2Reader:
+    def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
         del exc_type, exc, traceback
         self.close()
 
@@ -409,12 +447,13 @@ def read_canonical_v2_episode(episode_dir: str | Path) -> CanonicalV2Reader:
 __all__ = [
     "ACTION_DIM",
     "CANONICAL_SCHEMA_VERSION",
-    "CanonicalV2Error",
-    "CanonicalV2Reader",
     "EXPECTED_INSTRUCTION",
     "EXPECTED_SCENE_ID",
     "EXPECTED_TASK_ID",
     "EXPECTED_TASK_INSTRUCTIONS",
     "STATE_DIM",
+    "CanonicalV2Error",
+    "CanonicalV2Reader",
+    "CanonicalV2StateMapper",
     "read_canonical_v2_episode",
 ]

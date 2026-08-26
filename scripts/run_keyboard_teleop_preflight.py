@@ -142,7 +142,11 @@ def main() -> int:
                 "bin_at_handoff": False,
                 "bin_at_finished": False,
                 "bin_speed_m_s": 0.0,
-                "status": "keyboard_teleop_preflight",
+                "status": "keyboard_teleop_preflight_v2",
+                "v2_task_id": "P01_TO_S11",
+                "v2_target_object_id": "P01",
+                "v2_target_slot_id": "S11",
+                "v2_terminal": False,
             },
             "quality": {"confidence": 1.0},
         }

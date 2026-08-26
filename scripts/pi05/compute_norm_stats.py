@@ -1,7 +1,8 @@
 """Compute PI05 norm stats from validated Train-only data.
 
-Canonical input is parsed exclusively by ``canonical_v1``.  LeRobot input is
-opened offline and filtered through the conversion provenance manifest.  No
+V1 Canonical input is parsed exclusively by ``canonical_v1``.  Formal V2 input
+uses the pre-windowed LeRobot V2 loader and the V2 mapper identity.  LeRobot
+input is opened offline and filtered through the conversion provenance manifest.  No
 production state statistics can be emitted without an explicitly injected,
 role-A-approved StateMapper.
 """
