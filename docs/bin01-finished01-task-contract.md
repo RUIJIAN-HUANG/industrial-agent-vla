@@ -80,5 +80,39 @@ python simulation/run_v2_keyboard_collection.py \
   --max-actions 500
 ```
 
-M02 and M03 use the same frozen inputs and fresh Episode IDs with `m02` and
-`m03`. A failed or safe-stopped run never counts as a mother trajectory.
+M02 and M03 use the same frozen inputs, `--split train`, `--scene-seed 0`, and
+fresh Episode IDs with `m02` and `m03`. M04 uses a fresh Episode ID containing
+`val-m04`, `--split validation`, and `--scene-seed 1`. The distinct validation
+seed is mandatory because the Split Registry forbids one scene seed from
+crossing Train and Valid. A failed or safe-stopped run never counts as a mother
+trajectory.
+
+After each successful mother trajectory, register it before any replay
+derivation or LeRobot conversion. The collection CLI uses `validation`, while
+the Registry intentionally uses `val`:
+
+```bash
+REGISTRY=/home/xyz/v2-formal-collection/split_registry_v1.json
+
+# M01-M03: change only RUN and the m01/m02/m03 scenario-group suffix.
+python scripts/pi05/register_v2_split.py \
+  --result-json "$RUN/artifacts/result.json" \
+  --registry "$REGISTRY" \
+  --split train \
+  --scenario-group-id bin01-finished01-m01
+
+# M04:
+python scripts/pi05/register_v2_split.py \
+  --result-json "$RUN/artifacts/result.json" \
+  --registry "$REGISTRY" \
+  --split val \
+  --scenario-group-id bin01-finished01-m04
+```
+
+The script strictly validates the Canonical Episode, checks the result's
+Episode ID/path/seed and collection split, adds without changing any existing
+assignment, and computes `registry_sha256` atomically. Never edit the Registry
+JSON or its SHA by hand. A derived Episode must be registered with
+`--parent-episode-id <mother-episode-id>` so it inherits the mother's complete
+group key and split. Complete all Registry assignments before LeRobot
+conversion; changing the Registry afterward requires reconversion.
