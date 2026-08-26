@@ -23,6 +23,7 @@ from .instructions import (
     MVP_W01_TO_S14,
     mvp_instruction_for_task,
     mvp_instruction_options,
+    mvp_task_id_for_instruction,
     normalize_mvp_instruction,
 )
 from .environment import PreWriteStateStaleError
@@ -91,6 +92,7 @@ __all__ = [
     "MVP_W01_TO_S14",
     "mvp_instruction_for_task",
     "mvp_instruction_options",
+    "mvp_task_id_for_instruction",
     "normalize_mvp_instruction",
     "ActionChunk",
     "ActionStep",

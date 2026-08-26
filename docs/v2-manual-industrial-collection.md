@@ -39,17 +39,18 @@ V2 与 V1/P01 保底场景隔离。V1 配置、构建入口、冻结 TaskProfile
 
 ## 冻结指令目录
 
-以下五条是当前冻结的指令目录，机器真源为
-`configs/mvp-instruction-options.json`。界面、采集后台和训练数据必须使用这里的
-精确文本，不得自行改写、补充或删除：
+以下五条是当前冻结的用户指令目录，机器真源为
+`configs/mvp-instruction-options.json`。用户选择右侧自然语言后，系统解析出左侧
+`task_id`，并将该 `task_id` 发送给总控 Agent。界面、采集后台和训练数据必须使用
+这里的精确文本，不得自行改写、补充或删除：
 
-| task_id | 界面显示 | Canonical/训练指令 |
-|---|---|---|
-| `P01_TO_S11` | 把P01放到S11中 | 把P01放到S11中 |
-| `W01_TO_S14` | 把W01放到S14中 | 把W01放到S14中 |
-| `P03_UPRIGHT_TO_S12` | 把倒立的P03翻正后放到S12中 | 把倒立的P03翻正后放到S12中 |
-| `BIN01_TO_FINISHED01` | 把Bin_01搬到FINISHED_01 | 把Bin_01搬到FINISHED_01 |
-| `PACK_ALL_AND_FINISH` | 把所有零件装入Bin_01，再把Bin_01搬到FINISHED_01 | 把所有零件装入Bin_01，再把Bin_01搬到FINISHED_01 |
+| task_id（发送给总控 Agent） | 用户选择的指令 |
+|---|---|
+| `P01_TO_S11` | 请将螺母 P01 放置到料箱的 S11 格子中。 |
+| `W01_TO_S14` | 请将扳手 W01 放置到料箱的 S14 格子中。 |
+| `P03_UPRIGHT_TO_S12` | 请将倒立的轴件 P03 翻正后，放置到料箱的 S12 格子中。 |
+| `BIN01_TO_FINISHED01` | 请将料箱 Bin_01 搬运到成品区 FINISHED_01。 |
+| `PACK_ALL_AND_FINISH` | 请将所有零件按指定位置装入料箱 Bin_01，再将料箱 Bin_01 搬运到成品区 FINISHED_01。 |
 
 当前 Canonical V2 正式采集入口和 Episode Schema 仍只实现
 `P01_TO_S11`；其余四条先完成指令冻结，必须在各自任务合同和采集入口完成后，

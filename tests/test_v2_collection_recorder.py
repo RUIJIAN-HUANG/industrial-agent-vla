@@ -19,7 +19,7 @@ def _writer(
     tmp_path: Path,
     *,
     task_id: str = "P01_TO_S11",
-    instruction: str = "把P01放到S11中",
+    instruction: str = "请将螺母 P01 放置到料箱的 S11 格子中。",
 ) -> tuple[V2CollectionRecorder, ImageCas]:
     image_cas = ImageCas(ImageCasConfig(root=tmp_path / "cas"))
     identity = V2CollectionIdentity(
@@ -85,7 +85,7 @@ def test_v2_collection_boundary_preserves_w01_identity(tmp_path: Path) -> None:
     writer, image_cas = _writer(
         tmp_path,
         task_id="W01_TO_S14",
-        instruction="把W01放到S14中",
+        instruction="请将扳手 W01 放置到料箱的 S14 格子中。",
     )
     with writer:
         writer.record_camera_bundle(
@@ -111,7 +111,7 @@ def test_v2_collection_boundary_preserves_w01_identity(tmp_path: Path) -> None:
 
     with CanonicalV2Reader(episode_path) as reader:
         assert reader.manifest["metadata"]["task_id"] == "W01_TO_S14"
-        assert reader.manifest["metadata"]["instruction"] == "把W01放到S14中"
+        assert reader.manifest["metadata"]["instruction"] == "请将扳手 W01 放置到料箱的 S14 格子中。"
         assert reader._h5["actions/subtask_id"][0].decode() == "W01_TO_S14"
 
 

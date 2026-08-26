@@ -18,10 +18,10 @@ from .recorder import CanonicalRecorder, EpisodeMetadata
 CANONICAL_V2_VERSION = "2.0"
 V2_SCENE_ID = "single_bin_manual_industrial_v2"
 V2_TASK_ID = "P01_TO_S11"
-V2_INSTRUCTION = "把P01放到S11中"
+V2_INSTRUCTION = "请将螺母 P01 放置到料箱的 S11 格子中。"
 V2_TASK_INSTRUCTIONS = {
     V2_TASK_ID: V2_INSTRUCTION,
-    "W01_TO_S14": "把W01放到S14中",
+    "W01_TO_S14": "请将扳手 W01 放置到料箱的 S14 格子中。",
 }
 V2_ARM_ID = "Arm_A"
 V2_EXECUTOR = "pi05"
