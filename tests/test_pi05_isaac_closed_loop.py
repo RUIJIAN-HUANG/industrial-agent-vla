@@ -7,6 +7,8 @@ from unittest.mock import Mock
 import pytest
 
 from simulation.run_pi05_isaac_closed_loop import (
+    _capture_stable_observation_inputs,
+    _pause_physics_world,
     _safety_policy_from_config,
     _update_ui_without_advancing_physics,
     build_observation,
@@ -114,6 +116,129 @@ def test_idle_update_propagates_pause_failure_without_update() -> None:
         )
 
     simulation_app.update.assert_not_called()
+
+
+def test_pause_physics_pauses_playing_world() -> None:
+    events: list[str] = []
+    world = Mock()
+    world.is_playing.return_value = True
+    world.pause.side_effect = lambda: events.append("pause")
+
+    _pause_physics_world(world=world)
+
+    assert events == ["pause"]
+    world.pause.assert_called_once_with()
+
+
+def test_pause_physics_does_not_repause_paused_world() -> None:
+    world = Mock()
+    world.is_playing.return_value = False
+
+    _pause_physics_world(world=world)
+
+    world.pause.assert_not_called()
+
+
+def test_stable_observation_pause_failure_stops_capture() -> None:
+    world = Mock()
+    world.is_playing.return_value = True
+    world.pause.side_effect = RuntimeError("pause failed")
+    capture_camera = Mock()
+    capture_state = Mock()
+
+    with pytest.raises(RuntimeError, match="pause failed"):
+        _capture_stable_observation_inputs(
+            world=world,
+            capture_camera=capture_camera,
+            capture_state=capture_state,
+        )
+
+    capture_camera.assert_not_called()
+    capture_state.assert_not_called()
+
+
+def test_stable_observation_captures_camera_then_state() -> None:
+    events: list[str] = []
+    world = Mock()
+    world.is_playing.side_effect = (True, False, False)
+    world.pause.side_effect = lambda: events.append("pause")
+    capture_camera = Mock(side_effect=lambda: events.append("camera") or {"rgb": 1})
+    capture_state = Mock(side_effect=lambda: events.append("state") or {"robot": 2})
+
+    camera, state = _capture_stable_observation_inputs(
+        world=world,
+        capture_camera=capture_camera,
+        capture_state=capture_state,
+    )
+
+    assert events == ["pause", "camera", "state"]
+    assert camera == {"rgb": 1}
+    assert state == {"robot": 2}
+
+
+def test_stable_observation_pauses_again_after_camera_restarts_world() -> None:
+    events: list[str] = []
+    world = Mock()
+    playing = iter((True, True, False))
+    world.is_playing.side_effect = lambda: next(playing)
+    world.pause.side_effect = lambda: events.append("pause")
+    capture_camera = Mock(side_effect=lambda: events.append("camera") or {"rgb": 1})
+    capture_state = Mock(side_effect=lambda: events.append("state") or {"robot": 2})
+
+    _capture_stable_observation_inputs(
+        world=world,
+        capture_camera=capture_camera,
+        capture_state=capture_state,
+    )
+
+    assert events == ["pause", "camera", "pause", "state"]
+    assert world.pause.call_count == 2
+
+
+def test_stable_observation_camera_failure_propagates_without_state() -> None:
+    world = Mock()
+    world.is_playing.return_value = False
+    capture_camera = Mock(side_effect=OSError("camera failed"))
+    capture_state = Mock()
+
+    with pytest.raises(OSError, match="camera failed"):
+        _capture_stable_observation_inputs(
+            world=world,
+            capture_camera=capture_camera,
+            capture_state=capture_state,
+        )
+
+    capture_state.assert_not_called()
+
+
+def test_stable_observation_state_failure_does_not_return_partial_observation() -> None:
+    world = Mock()
+    world.is_playing.return_value = False
+    capture_camera = Mock(return_value={"rgb": 1})
+    capture_state = Mock(side_effect=TimeoutError("state failed"))
+
+    with pytest.raises(TimeoutError, match="state failed"):
+        _capture_stable_observation_inputs(
+            world=world,
+            capture_camera=capture_camera,
+            capture_state=capture_state,
+        )
+
+
+def test_stable_observation_rejects_world_playing_after_state_capture() -> None:
+    world = Mock()
+    world.is_playing.side_effect = (False, True, True)
+    capture_camera = Mock(return_value={"rgb": 1})
+    capture_state = Mock(return_value={"robot": 2})
+
+    with pytest.raises(RuntimeError, match="physics resumed"):
+        _capture_stable_observation_inputs(
+            world=world,
+            capture_camera=capture_camera,
+            capture_state=capture_state,
+        )
+
+    capture_state.assert_called_once_with()
 
 
 def test_build_task_state_contains_no_ground_truth_fields() -> None:
