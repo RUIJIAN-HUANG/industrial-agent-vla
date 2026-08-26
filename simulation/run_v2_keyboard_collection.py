@@ -612,7 +612,18 @@ def _record_and_execute_formal_action(
     )
     if bin_grasp_manager is not None:
         bin_grasp_manager.before_action(action, arm_id=arm_id)
-    controller.execute_action(action, arm_id=arm_id)
+    try:
+        controller.execute_action(action, arm_id=arm_id)
+    except BaseException as action_error:
+        if bin_grasp_manager is not None:
+            try:
+                bin_grasp_manager.after_action(action, arm_id=arm_id)
+            except BaseException as grasp_error:
+                action_error.add_note(
+                    "bin grasp state refresh also failed after the action error: "
+                    f"{grasp_error}"
+                )
+        raise
     if bin_grasp_manager is not None:
         bin_grasp_manager.after_action(action, arm_id=arm_id)
 
@@ -838,7 +849,10 @@ def main() -> int:
         simulation_app = isaac_compat.launch_simulation_app(headless=False)
         phase = "build_scene"
         import single_bin_scene_v2_builder
-        from isaac_franka_controller import IsaacSimFrankaController
+        from isaac_franka_controller import (
+            CartesianTrackingRejected,
+            IsaacSimFrankaController,
+        )
         from isaacsim.core.api import World
         from isaacsim.core.prims import SingleArticulation
 
@@ -1233,23 +1247,47 @@ def main() -> int:
                             f"REJECTED | {rejection} | actions={action_count}"
                         )
                         continue
+                    tracking_rejection = None
                     for repeat_index in range(repeat_count):
-                        _record_and_execute_formal_action(
-                            bridge=bridge,
-                            controller=controller,
-                            action=command.action,
-                            arm_id=active_arm,
-                            task_id=preflight.task_id,
-                            episode_id=preflight.episode_id,
-                            action_index=action_count,
-                            bin_grasp_manager=bin_grasp_manager,
-                        )
+                        try:
+                            _record_and_execute_formal_action(
+                                bridge=bridge,
+                                controller=controller,
+                                action=command.action,
+                                arm_id=active_arm,
+                                task_id=preflight.task_id,
+                                episode_id=preflight.episode_id,
+                                action_index=action_count,
+                                bin_grasp_manager=bin_grasp_manager,
+                            )
+                        except CartesianTrackingRejected as exc:
+                            # The 100 ms command and its 12 physics ticks have
+                            # already been recorded.  Keep the canonical stream
+                            # contiguous, but let the operator recover from a
+                            # local IK stall instead of aborting the episode.
+                            action_count += 1
+                            tracking_rejection = exc
+                            break
                         action_count += 1
                         if repeat_count > 1:
                             print(
                                 f"GRIPPER SETTLE {repeat_index + 1}/{repeat_count} "
                                 f"actions={action_count}"
                             )
+                    if tracking_rejection is not None:
+                        diagnostic = tracking_rejection.diagnostic
+                        message = (
+                            f"ACTION STALLED: {active_arm} made no useful progress "
+                            f"({diagnostic['forward_progress_m'] * 1000.0:.2f} mm); "
+                            "the bin grasp is preserved. Choose another direction "
+                            "or press F for fine mode"
+                        )
+                        print(message)
+                        status_label.text = (
+                            f"STALLED | arm={active_arm} | grasp preserved | "
+                            f"actions={action_count}"
+                        )
+                        continue
                     grasp_status = ""
                     if bin_grasp_manager is not None and command.key == "g":
                         gripper_open = float(command.action.values[6]) >= 0.5

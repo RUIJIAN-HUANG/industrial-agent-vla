@@ -25,6 +25,19 @@ _MIN_TRANSLATION_PROGRESS_M = 0.00025
 _MIN_TRANSLATION_DIRECTION_COSINE = 0.25
 
 
+class CartesianTrackingRejected(RuntimeError):
+    """A completed Cartesian command made no useful forward progress."""
+
+    def __init__(self, arm_id: str, diagnostic: Mapping[str, Any]) -> None:
+        self.arm_id = arm_id
+        self.diagnostic = dict(diagnostic)
+        super().__init__(
+            f"Pink Cartesian tracking guard rejected {arm_id}: "
+            f"forward_progress_m={self.diagnostic['forward_progress_m']:.6f}, "
+            f"direction_cosine={self.diagnostic['direction_cosine']:.3f}"
+        )
+
+
 def _quat_multiply(left: np.ndarray, right: np.ndarray) -> np.ndarray:
     """Multiply wxyz quaternions."""
 
@@ -1002,13 +1015,7 @@ class IsaacSimFrankaController:
                 )
                 self._last_motion_diagnostics[arm_id] = motion_diagnostic
                 if not motion_diagnostic["pass"]:
-                    raise RuntimeError(
-                        f"Pink Cartesian tracking guard rejected {arm_id}: "
-                        f"forward_progress_m="
-                        f"{motion_diagnostic['forward_progress_m']:.6f}, "
-                        f"direction_cosine="
-                        f"{motion_diagnostic['direction_cosine']:.3f}"
-                    )
+                    raise CartesianTrackingRejected(arm_id, motion_diagnostic)
         finally:
             self._action_idle.set()
             self._action_lock.release()
