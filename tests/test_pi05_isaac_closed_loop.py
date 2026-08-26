@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import ast
+from pathlib import Path
+
 from simulation.run_pi05_isaac_closed_loop import (
     _safety_policy_from_config,
     build_observation,
@@ -7,6 +10,61 @@ from simulation.run_pi05_isaac_closed_loop import (
 )
 from industrial_agent.v2_observation import V2ObservationGateway
 from industrial_agent.v2_task_profile import require_formal_v2_task
+
+
+def test_isaac_runtime_imports_are_deferred_until_after_kit_startup() -> None:
+    source_path = (
+        Path(__file__).resolve().parents[1]
+        / "simulation"
+        / "run_pi05_isaac_closed_loop.py"
+    )
+    tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
+    runner = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_run_closed_loop"
+    )
+
+    launch_line = next(
+        node.lineno
+        for node in ast.walk(runner)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "launch_simulation_app"
+    )
+    runtime_modules = {
+        "simulation.isaac_rgb_pipeline",
+        "simulation.rgb_cas_bridge",
+        "simulation.run_isaac_adapter_smoke",
+        "simulation.run_v2_keyboard_collection",
+        "simulation.single_bin_scene_v2_builder",
+        "isaac_franka_controller",
+        "isaacsim.core.api",
+        "isaacsim.core.prims",
+    }
+
+    runtime_imports = [
+        node
+        for node in ast.walk(runner)
+        if isinstance(node, ast.ImportFrom) and node.module in runtime_modules
+    ]
+
+    assert {node.module for node in runtime_imports} == runtime_modules
+    assert all(node.lineno > launch_line for node in runtime_imports)
+
+    try_block = next(node for node in ast.walk(runner) if isinstance(node, ast.Try))
+    try_body_lines = {node.lineno for node in try_block.body if hasattr(node, "lineno")}
+    assert all(node.lineno in try_body_lines for node in runtime_imports)
+
+    assert any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "close"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "simulation_app"
+        for final_node in try_block.finalbody
+        for node in ast.walk(final_node)
+    )
 
 
 def test_build_task_state_contains_no_ground_truth_fields() -> None:

@@ -218,14 +218,6 @@ def _run_closed_loop(args: argparse.Namespace) -> dict[str, Any]:
     from industrial_agent.isaac_environment import IsaacExecutionEnvironment
     from industrial_agent.isaac_runtime import IsaacMainThreadGate
     from industrial_agent.environment import execution_guard_digest
-    from simulation.isaac_rgb_pipeline import IsaacRgbObservationPipeline
-    from simulation.rgb_cas_bridge import IsaacRgbCasPublisher
-    from simulation.run_isaac_adapter_smoke import _arm_state
-    from simulation.run_v2_keyboard_collection import _apply_home
-    from simulation.single_bin_scene_v2_builder import build_scene
-    from isaac_franka_controller import IsaacSimFrankaController
-    from isaacsim.core.api import World
-    from isaacsim.core.prims import SingleArticulation
 
     scene_config_path = args.scene_config.expanduser().resolve()
     scene_config = scene_layout.load_config(scene_config_path)
@@ -295,6 +287,16 @@ def _run_closed_loop(args: argparse.Namespace) -> dict[str, Any]:
     records: list[dict[str, Any]] = []
     terminal = False
     try:
+        phase = "load_isaac_runtime"
+        from simulation.isaac_rgb_pipeline import IsaacRgbObservationPipeline
+        from simulation.rgb_cas_bridge import IsaacRgbCasPublisher
+        from simulation.run_isaac_adapter_smoke import _arm_state
+        from simulation.run_v2_keyboard_collection import _apply_home
+        from simulation.single_bin_scene_v2_builder import build_scene
+        from isaac_franka_controller import IsaacSimFrankaController
+        from isaacsim.core.api import World
+        from isaacsim.core.prims import SingleArticulation
+
         phase = "verify_isaac_version"
         isaac_version = isaac_compat.require_isaac_sim_51()
         stage = isaac_compat.create_new_stage()
