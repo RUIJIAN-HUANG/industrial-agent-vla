@@ -79,8 +79,7 @@ def _ik_targets(config: Mapping[str, Any]) -> list[dict[str, Any]]:
         float(value) for value in config["bin"]["pose"]["position_m"]
     ]
     initial_station_position = [
-        float(value)
-        for value in stations[initial_station_id]["pose"]["position_m"]
+        float(value) for value in stations[initial_station_id]["pose"]["position_m"]
     ]
     bin_center_offset = [
         frozen_bin_position[index] - initial_station_position[index]
@@ -104,8 +103,7 @@ def _ik_targets(config: Mapping[str, Any]) -> list[dict[str, Any]]:
         station = stations[station_id]
         position = [float(value) for value in station["pose"]["position_m"]]
         position = [
-            value + bin_center_offset[index]
-            for index, value in enumerate(position)
+            value + bin_center_offset[index] for index, value in enumerate(position)
         ]
         position[2] += handle_z + approach_z
         targets.append(
@@ -121,8 +119,7 @@ def _ik_targets(config: Mapping[str, Any]) -> list[dict[str, Any]]:
         station = stations[station_id]
         position = [float(value) for value in station["pose"]["position_m"]]
         position = [
-            value + bin_center_offset[index]
-            for index, value in enumerate(position)
+            value + bin_center_offset[index] for index, value in enumerate(position)
         ]
         position[2] += handle_z + approach_z
         targets.append(
@@ -135,9 +132,7 @@ def _ik_targets(config: Mapping[str, Any]) -> list[dict[str, Any]]:
         )
 
     if len(targets) != 9 or len({item["target_id"] for item in targets}) != 9:
-        raise RuntimeError(
-            "V2 IK target construction must produce nine unique targets"
-        )
+        raise RuntimeError("V2 IK target construction must produce nine unique targets")
     for item in targets:
         if item["arm_id"] not in ARM_IDS:
             raise RuntimeError(f"invalid IK arm: {item['arm_id']}")
@@ -264,10 +259,8 @@ def main() -> int:
 
             solvers: dict[str, Any] = {}
             for arm_id in ARM_IDS:
-                solver_config = (
-                    interface_config_loader.load_supported_lula_kinematics_solver_config(
-                        "Franka"
-                    )
+                solver_config = interface_config_loader.load_supported_lula_kinematics_solver_config(
+                    "Franka"
                 )
                 lula = LulaKinematicsSolver(**solver_config)
                 base_position, base_orientation = arms[arm_id].get_world_pose()
@@ -337,9 +330,7 @@ def main() -> int:
                 predicted_tcp_world = np.full(3, np.nan, dtype=float)
                 position_error_m = float("inf")
                 virtual_action_count = 0
-                for virtual_action_count in range(
-                    1, args.pink_max_virtual_actions + 1
-                ):
+                for virtual_action_count in range(1, args.pink_max_virtual_actions + 1):
                     virtual_joints, predicted_tcp_world, _ = (
                         controller.predict_pink_tcp_pose_read_only(
                             arm_id=arm_id,

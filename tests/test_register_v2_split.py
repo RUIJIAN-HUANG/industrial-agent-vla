@@ -91,8 +91,7 @@ def test_maps_validation_collection_to_val_registry(
     )
 
     assert (
-        SplitRegistry.load(registry_path).get_split("bin01-val-m04")
-        is DatasetSplit.VAL
+        SplitRegistry.load(registry_path).get_split("bin01-val-m04") is DatasetSplit.VAL
     )
 
 
@@ -137,9 +136,7 @@ def test_derived_episode_inherits_registered_parent_group(
         scene_seed=0,
     )
     manifests = iter((mother_manifest, derived_manifest))
-    monkeypatch.setattr(
-        registration, "_validated_manifest", lambda _: next(manifests)
-    )
+    monkeypatch.setattr(registration, "_validated_manifest", lambda _: next(manifests))
     registry_path = tmp_path / "split_registry_v1.json"
     registration.register_collection_result(
         result_json=mother_result,

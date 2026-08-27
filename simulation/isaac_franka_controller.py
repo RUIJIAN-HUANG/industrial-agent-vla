@@ -397,9 +397,7 @@ class IsaacSimFrankaController:
                 self._tcp_definitions[arm_id] = {
                     "mode": "virtual_two_fingertip_midpoint",
                     "control_frame_name": end_effector_frame_name,
-                    "fingertip_frame_names": list(
-                        virtual_tcp_fingertip_frame_names
-                    ),
+                    "fingertip_frame_names": list(virtual_tcp_fingertip_frame_names),
                     "tcp_offset_local_m": offset.tolist(),
                     "calibration_fingertip_separation_m": separation_m,
                 }
@@ -598,9 +596,9 @@ class IsaacSimFrankaController:
                 base_position,
                 base_orientation,
             )
-            control_position, rotation = (
-                self._solvers[arm_id].compute_end_effector_pose()
-            )
+            control_position, rotation = self._solvers[
+                arm_id
+            ].compute_end_effector_pose()
             control_position = np.asarray(control_position, dtype=float)
             rotation = np.asarray(rotation, dtype=float)
         if (
@@ -683,9 +681,7 @@ class IsaacSimFrankaController:
         target_control_base = _rotate_vector(
             inverse_base, target_control_world - base_position
         )
-        target_orientation_base = _quat_multiply(
-            inverse_base, target_orientation_world
-        )
+        target_orientation_base = _quat_multiply(inverse_base, target_orientation_world)
 
         predicted = np.asarray(current_joint_positions, dtype=float).copy()
         controlled_indices = self._pink_adapter.controlled_indices(arm_id)
@@ -961,9 +957,7 @@ class IsaacSimFrankaController:
                 else:
                     if solver is None or lula_solver is None:
                         raise RuntimeError(f"Lula solver is unavailable for {arm_id}")
-                    lula_solver.set_robot_base_pose(
-                        base_position, base_orientation
-                    )
+                    lula_solver.set_robot_base_pose(base_position, base_orientation)
                     ik_action, success = solver.compute_inverse_kinematics(
                         target_position,
                         target_orientation,

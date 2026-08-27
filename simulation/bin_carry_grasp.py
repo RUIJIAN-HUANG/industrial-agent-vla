@@ -270,9 +270,7 @@ class UsdFixedJointBinCarryBackend:
         imaginary = value.GetImaginary()
         return Gf.Quatf(
             float(value.GetReal()),
-            Gf.Vec3f(
-                float(imaginary[0]), float(imaginary[1]), float(imaginary[2])
-            ),
+            Gf.Vec3f(float(imaginary[0]), float(imaginary[1]), float(imaginary[2])),
         )
 
     def attach(self, arm_id: str) -> None:

@@ -87,9 +87,7 @@ def test_collection_scene_build_is_task_invariant() -> None:
     ]
     assert len(scene_calls) == 1
     assert all(
-        keyword.arg != "task_id"
-        for call in scene_calls
-        for keyword in call.keywords
+        keyword.arg != "task_id" for call in scene_calls for keyword in call.keywords
     )
 
 

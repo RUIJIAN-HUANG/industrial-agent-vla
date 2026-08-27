@@ -1030,8 +1030,7 @@ def main() -> int:
                 else f"{task_part_id} target: {task_slot_id}"
             )
             completion_label = (
-                "V verify HANDOFF_CENTER | B activate Arm_B | "
-                "C confirm FINISHED_01"
+                "V verify HANDOFF_CENTER | B activate Arm_B | C confirm FINISHED_01"
                 if bin_transport_task
                 else f"Z confirm {task_part_id} in {task_slot_id} | "
                 f"C complete {task_part_id} task"

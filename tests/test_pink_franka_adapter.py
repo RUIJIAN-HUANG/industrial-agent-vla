@@ -176,11 +176,7 @@ class PinkFrankaAdapterMathTests(unittest.TestCase):
 
         with TemporaryDirectory() as root:
             exts = Path(root) / "exts"
-            fake_origin = (
-                exts
-                / "isaacsim.core.api"
-                / "isaacsim/core/api/__init__.py"
-            )
+            fake_origin = exts / "isaacsim.core.api" / "isaacsim/core/api/__init__.py"
             fake_urdf = (
                 exts
                 / "isaacsim.robot_motion.motion_generation"

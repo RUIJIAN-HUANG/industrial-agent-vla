@@ -80,7 +80,11 @@ def _resolve_default_franka_urdf() -> str:
     """Find Lula's Franka URDF without importing its conflicting extension."""
 
     spec = importlib.util.find_spec("isaacsim.core.api")
-    origins = [] if spec is None else [spec.origin, *list(spec.submodule_search_locations or [])]
+    origins = (
+        []
+        if spec is None
+        else [spec.origin, *list(spec.submodule_search_locations or [])]
+    )
     relative = (
         Path("isaacsim.robot_motion.motion_generation")
         / "motion_policy_configs"

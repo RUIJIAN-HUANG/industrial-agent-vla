@@ -29,9 +29,7 @@ V2_EXECUTOR = "pi05"
 V2_TASK_ACTION_IDENTITIES = {
     "P01_TO_S11": frozenset({("Arm_A", "pi05")}),
     "W01_TO_S14": frozenset({("Arm_A", "pi05")}),
-    "BIN01_TO_FINISHED01": frozenset(
-        {("Arm_A", "pi05"), ("Arm_B", "openvla_oft")}
-    ),
+    "BIN01_TO_FINISHED01": frozenset({("Arm_A", "pi05"), ("Arm_B", "openvla_oft")}),
 }
 _SAFE_EPISODE_ID = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 _GIT_SHA = re.compile(r"^[0-9a-fA-F]{40}$")

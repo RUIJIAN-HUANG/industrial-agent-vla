@@ -45,10 +45,7 @@ def test_display_and_canonical_text_resolve_to_one_training_task(text: str) -> N
 def test_task_id_resolves_to_same_option() -> None:
     assert mvp_instruction_for_task("P01_TO_S11") is MVP_P01_TO_S11
     assert mvp_instruction_for_task("W01_TO_S14") is MVP_W01_TO_S14
-    assert (
-        mvp_instruction_for_task("BIN01_TO_FINISHED01")
-        is MVP_BIN01_TO_FINISHED01
-    )
+    assert mvp_instruction_for_task("BIN01_TO_FINISHED01") is MVP_BIN01_TO_FINISHED01
 
 
 def test_user_instruction_resolves_to_task_id_for_supervisor() -> None:

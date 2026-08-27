@@ -45,9 +45,7 @@ _OPEN = _Action([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0])
 
 
 def test_distance_and_follow_error_are_measured_in_metres() -> None:
-    assert distance_m([0.0, 0.0, 0.0], [0.003, 0.004, 0.0]) == pytest.approx(
-        0.005
-    )
+    assert distance_m([0.0, 0.0, 0.0], [0.003, 0.004, 0.0]) == pytest.approx(0.005)
     assert follow_error_m(
         tcp_before=[0.0, 0.0, 0.0],
         tcp_after=[0.0, 0.0, 0.01],
