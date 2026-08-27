@@ -12,7 +12,7 @@ from typing import Any, Mapping
 ZERO_SHA256 = f"sha256:{'0' * 64}"
 _RESOURCE_PACKAGE = "yolo_service.resources"
 _DEFAULT_CONFIG_NAME = "yolo.default.json"
-_DEFAULT_CLASS_MAP_NAME = "class_map.single_bin_v1.json"
+_DEFAULT_CLASS_MAP_NAME = "class_map.single_bin_v2.json"
 
 
 def _resource_bytes(name: str) -> bytes:
