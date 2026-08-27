@@ -30,8 +30,9 @@ store or the team delivery bundle.
 | Class map SHA-256 | `sha256:839fdb76e458f9148959e727d289a29495130ce9c868b10b57adcaab4323ba06` |
 | Service config | `configs/yolo.service-manual800.json` |
 | Service config SHA-256 | `sha256:a28227b8296f736280a43e5b2defb559692fe49e14f6876cf6f918321b8f1e56` |
+| Runtime effective config SHA-256 | `sha256:f912e17a823bce66092ab730472919c90d024007d1e0cb5a497f54edb24fcff5` |
 | Perception integration config | `configs/perception.yolo-manual800.json` |
-| Perception integration config SHA-256 | `sha256:11753f30a149ad77931d4daaa04d083758b7bbeee8d6d876f102d362972999eb` |
+| Perception integration config SHA-256 | `sha256:02c5652fa14bea38b1e408b518c23163f342bec249d42f10fb7fac9f9fdd4f92` |
 | Training seed | `7` |
 | Training date | `2026-08-27` |
 

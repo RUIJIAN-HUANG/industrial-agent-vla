@@ -15,7 +15,7 @@
   },
   "perception_config": {
     "path": "configs/perception.yolo-manual800.json",
-    "sha256": "sha256:11753f30a149ad77931d4daaa04d083758b7bbeee8d6d876f102d362972999eb"
+    "sha256": "sha256:02c5652fa14bea38b1e408b518c23163f342bec249d42f10fb7fac9f9fdd4f92"
   },
   "training": {
     "base": "manual500_yolo11n_e20_cpu/best.pt",

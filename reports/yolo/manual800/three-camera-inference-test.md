@@ -21,7 +21,7 @@ an `ImageReference` before running the contract-level probe.
 ```text
 checkpoint_sha: sha256:2a8beca3ff52f6cd7a2f81f087df71793889d7017f81156a8286f4ffb106080f
 class_map_sha:  sha256:839fdb76e458f9148959e727d289a29495130ce9c868b10b57adcaab4323ba06
-config_sha:     sha256:a28227b8296f736280a43e5b2defb559692fe49e14f6876cf6f918321b8f1e56
+config_sha:     sha256:f912e17a823bce66092ab730472919c90d024007d1e0cb5a497f54edb24fcff5
 ```
 
 ## Procedure

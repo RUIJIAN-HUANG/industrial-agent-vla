@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,12 +10,41 @@ from typing import Any
 import numpy as np
 import pytest
 
-from yolo_service.config import load_config
+from yolo_service.config import _effective_config_sha, load_config
 from yolo_service.model import UltralyticsYoloModel
 
 
 def _sha256(raw: bytes) -> str:
     return f"sha256:{hashlib.sha256(raw).hexdigest()}"
+
+
+def test_manual800_runtime_identity_matches_perception_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    service_config = json.loads(
+        (repo_root / "configs" / "yolo.service-manual800.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    perception_config = json.loads(
+        (repo_root / "configs" / "perception.yolo-manual800.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    checkpoint = tmp_path / "best.pt"
+    checkpoint.write_bytes(b"manual800-contract-probe")
+    monkeypatch.setenv("YOLO_USE_MOCK", "0")
+    monkeypatch.setenv("YOLO_CHECKPOINT_PATH", str(checkpoint))
+    monkeypatch.delenv("YOLO_CHECKPOINT_SHA", raising=False)
+    monkeypatch.setenv("YOLO_DEVICE", "cpu")
+
+    runtime_config = load_config()
+    expected = perception_config["perception"]["config_sha"]
+
+    assert _effective_config_sha(service_config) == expected
+    assert runtime_config["config_sha"] == expected
 
 
 def test_real_config_hashes_checkpoint_bytes(
