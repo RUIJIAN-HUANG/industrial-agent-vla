@@ -112,7 +112,10 @@ class _ActionRecorder:
 
     def record_plan(self, context: ExecutionContext, chunk: ActionChunk) -> None:
         with self._lock:
-            self._planned[context.step_id] = (chunk.chunk_id, tuple(chunk.steps[0].values))
+            self._planned[context.step_id] = (
+                chunk.chunk_id,
+                tuple(chunk.steps[0].values),
+            )
 
     def begin(
         self,
@@ -226,7 +229,9 @@ class _RecordingEnvironment:
             raise ValueError("command_id must be a non-empty string")
         with self._lock:
             if command_id in self._seen_commands:
-                logger.error("duplicate Isaac command rejected command_id=%s", command_id)
+                logger.error(
+                    "duplicate Isaac command rejected command_id=%s", command_id
+                )
                 raise RuntimeError(f"duplicate command_id rejected: {command_id}")
             self._seen_commands.add(command_id)
 

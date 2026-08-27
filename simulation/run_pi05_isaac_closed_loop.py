@@ -522,7 +522,11 @@ def _run_closed_loop(args: argparse.Namespace) -> dict[str, Any]:
                 status = "TASK_SUCCEEDED"
             else:
                 status = "SAFE_STOPPED"
-            if args.require_terminal and not terminal and runtime_report.safe_stop_confirmed:
+            if (
+                args.require_terminal
+                and not terminal
+                and runtime_report.safe_stop_confirmed
+            ):
                 status = "TERMINAL_CONDITION_NOT_REACHED"
             result = {
                 "status": status,

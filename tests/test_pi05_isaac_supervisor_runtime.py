@@ -201,7 +201,10 @@ def test_budget_is_copied_and_real_v2_supervisor_path_records_commands() -> None
     ("transport", "failure_code"),
     [
         (_Transport(health_ok=False), FailureCode.EXECUTOR_UNAVAILABLE),
-        (_Transport(infer_error=TimeoutError("inference timed out")), FailureCode.EXECUTOR_TIMEOUT),
+        (
+            _Transport(infer_error=TimeoutError("inference timed out")),
+            FailureCode.EXECUTOR_TIMEOUT,
+        ),
         (_Transport(out_of_bounds=True), FailureCode.ACTION_WORKSPACE_BREACH),
     ],
 )
