@@ -204,10 +204,8 @@ def check_norm_stats(config: Any, config_name: str) -> bool:
         return True
     logger.error("❌ norm_stats.json 不存在: %s", path)
     logger.error("   方案书 §3.3.1 Para186 要求训练前必跑 compute_norm_stats。")
-    logger.error(
-        "   请先运行: python scripts/pi05/compute_norm_stats.py --config-name %s",
-        config_name,
-    )
+    logger.error("   请先查看 V2 统计命令参数:")
+    logger.error("   python scripts/pi05/compute_norm_stats.py --help")
     return False
 
 
@@ -386,7 +384,11 @@ def print_summary(config: Any, config_name: str, args: argparse.Namespace) -> No
     mem_frac = _os.environ.get("XLA_PYTHON_CLIENT_MEM_FRACTION", DEFAULT_MEM_FRACTION)
     lora_rank = pi05_config.LORA_RANK
     batch_size = getattr(config, "batch_size", "?")
+    num_workers = getattr(config, "num_workers", "?")
     num_steps = getattr(config, "num_train_steps", "?")
+    log_interval = getattr(config, "log_interval", "?")
+    save_interval = getattr(config, "save_interval", "?")
+    keep_period = getattr(config, "keep_period", "?")
     warmup = getattr(config, "warmup_steps", pi05_config.WARMUP_STEPS)
     weight_decay = getattr(config, "weight_decay", pi05_config.WEIGHT_DECAY)
     grad_accum = getattr(
@@ -426,9 +428,13 @@ def print_summary(config: Any, config_name: str, args: argparse.Namespace) -> No
     )
     print(f"  action_horizon:     {action_horizon}  (初始候选，D21 后按闭环表现调整)")
     print(f"  Batch Size:         {batch_size}  (方案书 §3.3：22.5GB 卡建议 ≤16)")
+    print(f"  Num Workers:        {num_workers}")
     print(
         f"  Total Steps:        {num_steps}  (openpi 官方示例参考值；D21 按数据量调整)"
     )
+    print(f"  Log Interval:       {log_interval}")
+    print(f"  Save Interval:      {save_interval}")
+    print(f"  Keep Period:        {keep_period}")
     print(f"  Warmup Steps:       {warmup}")
     print(f"  Weight Decay:       {weight_decay}")
     print(f"  Grad Accum Steps:   {grad_accum}")

@@ -1,10 +1,14 @@
-# 四 Agent 双 VLA 双臂接口契约
+# 历史 V1 四 Agent 接口契约（已废除）
 
 版本：2.0
 状态：冻结基线
 适用范围：Supervisor、π0.5、OpenVLA-OFT、YOLO、Isaac Sim Adapter、离线 mAP Evaluator
 
-> 场景适用性（2026-08-18）：本文冻结指令、`single_bin_pack_handoff_v1`、
+> 本文仅供历史接口审计，不得用于正式部署。V2 正式合同见
+> `schemas/agent-config-v2.schema.json`、`online-observation-v2.schema.json`、
+> `configs/v2-task-profile.json` 与 `src/industrial_agent/v2_supervisor.py`。
+>
+> 历史场景适用性（2026-08-18）：本文冻结指令、`single_bin_pack_handoff_v1`、
 > P01-P04 与自动交接状态机属于 V1 自动闭环兼容基线。当前
 > `single_bin_manual_industrial_v2` 人工采集场景继续复用 Canonical Episode、
 > 动作维度、图像引用和安全边界等通用合同，但不会反向改写 V1 TaskProfile。
@@ -25,7 +29,7 @@ Supervisor 不做 NLP、任务复杂度判断或模型路由。部署任务指�
 - Arm_B/OpenVLA-OFT：`收到 handoff_ready 后，观察中央交接位，抓稳 Bin_01 并保持水平，将其搬到 FINISHED_01，松开夹爪并返回 HOME_B。`
 
 以上两条是 `single_bin_pack_handoff_v1` 的唯一逐字冻结值，不是任务语义示例。
-机器可执行真源是 `configs/agent.default.json` 中的 `lifecycle.task_profile`，
+历史机器真源是 `configs/agent.v1.legacy.json` 中的 `lifecycle.task_profile`，
 并由 `schemas/agent-config.schema.json` 的 `const` 约束和
 `FixedTaskProfile.validate_frozen()` 双重校验。本文与
 `final-frozen-scene-and-flow.md` 必须逐字同步；若需要改写自然语言，必须发布新的

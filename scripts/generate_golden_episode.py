@@ -88,7 +88,7 @@ def generate(output_root: Path) -> Path:
             f"refusing to overwrite existing Golden Episode: {fixture_path}"
         )
 
-    config_path = REPO_ROOT / "configs" / "agent.default.json"
+    config_path = REPO_ROOT / "configs" / "agent.v1.legacy.json"
     task_profile = json.loads(config_path.read_text(encoding="utf-8"))["lifecycle"][
         "task_profile"
     ]

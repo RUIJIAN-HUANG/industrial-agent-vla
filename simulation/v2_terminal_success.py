@@ -51,17 +51,19 @@ def vertical_error_rad(
     p01_axis_world: Sequence[float],
     bin_vertical_world: Sequence[float],
 ) -> float:
-    """Return the directed angle between P01's axis and bin vertical.
+    """Return the unsigned angle between P01's nut-hole axis and bin vertical.
 
-    The direction is intentionally not folded with ``abs(dot)``: an inverted
-    P01 is not equivalent to an upright P01 for the frozen task.
+    A hex nut is symmetric across its two faces, so opposite axis directions
+    represent the same flat placement.
     """
 
     part = _finite_vector(p01_axis_world, name="p01_axis_world")
     vertical = _finite_vector(bin_vertical_world, name="bin_vertical_world")
     part_norm = math.sqrt(sum(item * item for item in part))
     vertical_norm = math.sqrt(sum(item * item for item in vertical))
-    cosine = sum(a * b for a, b in zip(part, vertical)) / (part_norm * vertical_norm)
+    cosine = abs(
+        sum(a * b for a, b in zip(part, vertical)) / (part_norm * vertical_norm)
+    )
     return math.acos(max(-1.0, min(1.0, cosine)))
 
 

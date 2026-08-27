@@ -1,7 +1,8 @@
 """Compute PI05 norm stats from validated Train-only data.
 
-Canonical input is parsed exclusively by ``canonical_v1``.  LeRobot input is
-opened offline and filtered through the conversion provenance manifest.  No
+V1 Canonical input is parsed exclusively by ``canonical_v1``.  Formal V2 input
+uses the pre-windowed LeRobot V2 loader and the V2 mapper identity.  LeRobot
+input is opened offline and filtered through the conversion provenance manifest.  No
 production state statistics can be emitted without an explicitly injected,
 role-A-approved StateMapper.
 """
@@ -48,6 +49,9 @@ try:
         open_offline_dataset,
         validate_provenance_manifest,
     )
+    from scripts.pi05.lerobot_v2_norm_source import (
+        load_lerobot_v2_norm_source,
+    )
 except ModuleNotFoundError:  # direct ``python scripts/pi05/...`` execution
     from canonical_v1 import (  # type: ignore
         StateMapper,
@@ -62,6 +66,9 @@ except ModuleNotFoundError:  # direct ``python scripts/pi05/...`` execution
         load_provenance,
         open_offline_dataset,
         validate_provenance_manifest,
+    )
+    from lerobot_v2_norm_source import (  # type: ignore
+        load_lerobot_v2_norm_source,
     )
 
 logger = logging.getLogger("compute_norm_stats")
@@ -121,16 +128,74 @@ def compute_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _stabilize_sparse_quantile_bounds(
+    q01: np.ndarray,
+    q99: np.ndarray,
+    minimum: np.ndarray,
+    maximum: np.ndarray,
+    *,
+    key: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Recover quantile bounds for sparse non-constant features.
+
+    Every input is a finite float64 vector shaped ``[D]``.  If the central
+    1%-99% quantile range collapses while the observed feature range remains
+    non-zero, OpenPI quantile normalization would amplify the rare values by
+    its ``1e-6`` denominator.  Only those dimensions fall back to their
+    observed minimum and maximum; dense and truly constant dimensions retain
+    their original quantiles.
+    """
+
+    lower = np.asarray(q01, dtype=np.float64).copy()
+    upper = np.asarray(q99, dtype=np.float64).copy()
+    observed_min = np.asarray(minimum, dtype=np.float64)
+    observed_max = np.asarray(maximum, dtype=np.float64)
+    shapes = {value.shape for value in (lower, upper, observed_min, observed_max)}
+    if len(shapes) != 1 or lower.ndim != 1:
+        raise ValueError(f"[{key}] quantile bounds must be matching [D] vectors")
+    if not all(
+        np.all(np.isfinite(value))
+        for value in (lower, upper, observed_min, observed_max)
+    ):
+        raise ValueError(f"[{key}] quantile bounds contain NaN or Infinity")
+
+    observed_span = observed_max - observed_min
+    quantile_span = upper - lower
+    fallback = (quantile_span <= EPS) & (observed_span > EPS)
+    for index in np.flatnonzero(fallback):
+        logger.warning(
+            "[%s] sparse quantile fallback at dim=%d: "
+            "q01=%.9g q99=%.9g min=%.9g max=%.9g",
+            key,
+            int(index),
+            float(lower[index]),
+            float(upper[index]),
+            float(observed_min[index]),
+            float(observed_max[index]),
+        )
+    lower[fallback] = observed_min[fallback]
+    upper[fallback] = observed_max[fallback]
+
+    unresolved = (observed_span > EPS) & ((upper - lower) <= EPS)
+    if np.any(unresolved):
+        dimensions = [int(index) for index in np.flatnonzero(unresolved)]
+        raise ValueError(
+            f"[{key}] non-constant dimensions have degenerate quantile bounds: "
+            f"{dimensions}"
+        )
+    return lower, upper
+
+
 def compute_stats(
     arr: np.ndarray,
     mask: np.ndarray | None = None,
     key: str = "",
 ) -> dict[str, np.ndarray]:
-    """Compute finite statistics over strict float64[N,D] input."""
+    """Compute finite per-feature statistics over float data shaped [N,...,D]."""
 
     array = np.asarray(arr, dtype=np.float64)
-    if array.ndim != 2:
-        raise ValueError(f"[{key}] expected 2-D [N,D], got {array.shape}")
+    if array.ndim < 2:
+        raise ValueError(f"[{key}] expected [N,...,D], got {array.shape}")
     if not np.all(np.isfinite(array)):
         raise ValueError(f"[{key}] contains NaN or Infinity")
     if mask is not None:
@@ -143,17 +208,27 @@ def compute_stats(
         if valid.dtype != np.bool_:
             raise ValueError(f"[{key}] mask must have boolean dtype")
         array = array[valid]
+    array = array.reshape(-1, array.shape[-1])
     if array.shape[0] < 2:
         raise ValueError(f"[{key}] requires at least two valid samples")
     mean = array.mean(axis=0)
     std = np.maximum(array.std(axis=0, ddof=0), EPS)
+    minimum = array.min(axis=0)
+    maximum = array.max(axis=0)
+    q01, q99 = _stabilize_sparse_quantile_bounds(
+        np.quantile(array, 0.01, axis=0),
+        np.quantile(array, 0.99, axis=0),
+        minimum,
+        maximum,
+        key=key,
+    )
     result = {
         "mean": mean,
         "std": std,
-        "q01": np.quantile(array, 0.01, axis=0),
-        "q99": np.quantile(array, 0.99, axis=0),
-        "min": array.min(axis=0),
-        "max": array.max(axis=0),
+        "q01": q01,
+        "q99": q99,
+        "min": minimum,
+        "max": maximum,
     }
     if not all(np.all(np.isfinite(value)) for value in result.values()):
         raise ValueError(f"[{key}] computed non-finite statistics")
@@ -247,9 +322,10 @@ def validate_dimensions(
 ) -> None:
     state = np.asarray(data["state"])
     actions = np.asarray(data["actions"])
-    if state.ndim != 2 or actions.ndim != 2:
+    if state.ndim != 2 or actions.ndim not in {2, 3}:
         raise ValueError(
-            f"state/actions must be 2-D; got state={state.shape} actions={actions.shape}"
+            "state must be [N,D] and actions must be [N,D] or [N,H,D]; "
+            f"got state={state.shape} actions={actions.shape}"
         )
     if state.shape[0] != actions.shape[0]:
         raise ValueError(
@@ -261,9 +337,9 @@ def validate_dimensions(
         raise ValueError(
             f"state dimension mismatch: {state.shape[1]} != {expected_state_dim}"
         )
-    if actions.shape[1] != expected_action_dim:
+    if actions.shape[-1] != expected_action_dim:
         raise ValueError(
-            f"action dimension mismatch: {actions.shape[1]} != {expected_action_dim}"
+            f"action dimension mismatch: {actions.shape[-1]} != {expected_action_dim}"
         )
     if not np.all(np.isfinite(state)) or not np.all(np.isfinite(actions)):
         raise ValueError("state/actions contain NaN or Infinity")
@@ -523,6 +599,30 @@ def _load_lerobot(
     )
 
 
+def _load_lerobot_v2(
+    path: Path,
+    *,
+    repo_id: str,
+    split_registry: SplitRegistry,
+    manifest_path: Path | None,
+    io_timeout_s: float,
+) -> LoadedDataset:
+    validated = load_lerobot_v2_norm_source(
+        path,
+        repo_id=repo_id,
+        split_registry=split_registry,
+        dataset_opener=open_offline_dataset,
+        manifest_path=manifest_path,
+        io_timeout_s=io_timeout_s,
+    )
+    return LoadedDataset(
+        state=validated.state,
+        actions=validated.actions,
+        mask=None,
+        source_manifest=validated.source_manifest,
+    )
+
+
 def load_dataset(
     path: Path,
     *,
@@ -533,6 +633,7 @@ def load_dataset(
     production: bool = True,
     repo_id: str | None = None,
     manifest_path: Path | None = None,
+    io_timeout_s: float = 300.0,
 ) -> LoadedDataset:
     """Load one explicit format without guessing or legacy fallback."""
 
@@ -558,9 +659,19 @@ def load_dataset(
             provenance_context=provenance_context,
             manifest_path=manifest_path,
         )
+    if input_format == "lerobot-v2":
+        if not repo_id:
+            raise ValueError("repo_id is required for LeRobot V2 input")
+        return _load_lerobot_v2(
+            path,
+            repo_id=repo_id,
+            split_registry=split_registry,
+            manifest_path=manifest_path,
+            io_timeout_s=io_timeout_s,
+        )
     raise ValueError(
-        "input_format must be explicitly canonical-v1 or lerobot; legacy, npz, "
-        "parquet and hdf5 auto-detection are forbidden"
+        "input_format must be explicitly canonical-v1, lerobot or lerobot-v2; "
+        "legacy, npz, parquet and hdf5 auto-detection are forbidden"
     )
 
 
@@ -609,7 +720,7 @@ def write_norm_stats_bundle(
         },
         "counts": {
             "state_rows": int(loaded.state.shape[0]),
-            "action_rows": int(loaded.actions.shape[0]),
+            "action_rows": int(np.prod(loaded.actions.shape[:-1], dtype=np.int64)),
         },
         "norm_stats_sha256": stats_sha,
         "source": loaded.source_manifest,
@@ -702,7 +813,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--dataset-path", required=True)
     parser.add_argument(
-        "--input-format", required=True, choices=("canonical-v1", "lerobot")
+        "--input-format",
+        required=True,
+        choices=("canonical-v1", "lerobot", "lerobot-v2"),
     )
     parser.add_argument("--state-mapper", required=True)
     parser.add_argument("--repo-id", default=None)
@@ -712,6 +825,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--openpi-root", required=True)
     parser.add_argument("--openpi-commit", required=True)
     parser.add_argument("--output-path", required=True)
+    parser.add_argument(
+        "--io-timeout-s",
+        type=float,
+        default=300.0,
+        help="Overall timeout for LeRobot V2 manifest and frame I/O",
+    )
     parser.add_argument("--quiet", action="store_true")
     return parser.parse_args()
 
@@ -742,6 +861,7 @@ def main() -> int:
             production=True,
             repo_id=args.repo_id,
             manifest_path=Path(args.manifest) if args.manifest else None,
+            io_timeout_s=args.io_timeout_s,
         )
         norm_stats, stats_by_key = calculate_norm_stats(
             loaded, state_dim=int(mapper.state_dim)

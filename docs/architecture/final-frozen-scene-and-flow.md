@@ -1,28 +1,27 @@
-# 当前工业场景与双 VLA 串行闭环边界
+# 当前 V2 工业场景与正式连续闭环
 
-> 更新日期：2026-08-18
+> 更新日期：2026-08-26
 >
 > 当前场景：`single_bin_manual_industrial_v2`
 >
-> 自动闭环兼容基线：`single_bin_pack_handoff_v1`
+> 正式 Supervisor：`single_bin_manual_industrial_v2` / π0.5 / Arm_A
 
-仓库当前不是“V2 已完全替换 V1”，而是两条可审计链路并存：
+V2 已完全替换 V1，正式运行只有一条链路：
 
-1. **V2 人工工业采集**负责在更完整的工业零件场景中生成 Canonical Episode；
-2. **V1 四 Agent 自动闭环**继续冻结 Supervisor、π0.5、OpenVLA-OFT 和 YOLO 的
-   接口、指令、交接投票与恢复语义。
+1. **V2 Canonical 数据链路**生成 π0.5 微调数据；
+2. **V2 Supervisor 闭环**执行 `task_id → /v1/infer → 7D → Isaac → 新观测`。
 
-两条链路共享双 Franka、三相机 ID、7D 动作合同、CAS、在线 GT 隔离和共享区
-令牌安全，但零件配方、料箱结构、采集入口与验收状态不可混写。
+V1 四 Agent/双 VLA/交接生命周期已经废除。相关代码、文档和
+`configs/agent.v1.legacy.json` 只用于历史回归，不具有部署权威性。
 
 ## 1. 当前 V2 工业场景
 
 V2 使用两台 Franka、三台固定 RGB 相机、A/B/C/D 四个零件区和一个带中央提梁的
 `2×4` 料箱。8 个程序化工业零件包括：
 
-- P01/P02：正立轴件；
+- P01：六角螺母；P02：正立轴件；
 - P03/P04：倒立轴件；
-- N01/N02：带可见通孔的六角螺母；
+- N01：正立轴件；N02：带可见通孔的六角螺母；
 - W01/W02：带平行手柄与开口端的扳手。
 
 ```mermaid
@@ -43,9 +42,9 @@ flowchart LR
 
 | 槽位 | 零件 | 槽位 | 零件 |
 |---|---|---|---|
-| S11 | P01 | S21 | P02 |
+| S11 | P01（螺母） | S21 | P02（轴件） |
 | S12 | P03 | S22 | P04 |
-| S13 | N01 | S23 | N02 |
+| S13 | N01（轴件） | S23 | N02（螺母） |
 | S14 | W01 | S24 | W02 |
 
 V2 空箱质量 `0.5 kg`，零件总质量 `0.5 kg`，计划满载质量 `1.0 kg`。中央提梁
@@ -84,9 +83,9 @@ V2 当前使用人工键盘动作和 Pink/Lula IK 后端。有效采样频率 `1
 因此文档和报告可以写“V2 场景源码与静态合同已通过”，不能写“V2 场景已经完成
 Isaac Sim 正式验收”或“八件自动闭环已经打通”。
 
-## 5. V1 自动闭环为何仍保留
+## 5. V1 历史实现（已废除）
 
-V1 是当前可执行 Supervisor TaskProfile 的机器合同：
+以下内容只解释旧证据，不能作为当前执行合同：
 
 - π0.5 只控制 Arm_A，处理 P01-P04 并把料箱放到 `HANDOFF_CENTER`；
 - Supervisor 在锁臂后采集恰好 3 帧，至少 2 帧整帧复合通过；
@@ -95,11 +94,10 @@ V1 是当前可执行 Supervisor TaskProfile 的机器合同：
 - YOLO 对同帧保存评分证据，但不控制令牌；
 - 失败只能由当前角色基于新鲜观测有界恢复，禁止跨角色接管。
 
-V1 的四零件、`2×3` 料箱和逐字冻结指令仍由 `configs/agent.default.json`、Schema
-和接口契约约束。要把自动闭环升级到 V2 八件配方，必须新增 TaskProfile ID、升级
-Schema/后置条件/类别表并补齐端到端验收，不能只改文档或原地替换字符串。
+旧四零件、`2×3` 料箱和冻结指令只保存在 `configs/agent.v1.legacy.json`。生产
+`build_supervisor()` 明确拒绝 1.x 配置。
 
-## 6. V1 冻结指令
+## 6. V1 历史冻结指令（不可用于正式请求）
 
 ### π0.5 / Arm_A
 
@@ -116,7 +114,7 @@ Schema/后置条件/类别表并补齐端到端验收，不能只改文档或原
 自然语言中的 `handoff_ready` 是业务信号名称；事件类型必须使用点号形式
 `handoff.ready`。
 
-## 7. V1 生命周期与交接证据
+## 7. V1 历史生命周期与交接证据
 
 ```mermaid
 flowchart LR
@@ -158,10 +156,10 @@ flowchart LR
 |---|---|
 | V2 坐标、零件、槽位、质量、相机 | `single_bin_scene_v2.json`、`v2_scene_contract.py` |
 | V2 构建和人工采集 | `single_bin_scene_v2_builder.py`、`run_v2_keyboard_collection.py` |
-| V1 自动 TaskProfile 与指令 | `configs/agent.default.json`、Schema |
+| V2 正式 TaskProfile 与指令 | `configs/v2-task-profile.json`、`agent.default.json` |
 | 跨进程 API 与动作合同 | `interface-contracts.md`、`schemas/` |
 | GUI/物理是否通过 | 对应 Gate 的 `run_result.json`、截图和视频 |
 
-旧架构 PNG/SVG 中出现的“四零件、2×3”只表示 V1 自动闭环，不再作为当前 V2
+旧架构 PNG/SVG 中出现的“四零件、2×3”只表示已废除的 V1 自动闭环，不再作为当前 V2
 工业场景布局图。V2 文档优先使用本页 Mermaid 和 JSON 坐标表，直至新的可审计
 GUI 总览图完成并入库。

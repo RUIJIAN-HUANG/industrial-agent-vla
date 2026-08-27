@@ -8,8 +8,8 @@
 >
 > 配置真源：`simulation/configs/single_bin_scene_v2.json`
 
-V2 与 V1/P01 保底场景隔离。V1 配置、构建入口、冻结 TaskProfile 和自动 P01
-脚本保持不变，不得因 V2 文档更新而静默改写。
+V2 是唯一正式场景。V1 配置与脚本已废除并仅保留为历史回归材料，不得用于
+部署、演示、评测或新数据采集。
 
 ## 当前实现边界
 
@@ -37,28 +37,34 @@ V2 与 V1/P01 保底场景隔离。V1 配置、构建入口、冻结 TaskProfile
 代码存在不等于目标环境验收通过。没有 GUI、HOME、IK、碰撞、抓取和满载搬运
 证据时，不得开始正式采集。
 
-## MVP 指令选项
+## 冻结指令目录
 
-MVP 界面显示完整、易懂的自然语言，但采集后台和训练数据只保存统一的
-Canonical 指令。当前冻结选项定义在 `configs/mvp-instruction-options.json`：
+以下五条是当前冻结的用户指令目录，机器真源为
+`configs/mvp-instruction-options.json`。用户选择右侧自然语言后，系统解析出左侧
+`task_id`，并将该 `task_id` 发送给总控 Agent。采集后台和训练数据保存对应的
+Canonical 指令；已有正式 `BIN01_TO_FINISHED01` Episode 使用短 Canonical 文案，
+必须保持兼容，不得手工改写 Episode：
 
-| task_id | 界面显示 | Canonical/训练指令 |
+| task_id（发送给总控 Agent） | 用户选择的指令 | Canonical/训练指令 |
 |---|---|---|
-| `P01_TO_S11` | 帮我把螺母P01放置到料箱的S11格子中。 | 把P01放到S11中 |
-| `W01_TO_S14` | 帮我把扳手W01放置到料箱的S14格子中。 | 把W01放到S14中 |
-| `BIN01_TO_FINISHED01` | 请把料箱Bin_01搬运到成品区FINISHED_01。 | 把Bin_01搬到FINISHED_01 |
+| `P01_TO_S11` | 请将螺母 P01 放置到料箱的 S11 格子中。 | 请将螺母 P01 放置到料箱的 S11 格子中。 |
+| `W01_TO_S14` | 请将扳手 W01 放置到料箱的 S14 格子中。 | 请将扳手 W01 放置到料箱的 S14 格子中。 |
+| `P03_UPRIGHT_TO_S12` | 请将倒立的轴件 P03 翻正后，放置到料箱的 S12 格子中。 | 请将倒立的轴件 P03 翻正后，放置到料箱的 S12 格子中。 |
+| `BIN01_TO_FINISHED01` | 请将料箱 Bin_01 搬运到成品区 FINISHED_01。 | 把Bin_01搬到FINISHED_01 |
+| `PACK_ALL_AND_FINISH` | 请将所有零件按指定位置装入料箱 Bin_01，再将料箱 Bin_01 搬运到成品区 FINISHED_01。 | 请将所有零件按指定位置装入料箱 Bin_01，再将料箱 Bin_01 搬运到成品区 FINISHED_01。 |
 
-界面不得自行改写、补充或删除文字；采集端将显示文本解析为同一 `task_id` 后，
-把 Canonical 指令写入 Episode 元数据。V1 的四零件装箱指令仍保持独立，不得与
-该 MVP 选项混用。
+当前 Canonical V2 正式采集入口和 Episode Schema 已冻结
+`P01_TO_S11`、`W01_TO_S14` 与 `BIN01_TO_FINISHED01`；其余两条先完成指令冻结，
+必须在各自任务合同和采集入口完成后，才能作为对应任务的正式训练数据采集。
+不得把它们伪装成其他任务的 Episode。
 
 ## 场景组成
 
 - 两台 Franka：`Arm_A`、`Arm_B`，均有显式 HOME；
 - 三台 `1280×720`、82° HFOV 固定 RGB 相机：`CAM_A_TOP`、
   `CAM_HANDOFF`、`CAM_B_TOP`；
-- 四个轴件：P01/P02 正立，P03/P04 倒立；
-- 两颗带可见通孔的简化六角螺母：N01/N02；
+- 四个轴件：P02/N01 正立，P03/P04 倒立；
+- 两颗带可见通孔的简化六角螺母：P01/N02；
 - 两把带平行手柄和开口端的简化扳手：W01/W02；
 - A/B/C/D 四个区域各 2 件；
 - 一个 `0.30×0.22×0.09 m` 的 `2×4` 料箱；
@@ -70,9 +76,9 @@ Canonical 指令。当前冻结选项定义在 `configs/mvp-instruction-options.
 
 | 槽位 | 零件 | 类型 | 槽位 | 零件 | 类型 |
 |---|---|---|---|---|---|
-| S11 | P01 | 轴件 | S21 | P02 | 轴件 |
+| S11 | P01 | 螺母 | S21 | P02 | 轴件 |
 | S12 | P03 | 轴件 | S22 | P04 | 轴件 |
-| S13 | N01 | 螺母 | S23 | N02 | 螺母 |
+| S13 | N01 | 轴件 | S23 | N02 | 螺母 |
 | S14 | W01 | 扳手 | S24 | W02 | 扳手 |
 
 ## 入口与用途
@@ -129,7 +135,7 @@ python scripts\pi05\convert_openpi_v2.py `
 Episode 只有同时满足以下三个离线 GT 条件，才允许将 Canonical
 `metadata.outcome` 写为 `SUCCEEDED`：
 
-1. P01 的有向本体轴与料箱局部竖直轴的夹角不超过 15°；
+1. P01 螺母孔的无向轴与料箱局部竖直轴的夹角不超过 15°；
 2. 终端保持期间执行 3 个不同 physics tick 的新鲜 GT 观测，完整 GT
    判定至少 2 个通过；
 3. 真实执行 10 个连续 100 ms 保持动作，保持跨度至少 1.0 s，P01 参考点

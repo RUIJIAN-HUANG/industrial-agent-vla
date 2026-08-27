@@ -14,7 +14,8 @@
 - §3.4：动作 7 维 [dx,dy,dz,dax,day,daz,gripper]，robot_base，axis-angle，control_hz=10。
 - §3.3：LIBERO 配置动作块常为 10，其他域可能不同；以本项目 checkpoint 配置为准，
   不照抄论文动作长度。
-- §5.4：canonical → LeRobot 数据转换由 scripts/pi05/convert_openpi.py 完成。
+- §5.4：正式 V2 canonical → LeRobot 数据转换由 scripts/pi05/convert_openpi_v2.py 完成；
+  scripts/pi05/convert_openpi.py 仅保留 V1 兼容链路。
 - §6.3：首轮微调 100—500 条/核心技能；LoRA；1—2 组超参；ID val 成功≥60%。
 
 配置体系说明（必须遵循 openpi 官方）：
@@ -42,7 +43,11 @@
         --exp-name=my_experiment --overwrite
 
 norm stats 计算命令（训练前必跑，方案书 §3.3.1 Para186）：
-    uv run scripts/compute_norm_stats.py --config-name pi05_industrial
+    python scripts/pi05/compute_norm_stats.py --help
+
+V2 预组窗数据训练：
+    PI05_INPUT_FORMAT=lerobot-v2 python scripts/pi05/train.py \
+        --config-name pi05_industrial --exp-name=my_experiment --overwrite
 """
 
 from __future__ import annotations
@@ -54,11 +59,6 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
-
-try:
-    from configs.pi05.constants import OPENPI_COMMIT as OPENPI_COMMIT
-except ModuleNotFoundError:  # direct ``python configs/pi05/train_config.py`` execution
-    from constants import OPENPI_COMMIT as OPENPI_COMMIT  # type: ignore[no-redef]
 
 # ---------------------------------------------------------------------------
 # 日志
@@ -94,6 +94,21 @@ STATE_DIM: int = int(os.environ.get("PI05_STATE_DIM", "7"))
 MODEL_ACTION_DIM: int = 32
 CANONICAL_ACTION_DIM: int = 7
 ACTION_HORIZON: int = 10
+SUPPORTED_INPUT_FORMATS = ("lerobot", "lerobot-v2")
+PI05_INPUT_FORMAT: str = os.environ.get("PI05_INPUT_FORMAT", "lerobot").strip().lower()
+
+
+def action_sequence_keys_for_input(input_format: str) -> tuple[str, ...] | None:
+    """Select OpenPI windowing for the explicit LeRobot input format."""
+
+    if input_format not in SUPPORTED_INPUT_FORMATS:
+        raise ValueError(
+            "PI05_INPUT_FORMAT must be one of "
+            f"{SUPPORTED_INPUT_FORMATS!r}, got {input_format!r}"
+        )
+    # Legacy rows contain one [7] action and need OpenPI's default windowing;
+    # V2 rows already contain complete [10,7] windows.
+    return () if input_format == "lerobot-v2" else None
 
 
 def require_frozen_action_horizon(action_horizon: int, *, production: bool) -> int:
@@ -123,11 +138,47 @@ def project_policy_actions(actions: Any) -> np.ndarray:
     return array[..., :CANONICAL_ACTION_DIM]
 
 
+def _read_int_env(name: str, default: int, *, minimum: int = 1) -> int:
+    """Read one integer environment override without aborting configuration load."""
+
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return default
+    try:
+        value = int(raw_value)
+    except ValueError:
+        logger.warning(
+            "%s=%r 不是整数，使用默认值 %d",
+            name,
+            raw_value,
+            default,
+        )
+        return default
+    if value < minimum:
+        logger.warning(
+            "%s=%d 小于允许的最小值 %d，使用默认值 %d",
+            name,
+            value,
+            minimum,
+            default,
+        )
+        return default
+    return value
+
+
 # ----------------- 训练超参数补充（C2 修复）-----------------
 # 以下参数若 openpi 官方 TrainConfig 未直接暴露对应字段，则由 optimizer / lr_schedule 内部默认值控制；
 # 此处暴露为环境变量用于文档审计与外部脚本覆盖，实际生效依赖 openpi 官方实现。
 # batch_size 显式覆盖（方案书 §3.3：22.5GB 卡建议降到 16 或 8；默认 16 为安全值）
-BATCH_SIZE: int = int(os.environ.get("PI05_BATCH_SIZE", "16"))
+BATCH_SIZE: int = _read_int_env("PI05_BATCH_SIZE", 16)
+# 数据加载并发数；0 表示在训练进程内同步加载，默认值保持为 2。
+NUM_WORKERS: int = _read_int_env("PI05_NUM_WORKERS", 2, minimum=0)
+# 正式默认值保持 30000；服务器 Smoke 可通过环境变量临时缩短。
+NUM_TRAIN_STEPS: int = _read_int_env("PI05_NUM_TRAIN_STEPS", 30_000)
+# 日志和 checkpoint 周期；均必须为正整数，非法输入回退到原默认值。
+LOG_INTERVAL: int = _read_int_env("PI05_LOG_INTERVAL", 100)
+SAVE_INTERVAL: int = _read_int_env("PI05_SAVE_INTERVAL", 1_000)
+KEEP_PERIOD: int = _read_int_env("PI05_KEEP_PERIOD", 5_000)
 # warmup_steps：学习率线性预热步数（openpi 官方示例约 2000；D21 按数据量调整，§6.3）
 WARMUP_STEPS: int = int(os.environ.get("PI05_WARMUP_STEPS", "2000"))
 # weight_decay：AdamW 权重衰减系数（openpi 官方示例约 0.01—0.1；D21 实验确认）
@@ -362,11 +413,19 @@ if OPENPI_AVAILABLE:
                 outputs=[IndustrialOutputs()],
             )
             model_transforms = ModelTransformFactory()(model_config)
+            replace_kwargs: dict[str, Any] = {
+                "repack_transforms": repack_transform,
+                "data_transforms": data_transforms,
+                "model_transforms": model_transforms,
+            }
+            action_sequence_keys = action_sequence_keys_for_input(PI05_INPUT_FORMAT)
+            if action_sequence_keys is not None:
+                # V2 rows already contain the frozen [10,7] action window.
+                # Legacy V1 rows retain OpenPI's default windowing behavior.
+                replace_kwargs["action_sequence_keys"] = action_sequence_keys
             return dataclasses.replace(
                 self.create_base_config(assets_dirs, model_config),
-                repack_transforms=repack_transform,
-                data_transforms=data_transforms,
-                model_transforms=model_transforms,
+                **replace_kwargs,
             )
 
 else:
@@ -374,8 +433,6 @@ else:
     @dataclass
     class IndustrialLeRobotDataConfig(DataConfigFactory):
         """Fallback config used only when OpenPI isn't installed."""
-
-        pass
 
 
 # ---------------------------------------------------------------------------
@@ -406,7 +463,7 @@ def _build_pi05_industrial_config() -> TrainConfig:
             action_expert_variant="gemma_300m_lora",
         ),
         # ---- 数据配置 ----
-        # 方案书 §5.4：canonical → LeRobot 转换由 scripts/pi05/convert_openpi.py 完成。
+        # 正式 V2 训练数据必须来自 convert_openpi_v2.py；V1 转换器仅用于兼容回归。
         # 方案书 §3.3.1 Para186：norm stats 用 compute_norm_stats 单独生成本项目自有统计。
         data=IndustrialLeRobotDataConfig(
             repo_id=DATASET_REPO_ID,
@@ -416,11 +473,11 @@ def _build_pi05_industrial_config() -> TrainConfig:
         # 方案书 §3.3：LoRA 微调显存 >22.5GB；22.5GB 卡建议降到 16 或 8。
         # 默认 batch_size=16（安全值），可通过 PI05_BATCH_SIZE 环境变量覆盖（W3 修复）。
         batch_size=BATCH_SIZE,
-        num_workers=2,
-        num_train_steps=30000,  # openpi 官方示例参考值；D21 按数据量与收敛情况调整（W5）
-        log_interval=100,
-        save_interval=1000,
-        keep_period=5000,
+        num_workers=NUM_WORKERS,
+        num_train_steps=NUM_TRAIN_STEPS,
+        log_interval=LOG_INTERVAL,
+        save_interval=SAVE_INTERVAL,
+        keep_period=KEEP_PERIOD,
         # LoRA 训练禁用 EMA（EMA 与 LoRA 不兼容，ema_decay=None 由 openpi 内部处理）
         ema_decay=None,
         # ---- 学习率 ----
@@ -567,8 +624,14 @@ def _print_summary() -> None:
     print(
         f"batch_size:         {BATCH_SIZE}  (默认安全值 16；方案书 §3.3：22.5GB 卡建议 ≤16)"
     )
+    print(f"num_workers:        {NUM_WORKERS}")
     print("lr init_value:      2e-5 (LoRA 微调较小学习率)")
-    print("num_train_steps:    30000  (openpi 官方示例参考值；D21 按数据量与收敛调整)")
+    print(
+        f"num_train_steps:    {NUM_TRAIN_STEPS}  (默认 30000；D21 按数据量与收敛调整)"
+    )
+    print(f"log_interval:       {LOG_INTERVAL}")
+    print(f"save_interval:      {SAVE_INTERVAL}")
+    print(f"keep_period:        {KEEP_PERIOD}")
     print(
         f"warmup_steps:       {WARMUP_STEPS}  (C2 修复；若 openpi API 不支持则由 scheduler 内部控制)"
     )
@@ -585,6 +648,7 @@ def _print_summary() -> None:
     )
     print(f"base checkpoint:    {BASE_CHECKPOINT}")
     print(f"dataset repo_id:    {DATASET_REPO_ID}")
+    print(f"input format:       {PI05_INPUT_FORMAT}")
     print(f"output_dir:         {OUTPUT_DIR}")
     print("fsdp_devices:       1   (单卡，方案书 §3.3 JAX 路径)")
     print(f"本地配置已注册:      {_REGISTERED}")
@@ -602,7 +666,7 @@ def _print_summary() -> None:
     print("  XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py \\")
     print("      pi05_industrial --exp-name=my_experiment --overwrite")
     print("norm stats 计算命令（训练前必跑，方案书 §3.3.1 Para186）:")
-    print("  uv run scripts/compute_norm_stats.py --config-name pi05_industrial")
+    print("  python scripts/pi05/compute_norm_stats.py --help")
     print("=" * 64)
 
 

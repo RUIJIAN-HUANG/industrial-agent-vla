@@ -27,7 +27,7 @@ class JsonSchemaTests(unittest.TestCase):
 
     def test_default_config_matches_agent_config_schema(self) -> None:
         schema = json.loads(
-            (self.root / "schemas" / "agent-config.schema.json").read_text(
+            (self.root / "schemas" / "agent-config-v2.schema.json").read_text(
                 encoding="utf-8"
             )
         )
@@ -36,9 +36,20 @@ class JsonSchemaTests(unittest.TestCase):
         )
         Draft202012Validator(schema).validate(config)
 
+    def test_explicit_v2_config_alias_matches_formal_default(self) -> None:
+        default = json.loads(
+            (self.root / "configs" / "agent.default.json").read_text(encoding="utf-8")
+        )
+        explicit = json.loads(
+            (self.root / "configs" / "agent.v2.default.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(explicit, default)
+
     def test_agent_config_rejects_invalid_axis_limits(self) -> None:
         schema = json.loads(
-            (self.root / "schemas" / "agent-config.schema.json").read_text(
+            (self.root / "schemas" / "agent-config-v2.schema.json").read_text(
                 encoding="utf-8"
             )
         )
@@ -60,7 +71,7 @@ class JsonSchemaTests(unittest.TestCase):
 
     def test_agent_config_rejects_mutable_artifact_aliases(self) -> None:
         schema = json.loads(
-            (self.root / "schemas" / "agent-config.schema.json").read_text(
+            (self.root / "schemas" / "agent-config-v2.schema.json").read_text(
                 encoding="utf-8"
             )
         )
@@ -70,13 +81,13 @@ class JsonSchemaTests(unittest.TestCase):
         validator = Draft202012Validator(schema)
 
         valid = deepcopy(config)
-        valid["executors"]["openvla_oft"]["checkpoint_sha"] = CHECKPOINT_SHA
-        valid["executors"]["openvla_oft"]["norm_stats_sha"] = NORM_STATS_SHA
+        valid["executors"]["pi05"]["checkpoint_sha"] = CHECKPOINT_SHA
+        valid["executors"]["pi05"]["norm_stats_sha"] = NORM_STATS_SHA
         validator.validate(valid)
 
         for alias in ("latest00", "version1", "sha256:abc", "a" * 40):
             invalid = deepcopy(valid)
-            invalid["executors"]["openvla_oft"]["checkpoint_sha"] = alias
+            invalid["executors"]["pi05"]["checkpoint_sha"] = alias
             with self.subTest(alias=alias):
                 with self.assertRaises(ValidationError):
                     validator.validate(invalid)

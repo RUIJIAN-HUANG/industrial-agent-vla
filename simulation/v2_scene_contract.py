@@ -12,20 +12,20 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_CONFIG_PATH = SCRIPT_DIR / "configs" / "single_bin_scene_v2.json"
 
 EXPECTED_PARTS = {
-    "P01": ("shaft", "A", "upright", (-0.90, 0.20)),
+    "P01": ("nut", "A", "flat", (-0.90, 0.20)),
     "P02": ("shaft", "A", "upright", (-0.80, 0.20)),
     "P03": ("shaft", "B", "inverted", (-0.65, 0.20)),
     "P04": ("shaft", "B", "inverted", (-0.55, 0.20)),
-    "N01": ("nut", "C", "flat", (-0.90, 0.00)),
+    "N01": ("shaft", "C", "upright", (-0.90, 0.00)),
     "N02": ("nut", "C", "flat", (-0.80, 0.00)),
     "W01": ("wrench", "D", "flat_y", (-0.65, 0.00)),
     "W02": ("wrench", "D", "flat_y", (-0.55, 0.00)),
 }
 
 EXPECTED_SLOTS = {
-    "S11": ("P01", (-0.1125, 0.0550), "shaft"),
+    "S11": ("P01", (-0.1125, 0.0550), "nut"),
     "S12": ("P03", (-0.0375, 0.0550), "shaft"),
-    "S13": ("N01", (0.0375, 0.0550), "nut"),
+    "S13": ("N01", (0.0375, 0.0550), "shaft"),
     "S14": ("W01", (0.1125, 0.0550), "wrench_y"),
     "S21": ("P02", (-0.1125, -0.0550), "shaft"),
     "S22": ("P04", (-0.0375, -0.0550), "shaft"),

@@ -1,9 +1,4 @@
-"""Machine-readable MVP instruction options.
-
-The collection UI may show a natural-language sentence, while the dataset
-stores one canonical instruction.  Keeping this mapping in one module avoids
-silently creating different training tasks from equivalent sentences.
-"""
+"""Machine-readable mappings from user instructions to supervisor task IDs."""
 
 from __future__ import annotations
 
@@ -12,10 +7,12 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class InstructionOption:
-    """One selectable UI instruction and its training representation."""
+    """One user-selectable instruction and its supervisor task ID."""
 
     task_id: str
+    # Natural-language instruction shown to and selected by the user.
     display_instruction: str
+    # Exact normalized instruction recorded alongside the task ID.
     canonical_instruction: str
 
     def __post_init__(self) -> None:
@@ -31,30 +28,40 @@ class InstructionOption:
                 raise ValueError(f"{field_name} must not have surrounding whitespace")
 
 
-# The first manual-collection task.  The final full stop is part of the UI
-# display string; the canonical training string intentionally has no full stop.
+# Frozen instruction catalog. Display text is user-facing; canonical text is
+# the exact value persisted in Episodes and must remain compatible once frozen.
 MVP_P01_TO_S11 = InstructionOption(
     task_id="P01_TO_S11",
-    display_instruction="帮我把螺母P01放置到料箱的S11格子中。",
-    canonical_instruction="把P01放到S11中",
+    display_instruction="请将螺母 P01 放置到料箱的 S11 格子中。",
+    canonical_instruction="请将螺母 P01 放置到料箱的 S11 格子中。",
 )
-
 MVP_W01_TO_S14 = InstructionOption(
     task_id="W01_TO_S14",
-    display_instruction="帮我把扳手W01放置到料箱的S14格子中。",
-    canonical_instruction="把W01放到S14中",
+    display_instruction="请将扳手 W01 放置到料箱的 S14 格子中。",
+    canonical_instruction="请将扳手 W01 放置到料箱的 S14 格子中。",
 )
-
+MVP_P03_UPRIGHT_TO_S12 = InstructionOption(
+    task_id="P03_UPRIGHT_TO_S12",
+    display_instruction="请将倒立的轴件 P03 翻正后，放置到料箱的 S12 格子中。",
+    canonical_instruction="请将倒立的轴件 P03 翻正后，放置到料箱的 S12 格子中。",
+)
 MVP_BIN01_TO_FINISHED01 = InstructionOption(
     task_id="BIN01_TO_FINISHED01",
-    display_instruction="请把料箱Bin_01搬运到成品区FINISHED_01。",
+    display_instruction="请将料箱 Bin_01 搬运到成品区 FINISHED_01。",
     canonical_instruction="把Bin_01搬到FINISHED_01",
+)
+MVP_PACK_ALL_AND_FINISH = InstructionOption(
+    task_id="PACK_ALL_AND_FINISH",
+    display_instruction="请将所有零件按指定位置装入料箱 Bin_01，再将料箱 Bin_01 搬运到成品区 FINISHED_01。",
+    canonical_instruction="请将所有零件按指定位置装入料箱 Bin_01，再将料箱 Bin_01 搬运到成品区 FINISHED_01。",
 )
 
 MVP_INSTRUCTION_OPTIONS: tuple[InstructionOption, ...] = (
     MVP_P01_TO_S11,
     MVP_W01_TO_S14,
+    MVP_P03_UPRIGHT_TO_S12,
     MVP_BIN01_TO_FINISHED01,
+    MVP_PACK_ALL_AND_FINISH,
 )
 _BY_TASK_ID = {option.task_id: option for option in MVP_INSTRUCTION_OPTIONS}
 _BY_TEXT = {
@@ -93,13 +100,22 @@ def normalize_mvp_instruction(text: str) -> InstructionOption:
         raise ValueError(f"unknown MVP instruction; use one of: {expected}") from exc
 
 
+def mvp_task_id_for_instruction(text: str) -> str:
+    """Resolve a user instruction to the task ID sent to the supervisor agent."""
+
+    return normalize_mvp_instruction(text).task_id
+
+
 __all__ = [
     "InstructionOption",
     "MVP_INSTRUCTION_OPTIONS",
     "MVP_BIN01_TO_FINISHED01",
     "MVP_P01_TO_S11",
+    "MVP_P03_UPRIGHT_TO_S12",
+    "MVP_PACK_ALL_AND_FINISH",
     "MVP_W01_TO_S14",
     "mvp_instruction_for_task",
+    "mvp_task_id_for_instruction",
     "mvp_instruction_options",
     "normalize_mvp_instruction",
 ]

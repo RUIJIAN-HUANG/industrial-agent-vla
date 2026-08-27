@@ -37,6 +37,7 @@ import pytest
 # ---------------------------------------------------------------------------
 os.environ["PI05_SERVICE_MODE"] = "dummy"
 os.environ["PI05_MODE"] = "dummy"
+os.environ["PI05_TASK_PROFILE_VERSION"] = "v2"
 os.environ.setdefault(
     "PI05_CHECKPOINT_SHA",
     "sha256:0000000000000000000000000000000000000000000000000000000000000000",
@@ -1012,12 +1013,8 @@ TEST_NORM_SHA_HTTP = (
 
 
 def _make_http_infer_body(
-    task_id: str = "job-1:S01_ARM_A_PACK_HANDOFF",
-    prompt: str = (
-        "将工作区中的四个红色零件依次装入料箱；倒放零件先调整为正向。"
-        "装箱完成后，将料箱放到中央交接位并返回 HOME_A。"
-        "失败时重新观察后继续。"
-    ),
+    task_id: str = "P01_TO_S11",
+    prompt: str = "请将螺母 P01 放置到料箱的 S11 格子中。",
     full_image: dict | None = None,
     wrist_image: dict | None = None,
     robot_state: list | None = None,
@@ -1043,7 +1040,7 @@ def _make_http_infer_body(
         "trace_id": "trace-9001",
         "episode_id": "episode-17",
         "task_id": task_id,
-        "subtask_id": "S01_ARM_A_PACK_HANDOFF",
+        "subtask_id": task_id,
         "step_id": 0,
         "observation_id": "obs-1029",
         "deadline_ms": 15000,
@@ -1082,8 +1079,8 @@ def test_http_infer_with_image_reference(test_client, mock_executor):
     assert data["schema_version"] == "1.0"
     assert data["executor"] == "pi05"
     assert data["request_id"] == "req-http-001"
-    assert data["task_id"] == "job-1:S01_ARM_A_PACK_HANDOFF"
-    assert data["subtask_id"] == "S01_ARM_A_PACK_HANDOFF"
+    assert data["task_id"] == "P01_TO_S11"
+    assert data["subtask_id"] == "P01_TO_S11"
     assert data["checkpoint_sha"] == TEST_CKPT_SHA_HTTP
     assert data["norm_stats_sha"] == TEST_NORM_SHA_HTTP
 
@@ -1120,11 +1117,11 @@ def test_http_infer_with_wrist_image_null(test_client, mock_executor):
     assert resp.json()["status"] == "ok"
 
 
-def test_http_infer_rejects_non_s01_without_calling_executor(
+def test_http_infer_rejects_non_v2_subtask_without_calling_executor(
     test_client,
     mock_executor,
 ):
-    """π0.5 HTTP 边界只接收 S01，其他 subtask 返回 TASK_1001_INVALID。"""
+    """π0.5 HTTP 边界要求 V2 subtask_id 与 task_id 一致。"""
     body = _make_http_infer_body()
     body["subtask_id"] = "S02_ARM_B_MOVE_FINISHED"
 
@@ -1433,7 +1430,7 @@ def test_http_infer_rejects_legacy_pixels(test_client, mock_executor):
 def test_http_cancel_basic(test_client, mock_executor):
     """HTTP /v1/cancel 基本流程：先 infer 后 cancel，返回 cancelled。"""
     # 先发起一次 infer 使 task_id 被记录
-    body = _make_http_infer_body(task_id="job-cancel-1")
+    body = _make_http_infer_body(task_id="P01_TO_S11")
     resp = test_client.post("/v1/infer", json=body)
     assert resp.status_code == 200
 
@@ -1443,8 +1440,8 @@ def test_http_cancel_basic(test_client, mock_executor):
         "request_id": "cancel-req-001",
         "trace_id": "trace-9001",
         "episode_id": "episode-17",
-        "task_id": "job-cancel-1",
-        "subtask_id": "S01_ARM_A_PACK_HANDOFF",
+        "task_id": "P01_TO_S11",
+        "subtask_id": "P01_TO_S11",
         "reason": "test cancel",
     }
     resp = test_client.post("/v1/cancel", json=cancel_body)
@@ -1452,12 +1449,12 @@ def test_http_cancel_basic(test_client, mock_executor):
     data = resp.json()
     assert data["status"] == "cancelled"
     assert data["server_context_cleared"] is True
-    assert data["task_id"] == "job-cancel-1"
+    assert data["task_id"] == "P01_TO_S11"
 
 
 def test_http_cancel_idempotent(test_client, mock_executor):
     """HTTP /v1/cancel 幂等：重复 cancel 返回 already_completed。"""
-    body = _make_http_infer_body(task_id="job-cancel-idem")
+    body = _make_http_infer_body(task_id="P01_TO_S11")
     test_client.post("/v1/infer", json=body)
 
     cancel_body = {
@@ -1465,8 +1462,8 @@ def test_http_cancel_idempotent(test_client, mock_executor):
         "request_id": "cancel-req-002",
         "trace_id": "trace-9001",
         "episode_id": "episode-17",
-        "task_id": "job-cancel-idem",
-        "subtask_id": "S01_ARM_A_PACK_HANDOFF",
+        "task_id": "P01_TO_S11",
+        "subtask_id": "P01_TO_S11",
         "reason": "test cancel",
     }
     # 第一次取消
@@ -1486,7 +1483,7 @@ def test_http_cancel_unknown_task_returns_not_found(test_client):
         "trace_id": "trace-9001",
         "episode_id": "episode-17",
         "task_id": "never-seen-task",
-        "subtask_id": "S01_ARM_A_PACK_HANDOFF",
+        "subtask_id": "P01_TO_S11",
         "reason": "test cancel",
     }
     resp = test_client.post("/v1/cancel", json=cancel_body)

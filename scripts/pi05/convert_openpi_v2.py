@@ -42,7 +42,14 @@ except Exception as exc:  # pragma: no cover - optional local dependency
 
 def _task_streams(reader: CanonicalV2Reader) -> tuple[str, str]:
     task_id = str(reader.manifest["metadata"]["task_id"])
-    arm_id, _ = EXPECTED_TASK_ACTION_IDENTITIES[task_id]
+    identities = EXPECTED_TASK_ACTION_IDENTITIES[task_id]
+    if len(identities) != 1:
+        raise CanonicalV2Error(
+            "dual-arm tasks require an arm-aware LeRobot converter",
+            episode_id=reader.episode_id,
+            field="actions.arm_id",
+        )
+    arm_id, _ = next(iter(identities))
     return arm_id, EXPECTED_TASK_CAMERA_IDS[task_id]
 
 

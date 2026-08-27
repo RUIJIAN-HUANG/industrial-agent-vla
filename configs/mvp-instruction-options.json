@@ -1,21 +1,31 @@
 {
-  "version": "1.0",
+  "version": "1.1",
   "scene_id": "single_bin_manual_industrial_v2",
   "options": [
     {
       "task_id": "P01_TO_S11",
-      "display_instruction": "帮我把螺母P01放置到料箱的S11格子中。",
-      "canonical_instruction": "把P01放到S11中"
+      "display_instruction": "请将螺母 P01 放置到料箱的 S11 格子中。",
+      "canonical_instruction": "请将螺母 P01 放置到料箱的 S11 格子中。"
     },
     {
       "task_id": "W01_TO_S14",
-      "display_instruction": "帮我把扳手W01放置到料箱的S14格子中。",
-      "canonical_instruction": "把W01放到S14中"
+      "display_instruction": "请将扳手 W01 放置到料箱的 S14 格子中。",
+      "canonical_instruction": "请将扳手 W01 放置到料箱的 S14 格子中。"
+    },
+    {
+      "task_id": "P03_UPRIGHT_TO_S12",
+      "display_instruction": "请将倒立的轴件 P03 翻正后，放置到料箱的 S12 格子中。",
+      "canonical_instruction": "请将倒立的轴件 P03 翻正后，放置到料箱的 S12 格子中。"
     },
     {
       "task_id": "BIN01_TO_FINISHED01",
-      "display_instruction": "请把料箱Bin_01搬运到成品区FINISHED_01。",
+      "display_instruction": "请将料箱 Bin_01 搬运到成品区 FINISHED_01。",
       "canonical_instruction": "把Bin_01搬到FINISHED_01"
+    },
+    {
+      "task_id": "PACK_ALL_AND_FINISH",
+      "display_instruction": "请将所有零件按指定位置装入料箱 Bin_01，再将料箱 Bin_01 搬运到成品区 FINISHED_01。",
+      "canonical_instruction": "请将所有零件按指定位置装入料箱 Bin_01，再将料箱 Bin_01 搬运到成品区 FINISHED_01。"
     }
   ]
 }

@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://industrial-agent.local/schemas/online-observation-common.schema.json",
+  "title": "Shared Sensor Observation Definitions",
+  "$defs": {
+    "imageReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["uri", "image_sha256", "camera_id", "width", "height"],
+      "properties": {
+        "uri": {"type": "string", "pattern": "^cas://sha256/[0-9a-fA-F]{64}$"},
+        "image_sha256": {"type": "string", "pattern": "^sha256:[0-9a-fA-F]{64}$"},
+        "camera_id": {"type": "string", "minLength": 1},
+        "width": {"const": 1280},
+        "height": {"const": 720}
+      }
+    },
+    "camera": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["full_image", "arm_a_rgb", "handoff_rgb", "arm_b_rgb"],
+      "properties": {
+        "full_image": {
+          "allOf": [
+            {"$ref": "#/$defs/imageReference"},
+            {"properties": {"camera_id": {"enum": ["CAM_A_TOP", "CAM_HANDOFF", "CAM_B_TOP"]}}}
+          ]
+        },
+        "arm_a_rgb": {
+          "allOf": [
+            {"$ref": "#/$defs/imageReference"},
+            {"properties": {"camera_id": {"const": "CAM_A_TOP"}}}
+          ]
+        },
+        "handoff_rgb": {
+          "allOf": [
+            {"$ref": "#/$defs/imageReference"},
+            {"properties": {"camera_id": {"const": "CAM_HANDOFF"}}}
+          ]
+        },
+        "arm_b_rgb": {
+          "allOf": [
+            {"$ref": "#/$defs/imageReference"},
+            {"properties": {"camera_id": {"const": "CAM_B_TOP"}}}
+          ]
+        },
+        "wrist_image": {"const": null}
+      }
+    },
+    "armObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tcp_pose_m_rad", "state", "retreated", "gripper_open", "stationary"],
+      "properties": {
+        "tcp_pose_m_rad": {"type": "array", "minItems": 6, "maxItems": 6, "items": {"type": "number"}},
+        "state": {"type": "array", "minItems": 7, "maxItems": 7, "items": {"type": "number"}},
+        "retreated": {"type": "boolean"},
+        "gripper_open": {"type": "boolean"},
+        "stationary": {"type": "boolean"}
+      }
+    },
+    "robot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["active_arm", "arm_a", "arm_b"],
+      "properties": {
+        "active_arm": {"enum": ["Arm_A", "NONE"]},
+        "arm_a": {"$ref": "#/$defs/armObservation"},
+        "arm_b": {"$ref": "#/$defs/armObservation"}
+      }
+    },
+    "safety": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["emergency_stop", "protective_stop", "system_fault"],
+      "properties": {
+        "emergency_stop": {"type": "boolean"},
+        "protective_stop": {"type": "boolean"},
+        "system_fault": {"type": ["string", "boolean", "null"]}
+      }
+    },
+    "objects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["object_id", "confidence"],
+        "properties": {
+          "object_id": {"type": "string", "minLength": 1},
+          "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+          "zone_id": {"type": ["string", "null"]}
+        }
+      }
+    },
+    "quality": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["confidence"],
+      "properties": {"confidence": {"type": "number", "minimum": 0, "maximum": 1}}
+    }
+  }
+}

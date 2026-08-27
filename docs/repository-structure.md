@@ -13,7 +13,7 @@
 - `simulation/run_v2_keyboard_collection.py`：人工 Canonical Episode 采集；
 - `docs/v2-manual-industrial-collection.md`：面向使用者的当前场景说明。
 
-V1 自动闭环文件继续保留，不得为了迁移 V2 而机械替换其中的四工件 TaskProfile。
+V1 自动闭环文件仅为历史回归保留；生产默认、正式演示和新数据不得引用它们。
 
 ## 1. 规范目录
 

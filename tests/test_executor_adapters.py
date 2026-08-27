@@ -427,7 +427,7 @@ class ExecutorAdapterTests(unittest.TestCase):
     def test_executor_factory_consumes_configured_urls_and_artifact_ids(self) -> None:
         root = Path(__file__).resolve().parents[1]
         config = json.loads(
-            (root / "configs" / "agent.default.json").read_text(encoding="utf-8")
+            (root / "configs" / "agent.v1.legacy.json").read_text(encoding="utf-8")
         )
         digest_pairs = {
             "openvla_oft": (CHECKPOINT_SHA, NORM_STATS_SHA),
@@ -463,7 +463,7 @@ class ExecutorAdapterTests(unittest.TestCase):
     def test_executor_factory_rejects_unpinned_artifacts(self) -> None:
         root = Path(__file__).resolve().parents[1]
         config = json.loads(
-            (root / "configs" / "agent.default.json").read_text(encoding="utf-8")
+            (root / "configs" / "agent.v1.legacy.json").read_text(encoding="utf-8")
         )
         config = deepcopy(config)
         with self.assertRaisesRegex(ValueError, "64 hexadecimal"):
@@ -475,7 +475,7 @@ class ExecutorAdapterTests(unittest.TestCase):
     def test_executor_factory_rejects_configurable_task_types(self) -> None:
         root = Path(__file__).resolve().parents[1]
         config = json.loads(
-            (root / "configs" / "agent.default.json").read_text(encoding="utf-8")
+            (root / "configs" / "agent.v1.legacy.json").read_text(encoding="utf-8")
         )
         config["executors"]["openvla_oft"]["task_types"] = ["pick_place"]
         with self.assertRaisesRegex(ValueError, "task_types are frozen"):
@@ -487,7 +487,7 @@ class ExecutorAdapterTests(unittest.TestCase):
     def test_executor_factory_builds_only_explicitly_enabled_services(self) -> None:
         root = Path(__file__).resolve().parents[1]
         config = json.loads(
-            (root / "configs" / "agent.default.json").read_text(encoding="utf-8")
+            (root / "configs" / "agent.v1.legacy.json").read_text(encoding="utf-8")
         )
         config["executors"]["openvla_oft"]["checkpoint_sha"] = CHECKPOINT_SHA
         config["executors"]["openvla_oft"]["norm_stats_sha"] = NORM_STATS_SHA
@@ -519,7 +519,7 @@ class ExecutorAdapterTests(unittest.TestCase):
 
         root = Path(__file__).resolve().parents[1]
         config = json.loads(
-            (root / "configs" / "agent.default.json").read_text(encoding="utf-8")
+            (root / "configs" / "agent.v1.legacy.json").read_text(encoding="utf-8")
         )
         config["executors"]["openvla_oft"]["checkpoint_sha"] = "latest00"
         config["executors"]["openvla_oft"]["norm_stats_sha"] = "version1"

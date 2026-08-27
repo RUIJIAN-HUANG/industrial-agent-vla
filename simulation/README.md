@@ -28,8 +28,8 @@ G0 后只能保留一个主仿真平台；不要同时维护重复的 Isaac/Gaze
 当前主场景 ID 为 `single_bin_manual_industrial_v2`。它保留双 Franka、三相机、
 单箱固定交接的安全框架，并把采集对象升级为 8 个工业零件和 `2×4` 料箱：
 
-- P01/P02 为正立轴件，P03/P04 为倒立轴件；
-- N01/N02 为带可见通孔的六角螺母；
+- P01/N02 为带可见通孔的六角螺母；
+- P02/N01 为正立轴件，P03/P04 为倒立轴件；
 - W01/W02 为带平行手柄和开口端的简化扳手；
 - A/B/C/D 四区各 2 件，S11-S24 与 8 件一一固定映射；
 - 料箱带中央提梁和 `BIN_CARRY_TCP`，计划满载质量 `1.0 kg`；
@@ -77,11 +77,10 @@ V2 的静态 PASS 不代表 GUI、物理、IK、抓取或满载搬运通过。�
 及训练就绪命令见
 [`../docs/v2-replay-batch-generation.md`](../docs/v2-replay-batch-generation.md)。
 
-## V1 自动闭环兼容基线
+## 历史 V1 工具（已废除，仅回归）
 
-`single_bin_pack_handoff_v1` 仍用于四 Agent 自动串行闭环：Arm_A/π0.5 处理
-P01-P04，Supervisor 执行三帧交接核验，Arm_B/OpenVLA-OFT 搬运同一料箱。
-V1 的 `2×3` 料箱、冻结指令和后置条件未被 V2 静默替换。
+`single_bin_pack_handoff_v1` 不再用于部署、演示或评测。下列工具只为重放历史
+证据保留，生产默认入口不会装配它们。
 
 V1 场景工具如下：
 
@@ -107,8 +106,8 @@ RenderProduct。创建 RGB Annotator 后，必须把其 `uint8 H×W×3/4` 输出
 另写一套路径或 SHA 逻辑。
 
 场景 JSON 只保存几何、物理、相机和场景事件名。交接稳定帧数属于 Supervisor
-生命周期配置，机械臂正常工作空间属于控制器安全配置，两者的机器真源均为
-`configs/agent.default.json`；不得在场景 JSON 中重复维护
+生命周期配置，机械臂正常工作空间属于控制器安全配置，历史机器真源为
+`configs/agent.v1.legacy.json`；不得在场景 JSON 中重复维护
 `handoff_verify_stable_cycles` 或 `normal_workspace_limits`。
 Reset 后的物理稳定步数也不属于静态 USD 场景合同；应由 G0 运行/验收入口通过
 显式参数执行并记录。在该运行入口落地前，不得用场景 JSON 中未消费的
@@ -222,3 +221,34 @@ simulation/generated/single_bin_scene_v1.usda
 
 最终 Docker 不应依赖比赛现场联网下载 Franka 资产。发布前应在断网环境重新打开
 生成的 USD，并检查两台 Articulation、外部引用和三台相机都完整。
+
+## π0.5 Isaac 闭环评测入口
+
+角色 E 的闭环入口为 `run_pi05_isaac_closed_loop.py`。它复用三相机 CAS
+观测管线、`Pi05Adapter`、7D `ActionSafetyValidator` 和
+`IsaacExecutionEnvironment`，每轮执行：
+
+```text
+Isaac RGB/CAS observation → POST /v1/infer → action_chunk[N,7]
+→ safety validation → Isaac step → fresh observation
+```
+
+运行前必须启动 V2 模式的 π0.5 HTTP 服务（设置
+`PI05_TASK_PROFILE_VERSION=v2`），并在 `configs/agent.default.json` 中填入
+V2 checkpoint/norm-stats SHA。示例命令：
+
+```powershell
+python simulation/run_pi05_isaac_closed_loop.py `
+  --agent-config configs/agent.default.json `
+  --task configs/task.v2.p01-to-s11.example.json `
+  --max-steps 1 `
+  --headless
+```
+
+`--max-steps` 控制闭环动作预算；`CLOSED_LOOP_PASS` 只表示观测、推理、7D
+动作、安全执行和重新观测链路完成，不等同于任务终端成功。只有 V2 在线任务
+状态提供器报告 `terminal=true`、`status=SUCCEEDED`、置信度至少 0.6 且票数至少
+2 时才会返回 `TASK_SUCCEEDED`。正式终局评测必须同时提供
+`--task-state-factory module:callable --require-terminal`；未注入时静态入口保持
+`terminal=false`，不会伪造任务完成。旧版 DROID 8D Runner
+不属于当前入口，禁止接入此 7D 合同。

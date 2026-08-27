@@ -383,7 +383,7 @@ class OfflineGtProbe:
 
         ``flat_y``/``wrench_y`` describe the frozen initial scene and slot
         geometry.  They are retained as diagnostics, not as terminal task
-        requirements for the instruction "把W01放到S14中".
+        requirements for the instruction "请将扳手 W01 放置到料箱的 S14 格子中。".
         """
 
         tolerance = radians(float(orientation_tolerance_deg))
@@ -480,7 +480,7 @@ class OfflineGtProbe:
         part_axis_local: Sequence[float] = (0.0, 0.0, 1.0),
         bin_vertical_local: Sequence[float] = (0.0, 0.0, 1.0),
     ) -> float:
-        """Measure the directed P01 axis error against the bin vertical."""
+        """Measure the unsigned P01 nut-hole axis error against bin vertical."""
 
         return vertical_error_rad(
             self.world_direction(part_path, part_axis_local),

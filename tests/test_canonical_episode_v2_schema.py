@@ -28,7 +28,7 @@ def _valid_v2_manifest() -> dict[str, Any]:
         {
             "scene_id": "single_bin_manual_industrial_v2",
             "task_id": "P01_TO_S11",
-            "instruction": "把P01放到S11中",
+            "instruction": "请将螺母 P01 放置到料箱的 S11 格子中。",
             "padding_policy": {"strategy": "none", "target_length": None},
         }
     )

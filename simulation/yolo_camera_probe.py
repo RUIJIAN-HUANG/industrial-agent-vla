@@ -33,7 +33,16 @@ from industrial_agent.perception import (
 
 
 PROBE_SCHEMA_VERSION = "1.0"
-FROZEN_SUBTASK_IDS = frozenset({"S01_ARM_A_PACK_HANDOFF", "S02_ARM_B_TRANSPORT"})
+# Competition role phases plus the two formal V2 curriculum tasks. Retired
+# V1 scene/task identities are intentionally not accepted by the sidecar.
+FROZEN_SUBTASK_IDS = frozenset(
+    {
+        "S01_ARM_A_PACK_HANDOFF",
+        "S02_ARM_B_TRANSPORT",
+        "P01_TO_S11",
+        "W01_TO_S14",
+    }
+)
 CAMERA_STREAMS: tuple[tuple[str, str], ...] = (
     ("arm_a_rgb", "CAM_A_TOP"),
     ("handoff_rgb", "CAM_HANDOFF"),
@@ -311,7 +320,8 @@ def probe_yolo_cameras(
     references = _camera_references(observation)
     if subtask_id not in FROZEN_SUBTASK_IDS:
         raise ValueError(
-            "subtask_id must be S01_ARM_A_PACK_HANDOFF or S02_ARM_B_TRANSPORT"
+            "subtask_id must be one of the frozen V2 role/curriculum ids: "
+            + ", ".join(sorted(FROZEN_SUBTASK_IDS))
         )
     if isinstance(allowed_class_names, (str, bytes, bytearray)):
         raise TypeError("allowed_class_names must be a sequence of class names")
