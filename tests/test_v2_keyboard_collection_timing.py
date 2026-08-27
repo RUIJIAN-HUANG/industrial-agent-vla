@@ -119,7 +119,7 @@ def test_formal_keyboard_actions_and_terminal_holds_remain_exactly_12_ticks_and_
     metadata = CanonicalV2EpisodeMetadata(
         episode_id=episode_id,
         task_id="P01_TO_S11",
-        instruction="请将螺母 P01 放置到料箱的 S11 格子中。",
+        instruction="请将轴件 P01 放置到料箱的 S11 格子中。",
         scene_seed=31,
         git_sha="a" * 40,
         scene_config_sha256=f"sha256:{'b' * 64}",

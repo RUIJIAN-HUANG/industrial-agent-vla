@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0",
   "task_id": "P01_TO_S11",
-  "instruction": "请将螺母 P01 放置到料箱的 S11 格子中。",
+  "instruction": "请将轴件 P01 放置到料箱的 S11 格子中。",
   "task_type": "pick_place",
   "target_object": "P01",
   "target_location": "S11",

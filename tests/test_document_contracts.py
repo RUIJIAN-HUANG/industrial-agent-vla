@@ -120,6 +120,31 @@ class DocumentationContractTests(unittest.TestCase):
             HANDOFF_READY_EVENT_TYPE,
         )
 
+    def test_v2_layout_asset_matches_the_scene_truth_source(self) -> None:
+        scene = json.loads(
+            (ROOT / "simulation" / "configs" / "single_bin_scene_v2.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        layout = (
+            ROOT
+            / "docs"
+            / "architecture"
+            / "assets"
+            / "isaac-sim-single-bin-static-handoff-layout-v2.svg"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("双臂八零件", layout)
+        self.assertIn("2×4", layout)
+        self.assertIn("READY=8/8", layout)
+        self.assertNotIn("单箱四零件", layout)
+        self.assertNotIn("2×3", layout)
+        self.assertNotIn("READY=4/4", layout)
+        for slot in scene["bin"]["slots"]:
+            self.assertIn(f'{slot["id"]}={slot["part_id"]}', layout)
+        for camera in scene["cameras"]:
+            self.assertIn(camera["id"], layout)
+
 
 if __name__ == "__main__":
     unittest.main()

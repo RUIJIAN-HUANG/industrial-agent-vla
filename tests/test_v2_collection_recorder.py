@@ -19,7 +19,7 @@ def _writer(
     tmp_path: Path,
     *,
     task_id: str = "P01_TO_S11",
-    instruction: str = "请将螺母 P01 放置到料箱的 S11 格子中。",
+    instruction: str = "请将轴件 P01 放置到料箱的 S11 格子中。",
 ) -> tuple[V2CollectionRecorder, ImageCas]:
     image_cas = ImageCas(ImageCasConfig(root=tmp_path / "cas"))
     identity = V2CollectionIdentity(

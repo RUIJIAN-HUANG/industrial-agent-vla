@@ -371,7 +371,7 @@ class OfflineGtProbe:
         part_axis_local: Sequence[float] = (0.0, 0.0, 1.0),
         bin_vertical_local: Sequence[float] = (0.0, 0.0, 1.0),
     ) -> float:
-        """Measure the unsigned P01 nut-hole axis error against bin vertical."""
+        """Measure the directed P01 axis error against the bin vertical."""
 
         return vertical_error_rad(
             self.world_direction(part_path, part_axis_local),
