@@ -50,7 +50,7 @@ def _frames() -> list[dict[str, Any]]:
         {
             "state": np.full(7, index, dtype=np.float32),
             "actions": np.arange(70, dtype=np.float32).reshape(10, 7) + index,
-            "task": "请将螺母 P01 放置到料箱的 S11 格子中。",
+            "task": "请将轴件 P01 放置到料箱的 S11 格子中。",
             "episode_index": np.asarray(index * 0, dtype=np.int64),
             "frame_index": np.asarray(index, dtype=np.int64),
         }

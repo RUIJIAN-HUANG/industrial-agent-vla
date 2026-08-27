@@ -37,7 +37,7 @@ class V2TaskSpec:
 V2_TASKS: tuple[V2TaskSpec, ...] = (
     V2TaskSpec(
         task_id="P01_TO_S11",
-        instruction="请将螺母 P01 放置到料箱的 S11 格子中。",
+        instruction="请将轴件 P01 放置到料箱的 S11 格子中。",
         target_object="P01",
         target_slot="S11",
         active_arm="Arm_A",

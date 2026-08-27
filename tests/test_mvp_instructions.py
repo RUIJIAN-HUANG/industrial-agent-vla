@@ -39,7 +39,7 @@ def test_mvp_exposes_the_human_facing_option() -> None:
 def test_display_and_canonical_text_resolve_to_one_training_task(text: str) -> None:
     option = normalize_mvp_instruction(text)
     assert option.task_id == "P01_TO_S11"
-    assert option.canonical_instruction == "请将螺母 P01 放置到料箱的 S11 格子中。"
+    assert option.canonical_instruction == "请将轴件 P01 放置到料箱的 S11 格子中。"
 
 
 def test_task_id_resolves_to_same_option() -> None:
@@ -48,7 +48,7 @@ def test_task_id_resolves_to_same_option() -> None:
 
 def test_user_instruction_resolves_to_task_id_for_supervisor() -> None:
     assert (
-        mvp_task_id_for_instruction("请将螺母 P01 放置到料箱的 S11 格子中。")
+        mvp_task_id_for_instruction("请将轴件 P01 放置到料箱的 S11 格子中。")
         == "P01_TO_S11"
     )
 
@@ -75,4 +75,4 @@ def test_all_new_frozen_instructions_resolve_exactly(
 
 def test_unknown_wording_is_rejected_without_fuzzy_matching() -> None:
     with pytest.raises(ValueError, match="unknown MVP instruction"):
-        normalize_mvp_instruction("把螺母P01放进S11")
+        normalize_mvp_instruction("把轴件P01放进S11")
