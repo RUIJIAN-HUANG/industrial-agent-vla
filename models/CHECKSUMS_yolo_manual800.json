@@ -1,0 +1,29 @@
+{
+  "artifact_id": "yolo_manual800_yolo11n_e10_cpu",
+  "checkpoint": {
+    "filename": "best.pt",
+    "sha256": "sha256:2a8beca3ff52f6cd7a2f81f087df71793889d7017f81156a8286f4ffb106080f",
+    "git_storage": "external_artifact_required"
+  },
+  "class_map": {
+    "path": "services/yolo/src/yolo_service/resources/class_map.single_bin_v2.json",
+    "sha256": "sha256:839fdb76e458f9148959e727d289a29495130ce9c868b10b57adcaab4323ba06"
+  },
+  "service_config": {
+    "path": "configs/yolo.service-manual800.json",
+    "sha256": "sha256:a28227b8296f736280a43e5b2defb559692fe49e14f6876cf6f918321b8f1e56"
+  },
+  "perception_config": {
+    "path": "configs/perception.yolo-manual800.json",
+    "sha256": "sha256:02c5652fa14bea38b1e408b518c23163f342bec249d42f10fb7fac9f9fdd4f92"
+  },
+  "training": {
+    "base": "manual500_yolo11n_e20_cpu/best.pt",
+    "epochs": 10,
+    "imgsz": 640,
+    "batch": 8,
+    "device": "cpu",
+    "seed": 7,
+    "date": "2026-08-27"
+  }
+}

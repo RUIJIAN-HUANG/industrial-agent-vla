@@ -1,0 +1,13 @@
+{
+  "schema_version": "1.0",
+  "class_map_id": "single_bin_parts_v2",
+  "classes": [
+    {"id": 0, "name": "shaft_upright"},
+    {"id": 1, "name": "shaft_inverted"},
+    {"id": 2, "name": "hex_nut"},
+    {"id": 3, "name": "open_end_wrench"},
+    {"id": 4, "name": "bin_box"},
+    {"id": 5, "name": "bin_slot"},
+    {"id": 6, "name": "bin_carry_handle"}
+  ]
+}

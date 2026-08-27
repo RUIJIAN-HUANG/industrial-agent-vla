@@ -141,7 +141,7 @@ class DocumentationContractTests(unittest.TestCase):
         self.assertNotIn("2×3", layout)
         self.assertNotIn("READY=4/4", layout)
         for slot in scene["bin"]["slots"]:
-            self.assertIn(f'{slot["id"]}={slot["part_id"]}', layout)
+            self.assertIn(f"{slot['id']}={slot['part_id']}", layout)
         for camera in scene["cameras"]:
             self.assertIn(camera["id"], layout)
 
