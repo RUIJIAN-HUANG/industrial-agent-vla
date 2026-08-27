@@ -8,6 +8,7 @@ import pytest
 
 from simulation.run_pi05_isaac_closed_loop import (
     _capture_stable_observation_inputs,
+    _parse_args,
     _pause_physics_world,
     _safety_policy_from_config,
     _update_ui_without_advancing_physics,
@@ -16,6 +17,16 @@ from simulation.run_pi05_isaac_closed_loop import (
 )
 from industrial_agent.v2_observation import V2ObservationGateway
 from industrial_agent.v2_task_profile import require_formal_v2_task
+
+
+def test_runtime_mode_defaults_to_direct_and_accepts_supervisor() -> None:
+    assert _parse_args([]).runtime_mode == "direct"
+    assert _parse_args(["--runtime-mode", "supervisor"]).runtime_mode == "supervisor"
+
+
+def test_runtime_mode_rejects_unknown_value() -> None:
+    with pytest.raises(SystemExit):
+        _parse_args(["--runtime-mode", "unknown"])
 
 
 def test_isaac_runtime_imports_are_deferred_until_after_kit_startup() -> None:

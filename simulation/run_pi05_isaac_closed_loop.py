@@ -24,7 +24,7 @@ from pathlib import Path
 import sys
 import time
 import traceback
-from typing import Any
+from typing import Any, Sequence
 from uuid import uuid4
 
 
@@ -38,7 +38,7 @@ DEFAULT_ARTIFACT_ROOT = REPOSITORY_ROOT / "artifacts" / "pi05-isaac-closed-loop"
 logger = logging.getLogger(__name__)
 
 
-def _parse_args() -> argparse.Namespace:
+def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run the π0.5 Isaac camera -> inference -> 7-D action loop."
     )
@@ -51,6 +51,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--command-ledger", type=Path)
     parser.add_argument("--arm-id", choices=("Arm_A",), default="Arm_A")
     parser.add_argument("--max-steps", type=int, default=1)
+    parser.add_argument(
+        "--runtime-mode",
+        choices=("direct", "supervisor"),
+        default="direct",
+        help="Use the legacy direct adapter loop or the formal V2 Supervisor.",
+    )
     parser.add_argument("--deadline-ms", type=int, default=15_000)
     parser.add_argument("--headless", action="store_true")
     parser.add_argument("--ik-backend", choices=("lula", "pink"), default="lula")
@@ -67,7 +73,7 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--result-file", type=Path)
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -299,17 +305,19 @@ def _run_closed_loop(args: argparse.Namespace) -> dict[str, Any]:
         }
     )
 
-    raw_pi05 = agent_config.get("executors", {}).get("pi05")
-    if not isinstance(raw_pi05, Mapping):
-        raise ValueError("agent config executors.pi05 is required")
-    transport = BoundedHTTPTransport(str(raw_pi05["base_url"]))
-    adapter = Pi05Adapter(
-        transport,
-        checkpoint_sha=str(raw_pi05["checkpoint_sha"]),
-        norm_stats_sha=str(raw_pi05["norm_stats_sha"]),
-    )
-    if not adapter.health():
-        raise RuntimeError("π0.5 /health is not ready or its identity is invalid")
+    adapter = None
+    if args.runtime_mode == "direct":
+        raw_pi05 = agent_config.get("executors", {}).get("pi05")
+        if not isinstance(raw_pi05, Mapping):
+            raise ValueError("agent config executors.pi05 is required")
+        transport = BoundedHTTPTransport(str(raw_pi05["base_url"]))
+        adapter = Pi05Adapter(
+            transport,
+            checkpoint_sha=str(raw_pi05["checkpoint_sha"]),
+            norm_stats_sha=str(raw_pi05["norm_stats_sha"]),
+        )
+        if not adapter.health():
+            raise RuntimeError("π0.5 /health is not ready or its identity is invalid")
 
     artifact_root = args.artifact_root.expanduser().resolve()
     cas_root = artifact_root / "cas"
@@ -337,6 +345,7 @@ def _run_closed_loop(args: argparse.Namespace) -> dict[str, Any]:
     episode_id = f"pi05-isaac-{time.strftime('%Y%m%d-%H%M%S')}-{uuid4().hex[:8]}"
     records: list[dict[str, Any]] = []
     terminal = False
+    supervisor_stop_handled = False
     try:
         phase = "load_isaac_runtime"
         from simulation.isaac_rgb_pipeline import IsaacRgbObservationPipeline
@@ -481,8 +490,69 @@ def _run_closed_loop(args: argparse.Namespace) -> dict[str, Any]:
         )
         run_id = episode_id
 
+        if args.runtime_mode == "supervisor":
+            from industrial_agent.supervisor_main import run_result_to_dict
+            from simulation.pi05_isaac_supervisor_runtime import (
+                run_supervisor_runtime,
+            )
+
+            phase = "supervisor"
+            try:
+                runtime_report = run_supervisor_runtime(
+                    config=agent_config,
+                    task=executor_task,
+                    environment=environment,
+                    gate=gate,
+                    max_steps=args.max_steps,
+                    idle_callback=lambda: _update_ui_without_advancing_physics(
+                        world=world,
+                        simulation_app=simulation_app,
+                    ),
+                )
+            finally:
+                # The runtime owns the idempotent safe-stop boundary.  The
+                # outer exception handler must not issue a second Isaac stop.
+                supervisor_stop_handled = True
+
+            supervisor_result = run_result_to_dict(runtime_report.run_result)
+            terminal = bool(runtime_report.run_result.success)
+            if not runtime_report.safe_stop_confirmed:
+                status = "SAFE_STOP_UNCONFIRMED"
+            elif runtime_report.run_result.success:
+                status = "TASK_SUCCEEDED"
+            else:
+                status = "SAFE_STOPPED"
+            if (
+                args.require_terminal
+                and not terminal
+                and runtime_report.safe_stop_confirmed
+            ):
+                status = "TERMINAL_CONDITION_NOT_REACHED"
+            result = {
+                "status": status,
+                "episode_id": episode_id,
+                "isaac_sim_version": isaac_version,
+                "task_id": executor_task.task_id,
+                "subtask_id": task_spec.task_id,
+                "arm_id": args.arm_id,
+                "runtime_mode": args.runtime_mode,
+                "requested_steps": args.max_steps,
+                "executed_steps": len(runtime_report.actions),
+                "terminal": terminal,
+                "safe_stop_confirmed": runtime_report.safe_stop_confirmed,
+                "failure_code": supervisor_result["failure_code"],
+                "message": supervisor_result["message"],
+                "supervisor": supervisor_result,
+                "steps": runtime_report.action_dicts(),
+            }
+            _write_json(result_path, result)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return result
+
         def worker_loop() -> dict[str, Any]:
             nonlocal terminal
+            if adapter is None:
+                raise RuntimeError("direct runtime adapter was not initialized")
             raw = environment.observe()
             observation = gateway.ingest_online(raw)
             for step_id in range(args.max_steps):
@@ -569,6 +639,7 @@ def _run_closed_loop(args: argparse.Namespace) -> dict[str, Any]:
             "task_id": executor_task.task_id,
             "subtask_id": task_spec.task_id,
             "arm_id": args.arm_id,
+            "runtime_mode": args.runtime_mode,
             "requested_steps": args.max_steps,
             "executed_steps": len(records),
             "terminal": bool(loop_result["terminal"]),
@@ -583,7 +654,7 @@ def _run_closed_loop(args: argparse.Namespace) -> dict[str, Any]:
     except BaseException as exc:
         failure_phase = phase
         safe_stop_confirmed: bool | None = None
-        if environment is not None:
+        if environment is not None and not supervisor_stop_handled:
             try:
                 phase = "safe_stop"
                 receipt = environment.safe_stop(
@@ -634,6 +705,8 @@ def main() -> int:
         )
     result = _run_closed_loop(args)
     if result["status"] in {"FAIL", "SAFE_STOP_UNCONFIRMED"}:
+        return 1
+    if args.runtime_mode == "supervisor" and result["status"] != "TASK_SUCCEEDED":
         return 1
     if args.require_terminal and result["status"] != "TASK_SUCCEEDED":
         return 1
