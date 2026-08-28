@@ -7,6 +7,7 @@
 |---|---|---|---|---|---|---|---|---|---|
 | — | — | — | — | — | — | — | — | — | `NOT_AVAILABLE` |
 | yolo_manual800_yolo11n_e10_cpu | YOLO11n | V2 single-bin seven-class perception candidate | this PR | external artifact required; see `models/MODEL_CARD_yolo_manual800.md` | `sha256:2a8beca3ff52f6cd7a2f81f087df71793889d7017f81156a8286f4ffb106080f` | N/A | manually cleaned V2 dataset | F | `CANDIDATE` |
+| yolo_manual994_yolo11n_e10_cpu | YOLO11n | V2 single-bin seven-class perception candidate after 200 corrected samples | this PR | external artifact required; see `models/MODEL_CARD_yolo_manual994.md` | `sha256:67a70dd1f575919bde9184a993097771bbdbaa7516cdd251c1f91b2a490f1e5c` | N/A | manually cleaned V2 dataset plus 200 corrected samples | F | `CANDIDATE` |
 
 规则：
 
