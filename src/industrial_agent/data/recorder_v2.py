@@ -22,9 +22,15 @@ V2_INSTRUCTION = "请将轴件 P01 放置到料箱的 S11 格子中。"
 V2_TASK_INSTRUCTIONS = {
     V2_TASK_ID: V2_INSTRUCTION,
     "W01_TO_S14": "请将扳手 W01 放置到料箱的 S14 格子中。",
+    "BIN01_TO_FINISHED01": "把Bin_01搬到FINISHED_01",
 }
 V2_ARM_ID = "Arm_A"
 V2_EXECUTOR = "pi05"
+V2_TASK_ACTION_IDENTITIES = {
+    "P01_TO_S11": frozenset({("Arm_A", "pi05")}),
+    "W01_TO_S14": frozenset({("Arm_A", "pi05")}),
+    "BIN01_TO_FINISHED01": frozenset({("Arm_A", "pi05"), ("Arm_B", "openvla_oft")}),
+}
 _SAFE_EPISODE_ID = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 _GIT_SHA = re.compile(r"^[0-9a-fA-F]{40}$")
 _SHA256 = re.compile(r"^sha256:[0-9a-fA-F]{64}$")
@@ -136,10 +142,16 @@ class CanonicalV2Recorder(CanonicalRecorder):
         chunk_id: str,
         duration_ms: int,
     ) -> tuple[str, str]:
-        if arm_id != V2_ARM_ID:
-            raise ValueError(f"Canonical V2 actions require arm_id={V2_ARM_ID!r}")
-        if executor != V2_EXECUTOR:
-            raise ValueError(f"Canonical V2 actions require executor={V2_EXECUTOR!r}")
+        allowed_identities = V2_TASK_ACTION_IDENTITIES[self.metadata.task_id]
+        if (arm_id, executor) not in allowed_identities:
+            allowed = ", ".join(
+                f"{allowed_arm}/{allowed_executor}"
+                for allowed_arm, allowed_executor in sorted(allowed_identities)
+            )
+            raise ValueError(
+                f"Canonical V2 actions require one of these identities for "
+                f"{self.metadata.task_id}: {allowed}"
+            )
         if subtask_id != self.metadata.task_id:
             raise ValueError(
                 f"Canonical V2 actions require subtask_id={self.metadata.task_id!r}"
@@ -244,5 +256,6 @@ __all__ = [
     "V2_INSTRUCTION",
     "V2_SCENE_ID",
     "V2_TASK_ID",
+    "V2_TASK_ACTION_IDENTITIES",
     "V2_TASK_INSTRUCTIONS",
 ]

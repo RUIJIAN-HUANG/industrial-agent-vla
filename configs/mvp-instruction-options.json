@@ -20,7 +20,7 @@
     {
       "task_id": "BIN01_TO_FINISHED01",
       "display_instruction": "请将料箱 Bin_01 搬运到成品区 FINISHED_01。",
-      "canonical_instruction": "请将料箱 Bin_01 搬运到成品区 FINISHED_01。"
+      "canonical_instruction": "把Bin_01搬到FINISHED_01"
     },
     {
       "task_id": "PACK_ALL_AND_FINISH",

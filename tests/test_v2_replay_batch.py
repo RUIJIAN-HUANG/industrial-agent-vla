@@ -27,6 +27,7 @@ def _source(tmp_path: Path) -> batch.SourceEpisode:
         scene_config_sha256=f"sha256:{'a' * 64}",
         hdf5_sha256=f"sha256:{'b' * 64}",
         actions=_source_actions(),
+        arm_ids=("Arm_A",) * len(_source_actions()),
     )
 
 
@@ -118,6 +119,38 @@ def test_approach_curve_skips_zero_pregrasp_steps() -> None:
     assert len(varied) == len(source)
     assert varied[3].values[:3] == source[3].values[:3]
     assert any(a.values[:3] != b.values[:3] for a, b in zip(varied, source))
+
+
+def test_dual_arm_variation_preserves_one_ordered_arm_boundary() -> None:
+    arm_a = list(_source_actions())
+    arm_b = list(_source_actions())
+    actions = arm_a + arm_b
+    arm_ids = ["Arm_A"] * len(arm_a) + ["Arm_B"] * len(arm_b)
+
+    varied = batch._diversify_replay_actions(
+        actions,
+        profile="diverse_low",
+        seed=903,
+        final_y_offset_mm=2.0,
+        arm_ids=arm_ids,
+    )
+
+    assert len(varied) == len(actions)
+    assert [action.values[6] for action in varied] == [
+        action.values[6] for action in actions
+    ]
+    import numpy as np
+
+    np.testing.assert_allclose(
+        varied[len(arm_a) - 1].values[:3],
+        arm_a[-1].values[:3],
+        rtol=0.0,
+        atol=1e-12,
+    )
+    assert any(
+        changed.values[:3] != original.values[:3]
+        for changed, original in zip(varied, actions)
+    )
 
 
 def test_generate_w01_batch_writes_hashed_configs_manifest_and_commands(

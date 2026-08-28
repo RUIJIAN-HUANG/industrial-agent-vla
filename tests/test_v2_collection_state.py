@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from simulation.v2_collection_state import (
+    Bin01ToFinished01CollectionStateMachine,
     CollectionStateError,
     ControlToken,
     EpisodeOutcome,
@@ -13,6 +14,61 @@ from simulation.v2_collection_state import (
     V2FailureCode,
     V2ManualCollectionStateMachine,
 )
+
+
+def test_bin01_profile_handoffs_from_arm_a_to_arm_b_and_completes() -> None:
+    machine = Bin01ToFinished01CollectionStateMachine(_contract())
+
+    assert machine.token is ControlToken.A_ONLY
+    machine.require_arm_action("Arm_A")
+    machine.enter_handoff_verify(
+        bin_at_handoff_center=True,
+        bin_stable=True,
+        arm_a_gripper_open=True,
+        arm_a_clear=True,
+    )
+    assert machine.token is ControlToken.HANDOFF_VERIFY
+    machine.activate_b_only()
+    assert machine.token is ControlToken.B_ONLY
+    machine.require_arm_action("Arm_B")
+    machine.complete(
+        bin_at_finished=True,
+        bin_stable=True,
+        arm_b_gripper_open=True,
+        arm_b_clear=True,
+    )
+
+    assert machine.outcome is EpisodeOutcome.SUCCEEDED
+    assert machine.token is ControlToken.NONE
+
+
+def test_bin01_profile_rejects_premature_arm_b_and_bad_handoff() -> None:
+    machine = Bin01ToFinished01CollectionStateMachine(_contract())
+    with pytest.raises(CollectionStateError) as caught:
+        machine.require_arm_action("Arm_B")
+    assert caught.value.code is V2FailureCode.INACTIVE_ARM_ACTION
+
+    machine = Bin01ToFinished01CollectionStateMachine(_contract())
+    with pytest.raises(CollectionStateError) as caught:
+        machine.enter_handoff_verify(
+            bin_at_handoff_center=False,
+            bin_stable=True,
+            arm_a_gripper_open=True,
+            arm_a_clear=True,
+        )
+    assert caught.value.code is V2FailureCode.HANDOFF_PRECONDITION_FAILED
+
+
+def test_bin01_profile_rejects_finish_before_b_only() -> None:
+    machine = Bin01ToFinished01CollectionStateMachine(_contract())
+    with pytest.raises(CollectionStateError) as caught:
+        machine.complete(
+            bin_at_finished=True,
+            bin_stable=True,
+            arm_b_gripper_open=True,
+            arm_b_clear=True,
+        )
+    assert caught.value.code is V2FailureCode.FINISH_PRECONDITION_FAILED
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -43,6 +99,10 @@ EXPECTED_SLOTS = {
 
 def _config() -> dict:
     return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+
+
+def _contract() -> V2CollectionContract:
+    return V2CollectionContract.from_config(_config())
 
 
 def _machine() -> V2ManualCollectionStateMachine:

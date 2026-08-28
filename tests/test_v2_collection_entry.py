@@ -1,4 +1,5 @@
 import argparse
+import ast
 from pathlib import Path
 
 import numpy as np
@@ -16,6 +17,7 @@ from simulation.v2_collection_entry import (
 
 
 CAMERA_IDS = ("CAM_A_TOP", "CAM_HANDOFF", "CAM_B_TOP")
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class _StaticRgbPipeline:
@@ -57,6 +59,53 @@ def test_cli_builds_visible_practice_preflight(tmp_path: Path) -> None:
     assert result.scene_id == "single_bin_manual_industrial_v2"
     assert result.training_allowed is False
     assert result.full_task_required is False
+
+
+def test_collection_scene_build_is_task_invariant() -> None:
+    builder_path = REPO_ROOT / "simulation" / "single_bin_scene_v2_builder.py"
+    collection_path = REPO_ROOT / "simulation" / "run_v2_keyboard_collection.py"
+
+    builder_tree = ast.parse(builder_path.read_text(encoding="utf-8"))
+    build_scene = next(
+        node
+        for node in builder_tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "build_scene"
+    )
+    parameter_names = {
+        argument.arg
+        for argument in (*build_scene.args.args, *build_scene.args.kwonlyargs)
+    }
+    assert "task_id" not in parameter_names
+
+    collection_tree = ast.parse(collection_path.read_text(encoding="utf-8"))
+    scene_calls = [
+        node
+        for node in ast.walk(collection_tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "build_scene"
+    ]
+    assert len(scene_calls) == 1
+    assert all(
+        keyword.arg != "task_id" for call in scene_calls for keyword in call.keywords
+    )
+
+
+def test_bin_terminal_gate_does_not_inspect_or_relocate_parts() -> None:
+    offline_gt_path = REPO_ROOT / "simulation" / "offline_gt.py"
+    tree = ast.parse(offline_gt_path.read_text(encoding="utf-8"))
+    bin_gate = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "bin01_in_finished01"
+    )
+    literals = {
+        node.value
+        for node in ast.walk(bin_gate)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    }
+    assert not any("/World/Parts" in value for value in literals)
+    assert "contents" not in literals
 
 
 def test_cli_accepts_optional_replay_episode(tmp_path: Path) -> None:

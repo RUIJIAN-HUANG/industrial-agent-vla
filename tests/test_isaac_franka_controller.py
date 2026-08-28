@@ -13,6 +13,7 @@ import numpy as np
 from industrial_agent.contracts import ActionStep
 from industrial_agent.sync_contract import FROZEN_MULTI_RATE
 from simulation.isaac_franka_controller import (
+    CartesianTrackingRejected,
     IsaacSimFrankaController,
     _control_world_position_for_tcp,
     _gripper_opening_m,
@@ -27,6 +28,17 @@ from simulation.isaac_franka_controller import (
 
 
 class IsaacFrankaControllerMathTests(unittest.TestCase):
+    def test_tracking_rejection_retains_structured_diagnostic(self):
+        diagnostic = _translation_tracking_diagnostic(
+            np.asarray([0.005, 0.0, 0.0]),
+            np.zeros(3),
+        )
+        error = CartesianTrackingRejected("Arm_B", diagnostic)
+
+        self.assertEqual(error.arm_id, "Arm_B")
+        self.assertEqual(error.diagnostic, diagnostic)
+        self.assertIn("forward_progress_m=0.000000", str(error))
+
     def test_translation_tracking_accepts_forward_progress(self):
         diagnostic = _translation_tracking_diagnostic(
             np.asarray([0.005, 0.0, 0.0]),

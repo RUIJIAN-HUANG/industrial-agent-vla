@@ -316,3 +316,51 @@ def evaluate_w01_terminal_success(
         hold_drift=drift,
         failure_codes=failure_codes,
     )
+
+
+@dataclass(frozen=True)
+class Bin01TerminalSuccess:
+    passed: bool
+    fresh_vote_pass: bool
+    fresh_vote: Mapping[str, Any]
+    hold_drift_pass: bool
+    hold_drift: Mapping[str, Any]
+    failure_codes: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "passed": self.passed,
+            "fresh_vote_pass": self.fresh_vote_pass,
+            "fresh_vote": dict(self.fresh_vote),
+            "hold_drift_pass": self.hold_drift_pass,
+            "hold_drift": dict(self.hold_drift),
+            "hold_duration_threshold_s": P01_HOLD_DURATION_S,
+            "hold_drift_threshold_m": P01_MAX_HOLD_DRIFT_M,
+            "failure_codes": list(self.failure_codes),
+            "canonical_included": False,
+        }
+
+
+def evaluate_bin01_terminal_success(
+    *,
+    vote_reports: Sequence[Mapping[str, Any]],
+    positions_world: Sequence[Sequence[float]],
+    timestamps_s: Sequence[float],
+) -> Bin01TerminalSuccess:
+    vote = evaluate_fresh_gt_votes(vote_reports, failure_prefix="BIN01")
+    drift = evaluate_terminal_hold_drift(
+        positions_world,
+        timestamps_s,
+        failure_prefix="BIN01",
+    )
+    failure_codes = tuple(
+        dict.fromkeys(list(vote["failure_codes"]) + list(drift["failure_codes"]))
+    )
+    return Bin01TerminalSuccess(
+        passed=bool(vote["pass"] and drift["pass"]),
+        fresh_vote_pass=bool(vote["pass"]),
+        fresh_vote=vote,
+        hold_drift_pass=bool(drift["pass"]),
+        hold_drift=drift,
+        failure_codes=failure_codes,
+    )

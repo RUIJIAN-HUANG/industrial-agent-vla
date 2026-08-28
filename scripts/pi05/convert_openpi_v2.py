@@ -15,7 +15,12 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 
 from industrial_agent.data import SplitRegistry
-from scripts.pi05.canonical_v2 import CanonicalV2Error, CanonicalV2Reader
+from scripts.pi05.canonical_v2 import (
+    EXPECTED_TASK_ACTION_IDENTITIES,
+    EXPECTED_TASK_CAMERA_IDS,
+    CanonicalV2Error,
+    CanonicalV2Reader,
+)
 
 
 ACTION_HORIZON = 10
@@ -33,6 +38,19 @@ try:
     from lerobot.common.datasets.lerobot_dataset import LeRobotDataset  # type: ignore
 except Exception as exc:  # pragma: no cover - optional local dependency
     LEROBOT_IMPORT_ERROR = str(exc)
+
+
+def _task_streams(reader: CanonicalV2Reader) -> tuple[str, str]:
+    task_id = str(reader.manifest["metadata"]["task_id"])
+    identities = EXPECTED_TASK_ACTION_IDENTITIES[task_id]
+    if len(identities) != 1:
+        raise CanonicalV2Error(
+            "dual-arm tasks require an arm-aware LeRobot converter",
+            episode_id=reader.episode_id,
+            field="actions.arm_id",
+        )
+    arm_id, _ = next(iter(identities))
+    return arm_id, EXPECTED_TASK_CAMERA_IDS[task_id]
 
 
 @dataclass(frozen=True)
@@ -151,25 +169,26 @@ def preflight_canonical_v2_windows(
                 reader.h5["actions/physics_tick"][:],
                 dtype=np.uint64,
             )
+            arm_id, camera_id = _task_streams(reader)
             camera_indices = _unique_tick_index(
                 np.asarray(
-                    reader.h5["cameras/CAM_A_TOP/physics_tick"][:],
+                    reader.h5[f"cameras/{camera_id}/physics_tick"][:],
                     dtype=np.uint64,
                 ),
-                field="CAM_A_TOP",
+                field=camera_id,
             )
             state_indices = _unique_tick_index(
                 np.asarray(
-                    reader.h5["robot_state/Arm_A/physics_tick"][:],
+                    reader.h5[f"robot_state/{arm_id}/physics_tick"][:],
                     dtype=np.uint64,
                 ),
-                field="Arm_A state",
+                field=f"{arm_id} state",
             )
             for start in range(len(windows)):
                 tick = int(action_ticks[start])
                 if tick not in camera_indices or tick not in state_indices:
                     raise CanonicalV2Error(
-                        "window start lacks exact-tick CAM_A_TOP or Arm_A state",
+                        f"window start lacks exact-tick {camera_id} or {arm_id} state",
                         episode_id=reader.episode_id,
                         field="window_alignment",
                     )
@@ -417,19 +436,20 @@ def convert_canonical_v2_to_lerobot(
                     reader.h5["actions/physics_tick"][:],
                     dtype=np.uint64,
                 )
+                arm_id, camera_id = _task_streams(reader)
                 camera_indices = _unique_tick_index(
                     np.asarray(
-                        reader.h5["cameras/CAM_A_TOP/physics_tick"][:],
+                        reader.h5[f"cameras/{camera_id}/physics_tick"][:],
                         dtype=np.uint64,
                     ),
-                    field="CAM_A_TOP",
+                    field=camera_id,
                 )
                 state_indices = _unique_tick_index(
                     np.asarray(
-                        reader.h5["robot_state/Arm_A/physics_tick"][:],
+                        reader.h5[f"robot_state/{arm_id}/physics_tick"][:],
                         dtype=np.uint64,
                     ),
-                    field="Arm_A state",
+                    field=f"{arm_id} state",
                 )
                 starts: list[int] = []
                 for start, window in enumerate(windows):
@@ -438,16 +458,17 @@ def convert_canonical_v2_to_lerobot(
                     state_index = state_indices.get(tick)
                     if camera_index is None or state_index is None:
                         raise CanonicalV2Error(
-                            "window start lacks exact-tick CAM_A_TOP or Arm_A state",
+                            "window start lacks exact-tick "
+                            f"{camera_id} or {arm_id} state",
                             episode_id=reader.episode_id,
                             field="window_alignment",
                         )
                     image = np.asarray(
-                        reader.h5["cameras/CAM_A_TOP/rgb"][camera_index],
+                        reader.h5[f"cameras/{camera_id}/rgb"][camera_index],
                         dtype=np.uint8,
                     ).copy()
                     state = np.asarray(
-                        reader.h5["robot_state/Arm_A/state_7d"][state_index],
+                        reader.h5[f"robot_state/{arm_id}/state_7d"][state_index],
                         dtype=np.float32,
                     ).copy()
                     dataset.add_frame(

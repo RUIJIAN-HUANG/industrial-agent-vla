@@ -44,6 +44,8 @@ def test_display_and_canonical_text_resolve_to_one_training_task(text: str) -> N
 
 def test_task_id_resolves_to_same_option() -> None:
     assert mvp_instruction_for_task("P01_TO_S11") is MVP_P01_TO_S11
+    assert mvp_instruction_for_task("W01_TO_S14") is MVP_W01_TO_S14
+    assert mvp_instruction_for_task("BIN01_TO_FINISHED01") is MVP_BIN01_TO_FINISHED01
 
 
 def test_user_instruction_resolves_to_task_id_for_supervisor() -> None:
@@ -58,7 +60,7 @@ def test_user_instruction_resolves_to_task_id_for_supervisor() -> None:
     [
         ("W01_TO_S14", "请将扳手 W01 放置到料箱的 S14 格子中。"),
         ("P03_UPRIGHT_TO_S12", "请将倒立的轴件 P03 翻正后，放置到料箱的 S12 格子中。"),
-        ("BIN01_TO_FINISHED01", "请将料箱 Bin_01 搬运到成品区 FINISHED_01。"),
+        ("BIN01_TO_FINISHED01", "把Bin_01搬到FINISHED_01"),
         (
             "PACK_ALL_AND_FINISH",
             "请将所有零件按指定位置装入料箱 Bin_01，再将料箱 Bin_01 搬运到成品区 FINISHED_01。",

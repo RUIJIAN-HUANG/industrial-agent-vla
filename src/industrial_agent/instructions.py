@@ -28,8 +28,8 @@ class InstructionOption:
                 raise ValueError(f"{field_name} must not have surrounding whitespace")
 
 
-# Frozen instruction catalog.  The display and canonical strings are identical
-# because the requested frozen wording does not define separate UI prose.
+# Frozen instruction catalog. Display text is user-facing; canonical text is
+# the exact value persisted in Episodes and must remain compatible once frozen.
 MVP_P01_TO_S11 = InstructionOption(
     task_id="P01_TO_S11",
     display_instruction="请将轴件 P01 放置到料箱的 S11 格子中。",
@@ -48,7 +48,7 @@ MVP_P03_UPRIGHT_TO_S12 = InstructionOption(
 MVP_BIN01_TO_FINISHED01 = InstructionOption(
     task_id="BIN01_TO_FINISHED01",
     display_instruction="请将料箱 Bin_01 搬运到成品区 FINISHED_01。",
-    canonical_instruction="请将料箱 Bin_01 搬运到成品区 FINISHED_01。",
+    canonical_instruction="把Bin_01搬到FINISHED_01",
 )
 MVP_PACK_ALL_AND_FINISH = InstructionOption(
     task_id="PACK_ALL_AND_FINISH",
