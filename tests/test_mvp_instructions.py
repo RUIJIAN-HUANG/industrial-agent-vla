@@ -39,7 +39,7 @@ def test_mvp_exposes_the_human_facing_option() -> None:
 def test_display_and_canonical_text_resolve_to_one_training_task(text: str) -> None:
     option = normalize_mvp_instruction(text)
     assert option.task_id == "P01_TO_S11"
-    assert option.canonical_instruction == "请将轴件 P01 放置到料箱的 S11 格子中。"
+    assert option.canonical_instruction == "把P01放到S11中"
 
 
 def test_task_id_resolves_to_same_option() -> None:
@@ -49,16 +49,13 @@ def test_task_id_resolves_to_same_option() -> None:
 
 
 def test_user_instruction_resolves_to_task_id_for_supervisor() -> None:
-    assert (
-        mvp_task_id_for_instruction("请将轴件 P01 放置到料箱的 S11 格子中。")
-        == "P01_TO_S11"
-    )
+    assert mvp_task_id_for_instruction("把P01放到S11中") == "P01_TO_S11"
 
 
 @pytest.mark.parametrize(
     ("task_id", "instruction"),
     [
-        ("W01_TO_S14", "请将扳手 W01 放置到料箱的 S14 格子中。"),
+        ("W01_TO_S14", "把W01放到S14中"),
         ("P03_UPRIGHT_TO_S12", "请将倒立的轴件 P03 翻正后，放置到料箱的 S12 格子中。"),
         ("BIN01_TO_FINISHED01", "把Bin_01搬到FINISHED_01"),
         (
