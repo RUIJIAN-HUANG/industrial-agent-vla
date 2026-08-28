@@ -18,6 +18,7 @@ from industrial_agent.v2_targeting import (
     infer_v2_slot_id,
     infer_v2_zone_id,
     resolve_v2_target_for_task,
+    resolve_v2_target_for_task_or_instruction,
     resolve_v2_target_instruction,
     select_target_detection,
     select_target_slot_detection,
@@ -120,6 +121,19 @@ def test_literal_instruction_resolves_object_slot_and_slot_alias() -> None:
     assert target.target_slot is not None
     assert target.target_slot.slot_id == "S11"
     assert v2_slot("s01").slot_id == "S11"
+
+
+def test_task_or_instruction_falls_back_to_literal_v2_ids() -> None:
+    target = resolve_v2_target_for_task_or_instruction(
+        "operator-free-text",
+        "把 P01 放到 s01",
+    )
+
+    assert target.task_id == "P01_TO_S11"
+    assert target.target_object.object_id == "P01"
+    assert target.target_slot is not None
+    assert target.target_slot.slot_id == "S11"
+    assert target.allowed_class_names == ("hex_nut",)
 
 
 def test_selector_ignores_other_classes_and_locks_target_zone() -> None:

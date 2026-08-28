@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .v2_targeting import resolve_v2_target_instruction
+
 
 @dataclass(frozen=True)
 class InstructionOption:
@@ -89,13 +91,18 @@ def mvp_instruction_for_task(task_id: str) -> InstructionOption:
 def normalize_mvp_instruction(text: str) -> InstructionOption:
     """Map the exact UI/canonical text to one training contract.
 
-    No fuzzy matching is performed.  A new wording must be deliberately added
-    as an alias or as a new versioned option instead of being guessed.
+    The fixed-scene V2 aliases may also name literal object and slot IDs, such
+    as ``P01`` and ``s01``.  No fuzzy object guessing is performed.
     """
 
     try:
         return _BY_TEXT[text]
     except (KeyError, TypeError) as exc:
+        try:
+            target = resolve_v2_target_instruction(text)
+            return _BY_TASK_ID[target.task_id]
+        except (KeyError, ValueError):
+            pass
         expected = ", ".join(sorted(_BY_TEXT))
         raise ValueError(f"unknown MVP instruction; use one of: {expected}") from exc
 

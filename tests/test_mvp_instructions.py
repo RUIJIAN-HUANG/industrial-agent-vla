@@ -48,6 +48,10 @@ def test_task_id_resolves_to_same_option() -> None:
     assert mvp_instruction_for_task("BIN01_TO_FINISHED01") is MVP_BIN01_TO_FINISHED01
 
 
+def test_literal_object_slot_instruction_resolves_to_task_id_for_supervisor() -> None:
+    assert mvp_task_id_for_instruction("\u628a P01 \u653e\u5230 s01") == "P01_TO_S11"
+
+
 def test_user_instruction_resolves_to_task_id_for_supervisor() -> None:
     assert (
         mvp_task_id_for_instruction("请将轴件 P01 放置到料箱的 S11 格子中。")

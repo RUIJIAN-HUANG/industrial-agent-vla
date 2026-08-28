@@ -214,6 +214,20 @@ def resolve_v2_target_for_task(task: str | V2TaskSpec) -> V2ResolvedTarget:
     )
 
 
+def resolve_v2_target_for_task_or_instruction(
+    task_id: str,
+    instruction: str | None,
+) -> V2ResolvedTarget:
+    """Resolve a V2 target from a frozen task id, falling back to instruction text."""
+
+    try:
+        return resolve_v2_target_for_task(task_id)
+    except ValueError:
+        if instruction is None or not instruction.strip():
+            raise
+    return resolve_v2_target_instruction(instruction)
+
+
 def resolve_v2_target_instruction(instruction: str) -> V2ResolvedTarget:
     """Resolve a frozen or literal V2 instruction into a YOLO target filter."""
 

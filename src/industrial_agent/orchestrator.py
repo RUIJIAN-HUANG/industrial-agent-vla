@@ -69,7 +69,10 @@ from .safety import ActionSafetyValidator, SafetyPolicy, safety_state_failure
 from .sync_contract import canonical_state_7d
 from .telemetry import EventRecord, EventSink, MemoryStore, RunMemory
 from .v2_task_profile import require_formal_v2_task
-from .v2_targeting import resolve_v2_target_for_task, select_target_detection
+from .v2_targeting import (
+    resolve_v2_target_for_task_or_instruction,
+    select_target_detection,
+)
 from .verifier import PostconditionVerifier, VerificationResult, Verdict
 
 # 泛型变量:让 _invoke_with_hard_deadline 保留调用方的返回值类型
@@ -1665,8 +1668,11 @@ class IndustrialAgent:
             allowed_class_names: tuple[str, ...] = ()
             v2_target_task_id = str(task.metadata.get("parent_task_id", task.task_id))
             try:
-                formal_v2_task = require_formal_v2_task(v2_target_task_id)
-                v2_target = resolve_v2_target_for_task(formal_v2_task)
+                v2_target = resolve_v2_target_for_task_or_instruction(
+                    v2_target_task_id,
+                    task.instruction,
+                )
+                require_formal_v2_task(v2_target.task_id)
                 allowed_class_names = v2_target.allowed_class_names
             except ValueError:
                 pass
