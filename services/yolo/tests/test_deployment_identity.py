@@ -18,23 +18,25 @@ def _sha256(raw: bytes) -> str:
     return f"sha256:{hashlib.sha256(raw).hexdigest()}"
 
 
-def test_manual800_runtime_identity_matches_perception_config(
+@pytest.mark.parametrize("artifact", ("manual800", "manual994"))
+def test_manual_runtime_identity_matches_perception_config(
+    artifact: str,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repo_root = Path(__file__).resolve().parents[3]
     service_config = json.loads(
-        (repo_root / "configs" / "yolo.service-manual800.json").read_text(
+        (repo_root / "configs" / f"yolo.service-{artifact}.json").read_text(
             encoding="utf-8"
         )
     )
     perception_config = json.loads(
-        (repo_root / "configs" / "perception.yolo-manual800.json").read_text(
+        (repo_root / "configs" / f"perception.yolo-{artifact}.json").read_text(
             encoding="utf-8"
         )
     )
     checkpoint = tmp_path / "best.pt"
-    checkpoint.write_bytes(b"manual800-contract-probe")
+    checkpoint.write_bytes(f"{artifact}-contract-probe".encode("ascii"))
     monkeypatch.setenv("YOLO_USE_MOCK", "0")
     monkeypatch.setenv("YOLO_CHECKPOINT_PATH", str(checkpoint))
     monkeypatch.delenv("YOLO_CHECKPOINT_SHA", raising=False)
