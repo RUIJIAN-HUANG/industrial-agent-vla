@@ -118,7 +118,7 @@ $env:YOLO_DEVICE = "0"
 ```
 
 启动时服务会重新计算 `best.pt` 和内置类别表的 SHA256；摘要不匹配或 checkpoint
-类别顺序不是 `part_upright, part_inverted, part_fallen, bin_box, bin_slot` 时拒绝启动。
+类别顺序不是 `shaft_upright, shaft_inverted, hex_nut, open_end_wrench, bin_box, bin_slot, bin_carry_handle` 时拒绝启动。
 模型权重只保存在外部模型目录或挂载卷中，不提交到 Git。
 
 ## 容器运行

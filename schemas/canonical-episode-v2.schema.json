@@ -106,7 +106,7 @@
           "enum": ["P01_TO_S11", "W01_TO_S14", "BIN01_TO_FINISHED01"]
         },
         "instruction": {
-          "enum": ["请将螺母 P01 放置到料箱的 S11 格子中。", "请将扳手 W01 放置到料箱的 S14 格子中。", "把Bin_01搬到FINISHED_01"]
+          "enum": ["请将轴件 P01 放置到料箱的 S11 格子中。", "请将扳手 W01 放置到料箱的 S14 格子中。", "把Bin_01搬到FINISHED_01"]
         },
         "scene_seed": {
           "type": "integer",
@@ -156,7 +156,7 @@
             {
               "properties": {
                 "task_id": {"const": "P01_TO_S11"},
-                "instruction": {"const": "请将螺母 P01 放置到料箱的 S11 格子中。"}
+                "instruction": {"const": "请将轴件 P01 放置到料箱的 S11 格子中。"}
               }
             },
             {

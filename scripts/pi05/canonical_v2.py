@@ -16,7 +16,7 @@ from jsonschema import Draft202012Validator, FormatChecker
 CANONICAL_SCHEMA_VERSION = "2.0"
 EXPECTED_SCENE_ID = "single_bin_manual_industrial_v2"
 EXPECTED_TASK_ID = "P01_TO_S11"
-EXPECTED_INSTRUCTION = "请将螺母 P01 放置到料箱的 S11 格子中。"
+EXPECTED_INSTRUCTION = "请将轴件 P01 放置到料箱的 S11 格子中。"
 EXPECTED_TASK_INSTRUCTIONS = {
     EXPECTED_TASK_ID: EXPECTED_INSTRUCTION,
     "W01_TO_S14": "请将扳手 W01 放置到料箱的 S14 格子中。",

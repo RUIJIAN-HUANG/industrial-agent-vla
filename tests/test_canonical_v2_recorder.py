@@ -25,7 +25,7 @@ def _metadata(**overrides: object) -> CanonicalV2EpisodeMetadata:
     values: dict[str, object] = {
         "episode_id": "v2-p01-000001",
         "task_id": "P01_TO_S11",
-        "instruction": "请将螺母 P01 放置到料箱的 S11 格子中。",
+        "instruction": "请将轴件 P01 放置到料箱的 S11 格子中。",
         "scene_seed": 20260819,
         "git_sha": "a" * 40,
         "scene_config_sha256": f"sha256:{'b' * 64}",
@@ -50,7 +50,7 @@ def _record_complete_episode(
     tmp_path: Path,
     *,
     task_id: str = "P01_TO_S11",
-    instruction: str = "请将螺母 P01 放置到料箱的 S11 格子中。",
+    instruction: str = "请将轴件 P01 放置到料箱的 S11 格子中。",
 ) -> Path:
     recorder, image_cas = _recorder(tmp_path, task_id=task_id, instruction=instruction)
     frame = np.zeros((720, 1280, 3), dtype=np.uint8)

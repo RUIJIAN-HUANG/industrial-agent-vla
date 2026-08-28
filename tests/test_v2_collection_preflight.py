@@ -25,7 +25,7 @@ def _build(tmp_path: Path, **overrides):
         "cas_root": tmp_path / "cas",
         "episode_id": "v2-manual-20260812-130000-seed007-run001",
         "task_id": "P01_TO_S11",
-        "instruction": "请将螺母 P01 放置到料箱的 S11 格子中。",
+        "instruction": "请将轴件 P01 放置到料箱的 S11 格子中。",
         "scene_seed": 7,
         "split": CollectionSplit.PRACTICE,
         "headless": False,
@@ -46,7 +46,7 @@ def test_valid_practice_preflight_uses_real_v2_identity(tmp_path: Path) -> None:
     assert result.scene_id == "single_bin_manual_industrial_v2"
     assert result.canonical_schema_version == "2.0"
     assert result.task_id == "P01_TO_S11"
-    assert result.instruction == "请将螺母 P01 放置到料箱的 S11 格子中。"
+    assert result.instruction == "请将轴件 P01 放置到料箱的 S11 格子中。"
 
 
 def test_w01_s14_practice_preflight_uses_second_frozen_identity(
@@ -139,7 +139,7 @@ def test_dirty_worktree_is_rejected(tmp_path: Path) -> None:
     [
         ("task_id", "p01_to_s11"),
         ("instruction", "把 P01 放到 S11 中"),
-        ("instruction", "请将螺母P01放置到料箱S11格中。"),
+        ("instruction", "请将轴件P01放置到料箱S11格中。"),
     ],
 )
 def test_atomic_identity_must_match_exactly(

@@ -1014,7 +1014,7 @@ TEST_NORM_SHA_HTTP = (
 
 def _make_http_infer_body(
     task_id: str = "P01_TO_S11",
-    prompt: str = "请将螺母 P01 放置到料箱的 S11 格子中。",
+    prompt: str = "请将轴件 P01 放置到料箱的 S11 格子中。",
     full_image: dict | None = None,
     wrist_image: dict | None = None,
     robot_state: list | None = None,

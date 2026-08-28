@@ -125,7 +125,7 @@ def symmetric_finger_contact_report(
 def top_down_tilt_error_rad(current_world_rotation: Sequence[Sequence[float]]) -> float:
     """Return tool-Z tilt from world down, deliberately ignoring tool yaw.
 
-    P01 is a flat hex nut, so rotation about the vertical approach axis is
+    P01 is an upright cylinder, so rotation about the vertical approach axis is
     not part of the grasp objective.  Measuring full SO(3) error would impose an
     arbitrary wrist yaw and can make an otherwise reachable grasp fail.
     """

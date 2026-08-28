@@ -32,8 +32,8 @@ class InstructionOption:
 # the exact value persisted in Episodes and must remain compatible once frozen.
 MVP_P01_TO_S11 = InstructionOption(
     task_id="P01_TO_S11",
-    display_instruction="请将螺母 P01 放置到料箱的 S11 格子中。",
-    canonical_instruction="请将螺母 P01 放置到料箱的 S11 格子中。",
+    display_instruction="请将轴件 P01 放置到料箱的 S11 格子中。",
+    canonical_instruction="请将轴件 P01 放置到料箱的 S11 格子中。",
 )
 MVP_W01_TO_S14 = InstructionOption(
     task_id="W01_TO_S14",

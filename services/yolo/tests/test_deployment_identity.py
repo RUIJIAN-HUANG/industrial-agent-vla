@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,12 +10,41 @@ from typing import Any
 import numpy as np
 import pytest
 
-from yolo_service.config import load_config
+from yolo_service.config import _effective_config_sha, load_config
 from yolo_service.model import UltralyticsYoloModel
 
 
 def _sha256(raw: bytes) -> str:
     return f"sha256:{hashlib.sha256(raw).hexdigest()}"
+
+
+def test_manual800_runtime_identity_matches_perception_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    service_config = json.loads(
+        (repo_root / "configs" / "yolo.service-manual800.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    perception_config = json.loads(
+        (repo_root / "configs" / "perception.yolo-manual800.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    checkpoint = tmp_path / "best.pt"
+    checkpoint.write_bytes(b"manual800-contract-probe")
+    monkeypatch.setenv("YOLO_USE_MOCK", "0")
+    monkeypatch.setenv("YOLO_CHECKPOINT_PATH", str(checkpoint))
+    monkeypatch.delenv("YOLO_CHECKPOINT_SHA", raising=False)
+    monkeypatch.setenv("YOLO_DEVICE", "cpu")
+
+    runtime_config = load_config()
+    expected = perception_config["perception"]["config_sha"]
+
+    assert _effective_config_sha(service_config) == expected
+    assert runtime_config["config_sha"] == expected
 
 
 def test_real_config_hashes_checkpoint_bytes(
@@ -61,16 +91,11 @@ def test_config_rejects_class_map_digest_mismatch(
 
 class _FakeYolo:
     instances: list["_FakeYolo"] = []
+    class_names: tuple[str, ...] = ()
 
     def __init__(self, checkpoint_path: str) -> None:
         self.checkpoint_path = checkpoint_path
-        self.names = {
-            0: "part_upright",
-            1: "part_inverted",
-            2: "part_fallen",
-            3: "bin_box",
-            4: "bin_slot",
-        }
+        self.names = dict(enumerate(self.class_names))
         self.predict_kwargs: dict[str, Any] | None = None
         self.instances.append(self)
 
@@ -90,6 +115,7 @@ def test_ultralytics_boundary_converts_rgb_to_bgr_and_filters_classes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _FakeYolo.instances.clear()
+    monkeypatch.setattr(_FakeYolo, "class_names", tuple(config["class_names"]))
     monkeypatch.setitem(sys.modules, "ultralytics", SimpleNamespace(YOLO=_FakeYolo))
     real_config = dict(config)
     real_config["mock_mode"] = False
@@ -110,13 +136,15 @@ def test_ultralytics_boundary_converts_rgb_to_bgr_and_filters_classes(
     assert kwargs is not None
     assert kwargs["source"].tolist() == [[[30, 20, 10]]]
     assert kwargs["source"].flags.c_contiguous
-    assert kwargs["classes"] == [3]
+    assert kwargs["classes"] == [tuple(config["class_names"]).index("bin_box")]
 
 
 def test_ultralytics_boundary_rejects_checkpoint_class_map(
     config: dict[str, Any],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(_FakeYolo, "class_names", tuple(config["class_names"]))
+
     class WrongMapYolo(_FakeYolo):
         def __init__(self, checkpoint_path: str) -> None:
             super().__init__(checkpoint_path)
@@ -139,6 +167,8 @@ def test_ultralytics_boundary_rejects_missing_postprocess_timing(
     config: dict[str, Any],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(_FakeYolo, "class_names", tuple(config["class_names"]))
+
     class MissingTimingYolo(_FakeYolo):
         def predict(self, **kwargs: Any) -> list[Any]:
             self.predict_kwargs = kwargs

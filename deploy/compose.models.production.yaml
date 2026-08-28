@@ -1,0 +1,173 @@
+name: industrial-agent-vla
+
+x-service-defaults: &service-defaults
+  init: true
+  pull_policy: missing
+  read_only: true
+  restart: unless-stopped
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  logging:
+    driver: local
+    options:
+      max-size: "20m"
+      max-file: "5"
+  networks:
+    - model-services
+
+services:
+  pi05:
+    <<: *service-defaults
+    image: "${PI05_IMAGE_REPOSITORY:?set PI05_IMAGE_REPOSITORY}@${PI05_IMAGE_DIGEST:?set PI05_IMAGE_DIGEST}"
+    environment:
+      PI05_SERVICE_MODE: real
+      PI05_SERVICE_HOST: 0.0.0.0
+      PI05_SERVICE_PORT: "8101"
+      PI05_CONFIG_NAME: pi05_industrial
+      PI05_CHECKPOINT_DIR: /models/pi05/checkpoint
+      PI05_NORM_STATS_PATH: /models/pi05/norm_stats.json
+      PI05_CHECKPOINT_SHA: "${PI05_CHECKPOINT_SHA:?set PI05_CHECKPOINT_SHA}"
+      PI05_NORM_STATS_SHA: "${PI05_NORM_STATS_SHA:?set PI05_NORM_STATS_SHA}"
+      INDUSTRIAL_AGENT_CAS_ROOT: /var/lib/industrial-agent/cas
+      OPENPI_DATA_HOME: /var/cache/openpi
+      XDG_CACHE_HOME: /var/cache
+      JAX_COMPILATION_CACHE_DIR: /var/cache/jax
+      XLA_PYTHON_CLIENT_MEM_FRACTION: "${PI05_GPU_MEMORY_FRACTION:-0.85}"
+    ports:
+      - "${MODEL_BIND_IP:-127.0.0.1}:${PI05_PORT:-8101}:8101"
+    volumes:
+      - type: bind
+        source: "${PI05_CHECKPOINT_DIR_HOST:?set PI05_CHECKPOINT_DIR_HOST}"
+        target: /models/pi05/checkpoint
+        read_only: true
+      - type: bind
+        source: "${PI05_NORM_STATS_FILE_HOST:?set PI05_NORM_STATS_FILE_HOST}"
+        target: /models/pi05/norm_stats.json
+        read_only: true
+      - type: bind
+        source: "${SHARED_CAS_DIR:?set SHARED_CAS_DIR}"
+        target: /var/lib/industrial-agent/cas
+        read_only: true
+      - type: bind
+        source: "${PI05_CACHE_DIR_HOST:?set PI05_CACHE_DIR_HOST}"
+        target: /var/cache
+    tmpfs:
+      - /tmp:size=2g,mode=1777
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${PI05_GPU_ID:?set PI05_GPU_ID}"]
+              capabilities: [gpu]
+    healthcheck:
+      test:
+        - CMD
+        - /workspace/openpi/.venv/bin/python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8101/health', timeout=3)"
+      interval: 30s
+      timeout: 5s
+      start_period: 300s
+      retries: 3
+    stop_grace_period: 30s
+
+  openvla-oft:
+    <<: *service-defaults
+    image: "${OPENVLA_IMAGE_REPOSITORY:?set OPENVLA_IMAGE_REPOSITORY}@${OPENVLA_IMAGE_DIGEST:?set OPENVLA_IMAGE_DIGEST}"
+    environment:
+      OPENVLA_OFT_USE_MOCK: "0"
+      OPENVLA_OFT_CHECKPOINT_DIR: /models/openvla-oft
+      OPENVLA_OFT_UPSTREAM_DIR: /opt/openvla-oft
+      OPENVLA_OFT_CHECKPOINT_SHA: "${OPENVLA_CHECKPOINT_SHA:?set OPENVLA_CHECKPOINT_SHA}"
+      OPENVLA_OFT_NORM_STATS_SHA: "${OPENVLA_NORM_STATS_SHA:?set OPENVLA_NORM_STATS_SHA}"
+      OPENVLA_OFT_UNNORM_KEY: "${OPENVLA_UNNORM_KEY:?set OPENVLA_UNNORM_KEY}"
+      INDUSTRIAL_AGENT_CAS_ROOT: /var/lib/industrial-agent/cas
+      HF_HOME: /var/cache/huggingface
+      XDG_CACHE_HOME: /var/cache
+    ports:
+      - "${MODEL_BIND_IP:-127.0.0.1}:${OPENVLA_PORT:-8102}:8102"
+    volumes:
+      - type: bind
+        source: "${OPENVLA_MODEL_DIR_HOST:?set OPENVLA_MODEL_DIR_HOST}"
+        target: /models/openvla-oft
+        read_only: true
+      - type: bind
+        source: "${SHARED_CAS_DIR:?set SHARED_CAS_DIR}"
+        target: /var/lib/industrial-agent/cas
+        read_only: true
+      - type: bind
+        source: "${OPENVLA_CACHE_DIR_HOST:?set OPENVLA_CACHE_DIR_HOST}"
+        target: /var/cache
+    tmpfs:
+      - /tmp:size=2g,mode=1777
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${OPENVLA_GPU_ID:?set OPENVLA_GPU_ID}"]
+              capabilities: [gpu]
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8102/health', timeout=3)"
+      interval: 30s
+      timeout: 5s
+      start_period: 300s
+      retries: 3
+    stop_grace_period: 30s
+
+  yolo:
+    <<: *service-defaults
+    image: "${YOLO_IMAGE_REPOSITORY:?set YOLO_IMAGE_REPOSITORY}@${YOLO_IMAGE_DIGEST:?set YOLO_IMAGE_DIGEST}"
+    environment:
+      YOLO_USE_MOCK: "0"
+      YOLO_CHECKPOINT_PATH: /models/yolo/model.pt
+      YOLO_CHECKPOINT_SHA: "${YOLO_CHECKPOINT_SHA:?set YOLO_CHECKPOINT_SHA}"
+      YOLO_CLASS_MAP_SHA: "${YOLO_CLASS_MAP_SHA:?set YOLO_CLASS_MAP_SHA}"
+      YOLO_DEVICE: "0"
+      INDUSTRIAL_AGENT_CAS_ROOT: /var/lib/industrial-agent/cas
+      XDG_CACHE_HOME: /var/cache
+    ports:
+      - "${MODEL_BIND_IP:-127.0.0.1}:${YOLO_PORT:-8103}:8103"
+    volumes:
+      - type: bind
+        source: "${YOLO_MODEL_FILE_HOST:?set YOLO_MODEL_FILE_HOST}"
+        target: /models/yolo/model.pt
+        read_only: true
+      - type: bind
+        source: "${SHARED_CAS_DIR:?set SHARED_CAS_DIR}"
+        target: /var/lib/industrial-agent/cas
+        read_only: true
+      - type: bind
+        source: "${YOLO_CACHE_DIR_HOST:?set YOLO_CACHE_DIR_HOST}"
+        target: /var/cache
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${YOLO_GPU_ID:?set YOLO_GPU_ID}"]
+              capabilities: [gpu]
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8103/health', timeout=3)"
+      interval: 30s
+      timeout: 5s
+      start_period: 180s
+      retries: 3
+    stop_grace_period: 15s
+
+networks:
+  model-services:
+    driver: bridge

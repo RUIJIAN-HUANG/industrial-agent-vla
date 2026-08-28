@@ -24,14 +24,18 @@ class V2IndustrialAssetTests(unittest.TestCase):
         self.assertEqual(summary["external_assets"], [])
 
     def test_shaft_flange_makes_orientation_visible(self) -> None:
-        shaft = deepcopy(self.config["parts"][1])
+        shaft = deepcopy(
+            next(part for part in self.config["parts"] if part["part_type"] == "shaft")
+        )
         shaft["geometry"]["flange_radius_m"] = shaft["geometry"]["radius_m"]
         self.assertTrue(
             any("orientation visible" in item for item in validate_part_spec(shaft))
         )
 
     def test_nut_requires_a_real_visible_hole(self) -> None:
-        nut = deepcopy(self.config["parts"][0])
+        nut = deepcopy(
+            next(part for part in self.config["parts"] if part["part_type"] == "nut")
+        )
         nut["geometry"]["hole_diameter_m"] = nut["geometry"]["across_flats_m"]
         self.assertTrue(
             any("wall thickness" in item for item in validate_part_spec(nut))
