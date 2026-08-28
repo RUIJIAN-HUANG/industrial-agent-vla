@@ -7,7 +7,7 @@
   "required": [
     "config_version", "profile_id", "scene_id", "task_profile",
     "formal_task_ids", "verification", "executor_timeout_ms", "image_cas",
-    "recovery", "safety", "telemetry", "executors"
+    "recovery", "safety", "telemetry", "perception", "executors"
   ],
   "properties": {
     "config_version": {"type": "string", "pattern": "^2\\.[0-9]+$"},
@@ -46,6 +46,38 @@
       "properties": {
         "event_jsonl_path": {"type": "string", "minLength": 1},
         "require_durable_commands": {"const": true}
+      }
+    },
+    "perception": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "required",
+        "mode",
+        "base_url",
+        "evidence_jsonl_path",
+        "detection_contract_version",
+        "checkpoint_sha",
+        "class_map_sha",
+        "config_sha",
+        "timeout_ms",
+        "max_attempts",
+        "confidence_threshold",
+        "iou_threshold"
+      ],
+      "properties": {
+        "required": {"const": true},
+        "mode": {"const": "SHADOW_SCORE"},
+        "base_url": {"type": "string", "pattern": "^https?://"},
+        "evidence_jsonl_path": {"type": "string", "minLength": 1},
+        "detection_contract_version": {"const": "1.0"},
+        "checkpoint_sha": {"$ref": "#/$defs/configuredDigest"},
+        "class_map_sha": {"$ref": "#/$defs/configuredDigest"},
+        "config_sha": {"$ref": "#/$defs/configuredDigest"},
+        "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 120000},
+        "max_attempts": {"const": 1},
+        "confidence_threshold": {"type": "number", "minimum": 0, "maximum": 1},
+        "iou_threshold": {"type": "number", "minimum": 0, "maximum": 1}
       }
     },
     "executors": {

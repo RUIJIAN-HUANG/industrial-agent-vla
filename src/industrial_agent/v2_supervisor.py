@@ -12,14 +12,29 @@ from .environment import ExecutionEnvironment, execution_guard_digest
 from .errors import AgentError, FailureCode
 from .executor import ExecutionContext, Executor
 from .fsm import AgentFSM, AgentState
-from .orchestrator import RunResult
+from .orchestrator import RunResult, _invoke_with_hard_deadline
+from .perception import (
+    DetectionEvidenceSink,
+    DetectionPacket,
+    ImageReference,
+    PERCEPTION_CONFIG_FIELDS,
+    PerceptionAgent,
+    PerceptionContext,
+    PerceptionError,
+    PerceptionMode,
+)
 from .safety import ActionSafetyValidator, SafetyPolicy, safety_state_failure
+from .telemetry import EventRecord, EventSink
 from .v2_observation import V2ObservationGateway
 from .v2_task_profile import (
     V2_FORMAL_TASK_IDS,
     V2_PROFILE_ID,
     V2_SCENE_ID,
     require_formal_v2_task,
+)
+from .v2_targeting import (
+    resolve_v2_target_for_task,
+    select_target_detection,
 )
 
 
@@ -112,15 +127,31 @@ class V2Supervisor:
         verification_frames: int,
         terminal_min_confidence: float,
         terminal_required_votes: int,
+        events: EventSink | None = None,
+        perception: PerceptionAgent | None = None,
+        perception_evidence: DetectionEvidenceSink | None = None,
+        perception_timeout_ms: int = 5_000,
+        perception_confidence_threshold: float = 0.25,
+        perception_iou_threshold: float = 0.45,
     ) -> None:
         if executor.descriptor.name != "pi05":
             raise ValueError("formal V2 Supervisor requires the pi05 executor")
         if executor_timeout_ms < 1 or max_decisions < 1 or verification_frames < 1:
             raise ValueError("V2 timeout and decision budget must be positive")
+        if not 1 <= perception_timeout_ms <= 120_000:
+            raise ValueError("V2 perception_timeout_ms must be in [1, 120000]")
         if not 0 <= terminal_min_confidence <= 1:
             raise ValueError("V2 terminal_min_confidence must be in [0, 1]")
         if terminal_required_votes < 1:
             raise ValueError("V2 terminal_required_votes must be positive")
+        if perception is not None and perception.descriptor.name != "yolo":
+            raise ValueError("formal V2 perception sidecar must be named 'yolo'")
+        for name, value in (
+            ("perception_confidence_threshold", perception_confidence_threshold),
+            ("perception_iou_threshold", perception_iou_threshold),
+        ):
+            if not 0.0 <= float(value) <= 1.0:
+                raise ValueError(f"V2 {name} must be in [0, 1]")
         self.executor = executor
         self.safety = safety
         self.executor_timeout_ms = executor_timeout_ms
@@ -128,6 +159,13 @@ class V2Supervisor:
         self.verification_frames = verification_frames
         self.terminal_min_confidence = terminal_min_confidence
         self.terminal_required_votes = terminal_required_votes
+        self.events = events or EventSink()
+        self.perception = perception
+        self.perception_evidence = perception_evidence or DetectionEvidenceSink()
+        self.perception_timeout_ms = perception_timeout_ms
+        self.perception_confidence_threshold = float(perception_confidence_threshold)
+        self.perception_iou_threshold = float(perception_iou_threshold)
+        self._perception_disabled_for_run = False
         self.planner = V2TaskPlanner()
         self._run_lock = Lock()
 
@@ -136,6 +174,10 @@ class V2Supervisor:
         cls,
         executor: Executor,
         config: Mapping[str, Any],
+        *,
+        events: EventSink | None = None,
+        perception: PerceptionAgent | None = None,
+        perception_evidence: DetectionEvidenceSink | None = None,
     ) -> "V2Supervisor":
         if str(config.get("config_version", "")).split(".", 1)[0] != "2":
             raise ValueError("V1 is abolished; Supervisor requires a V2 config")
@@ -153,6 +195,45 @@ class V2Supervisor:
             raise ValueError("V2 config requires verification and recovery objects")
         if verification.get("frames") != 3:
             raise ValueError("formal V2 verification requires exactly 3 frames")
+        raw_telemetry = config.get("telemetry")
+        if not isinstance(raw_telemetry, Mapping):
+            raise ValueError("V2 config telemetry must be an object")
+        event_jsonl_path = raw_telemetry.get("event_jsonl_path")
+        if not isinstance(event_jsonl_path, str) or not event_jsonl_path.strip():
+            raise ValueError("V2 telemetry.event_jsonl_path must be a non-empty path")
+        raw_perception = config.get("perception")
+        if not isinstance(raw_perception, Mapping):
+            raise ValueError("formal V2 config requires perception sidecar settings")
+        if set(raw_perception) != PERCEPTION_CONFIG_FIELDS:
+            raise ValueError(
+                "config.perception must contain exactly "
+                f"{sorted(PERCEPTION_CONFIG_FIELDS)}"
+            )
+        if raw_perception.get("required") is not True:
+            raise ValueError("config.perception.required must remain true")
+        try:
+            perception_mode = PerceptionMode(raw_perception.get("mode"))
+        except ValueError as exc:
+            raise ValueError("config.perception.mode must be 'SHADOW_SCORE'") from exc
+        if perception_mode is not PerceptionMode.SHADOW_SCORE:
+            raise ValueError("formal V2 YOLO sidecar must use SHADOW_SCORE")
+        evidence_jsonl_path = raw_perception.get("evidence_jsonl_path")
+        if not isinstance(evidence_jsonl_path, str) or not evidence_jsonl_path.strip():
+            raise ValueError(
+                "config.perception.evidence_jsonl_path must be a non-empty path"
+            )
+        if perception is None:
+            raise ValueError("formal V2 requires an injected YOLO sidecar")
+        descriptor = perception.descriptor
+        if descriptor.name != "yolo":
+            raise ValueError("formal V2 perception sidecar must be named 'yolo'")
+        if descriptor.detection_contract_version != raw_perception.get(
+            "detection_contract_version"
+        ):
+            raise ValueError("perception detection_contract_version mismatch")
+        for field_name in ("checkpoint_sha", "class_map_sha", "config_sha"):
+            if getattr(descriptor, field_name) != raw_perception.get(field_name):
+                raise ValueError(f"perception {field_name} mismatch")
         return cls(
             executor,
             safety=ActionSafetyValidator(v2_safety_policy_from_config(config)),
@@ -161,6 +242,18 @@ class V2Supervisor:
             verification_frames=int(verification.get("frames", 0)),
             terminal_min_confidence=float(verification.get("min_confidence", -1)),
             terminal_required_votes=int(verification.get("required_votes", 0)),
+            events=events or EventSink(event_jsonl_path),
+            perception=perception,
+            perception_evidence=(
+                perception_evidence
+                if perception_evidence is not None
+                else DetectionEvidenceSink(evidence_jsonl_path)
+            ),
+            perception_timeout_ms=int(raw_perception.get("timeout_ms", 0)),
+            perception_confidence_threshold=float(
+                raw_perception.get("confidence_threshold", -1)
+            ),
+            perception_iou_threshold=float(raw_perception.get("iou_threshold", -1)),
         )
 
     def run(self, task: TaskSchema, environment: ExecutionEnvironment) -> RunResult:
@@ -224,6 +317,7 @@ class V2Supervisor:
                     executor_history,
                     token_history,
                 )
+            self._preflight_perception_sidecar(run_id, task.task_id, fsm)
             fsm.transition(AgentState.OBSERVING, "read initial V2 observation")
             try:
                 observation = gateway.ingest_online(environment.observe())
@@ -242,6 +336,13 @@ class V2Supervisor:
                             executor_history,
                             token_history,
                         )
+                    self._run_perception_sidecar(
+                        task=task,
+                        observation=observation,
+                        run_id=run_id,
+                        step_id=step_id,
+                        fsm=fsm,
+                    )
                     terminal, terminal_failure = self._terminal_state(observation, task)
                     if terminal_failure:
                         return self._stop_result(
@@ -439,6 +540,290 @@ class V2Supervisor:
         finally:
             self._run_lock.release()
 
+    def _emit(
+        self,
+        run_id: str,
+        task_id: str,
+        event_type: str,
+        fsm: AgentFSM,
+        payload: Mapping[str, Any] | None = None,
+    ) -> EventRecord:
+        return self.events.emit(
+            run_id=run_id,
+            task_id=task_id,
+            event_type=event_type,
+            state=fsm.state,
+            payload=payload,
+        )
+
+    def _preflight_perception_sidecar(
+        self,
+        run_id: str,
+        task_id: str,
+        fsm: AgentFSM,
+    ) -> None:
+        if self.perception is None:
+            return
+        error: str | None = None
+        try:
+            ready = self.perception.health()
+        except Exception as exc:
+            ready = False
+            error = str(exc)
+        self._emit(
+            run_id,
+            task_id,
+            "perception.preflight",
+            fsm,
+            {
+                "agent": self.perception.descriptor.name,
+                "ready": ready,
+                "error": error,
+                "perception_mode": PerceptionMode.SHADOW_SCORE.value,
+                "control_path_impact": "none",
+            },
+        )
+        if not ready:
+            self._perception_disabled_for_run = True
+
+    def _run_perception_sidecar(
+        self,
+        *,
+        task: TaskSchema,
+        observation: Any,
+        run_id: str,
+        step_id: int,
+        fsm: AgentFSM,
+    ) -> None:
+        if self.perception is None:
+            return
+        if self._perception_disabled_for_run:
+            self._emit(
+                run_id,
+                task.task_id,
+                "perception.skipped",
+                fsm,
+                {
+                    "agent": self.perception.descriptor.name,
+                    "reason": "sidecar disabled after failed health/deadline",
+                    "control_path_impact": "none",
+                },
+            )
+            return
+
+        descriptor = self.perception.descriptor
+        image: ImageReference | None = None
+        try:
+            target = resolve_v2_target_for_task(require_formal_v2_task(task.task_id))
+            image = self._target_image_reference(observation, target.target_object)
+            context = PerceptionContext(
+                run_id=run_id,
+                task_id=task.task_id,
+                subtask_id=task.task_id,
+                step_id=step_id,
+                observation_id=observation.observation_id,
+                image=image,
+                timeout_ms=self.perception_timeout_ms,
+                allowed_class_names=target.allowed_class_names,
+                confidence_threshold=self.perception_confidence_threshold,
+                iou_threshold=self.perception_iou_threshold,
+            )
+            self._emit(
+                run_id,
+                task.task_id,
+                "perception.requested",
+                fsm,
+                {
+                    "agent": descriptor.name,
+                    "perception_mode": PerceptionMode.SHADOW_SCORE.value,
+                    "subtask_id": task.task_id,
+                    "step_id": step_id,
+                    "observation_id": observation.observation_id,
+                    "image_sha256": image.image_sha256,
+                    "camera_id": image.camera_id,
+                    "allowed_class_names": list(context.allowed_class_names),
+                    "v2_target": {
+                        "target_object_id": target.target_object.object_id,
+                        "target_slot_id": (
+                            target.target_slot.slot_id
+                            if target.target_slot is not None
+                            else None
+                        ),
+                        "target_slot_index": (
+                            target.target_slot.slot_index
+                            if target.target_slot is not None
+                            else None
+                        ),
+                        "target_class_name": target.target_object.class_name,
+                    },
+                    "control_path_impact": "none",
+                },
+            )
+            completed, packet_value, detector_error = _invoke_with_hard_deadline(
+                lambda: self.perception.detect(context),
+                self.perception_timeout_ms,
+            )
+            if not completed:
+                if isinstance(detector_error, TimeoutError):
+                    self._perception_disabled_for_run = True
+                    self.perception.cancel(task.task_id, "V2 sidecar deadline exceeded")
+                    raise PerceptionError(
+                        FailureCode.PERCEPTION_TIMEOUT,
+                        str(detector_error),
+                        retryable=False,
+                    )
+                if isinstance(detector_error, PerceptionError):
+                    raise detector_error
+                raise PerceptionError(
+                    FailureCode.PERCEPTION_UNAVAILABLE,
+                    f"YOLO sidecar failed: {detector_error}",
+                    retryable=False,
+                )
+            packet = packet_value
+            if not isinstance(packet, DetectionPacket):
+                raise PerceptionError(
+                    FailureCode.PERCEPTION_BAD_RESPONSE,
+                    "YOLO sidecar must return a DetectionPacket",
+                )
+            packet.validate_against(
+                observation_id=observation.observation_id,
+                image=image,
+                descriptor=descriptor,
+            )
+            expected = {
+                "trace_id": run_id,
+                "episode_id": run_id,
+                "task_id": task.task_id,
+                "subtask_id": task.task_id,
+                "step_id": step_id,
+            }
+            mismatches = {
+                key: {"expected": value, "actual": getattr(packet, key)}
+                for key, value in expected.items()
+                if getattr(packet, key) != value
+            }
+            if mismatches:
+                raise PerceptionError(
+                    FailureCode.PERCEPTION_BAD_RESPONSE,
+                    f"YOLO sidecar packet correlation mismatch: {mismatches}",
+                )
+            self.perception_evidence.record_packet(
+                packet,
+                mode=PerceptionMode.SHADOW_SCORE,
+            )
+            packet_data = packet.to_dict()
+            if packet.detections:
+                try:
+                    target_lock = select_target_detection(packet, target)
+                except ValueError:
+                    target_lock = None
+                if target_lock is not None:
+                    self._emit(
+                        run_id,
+                        task.task_id,
+                        "perception.target_locked",
+                        fsm,
+                        {
+                            "agent": descriptor.name,
+                            "perception_mode": PerceptionMode.SHADOW_SCORE.value,
+                            "packet_id": packet.packet_id,
+                            "subtask_id": task.task_id,
+                            "step_id": step_id,
+                            "observation_id": packet.observation_id,
+                            "image_sha256": packet.image_sha256,
+                            "camera_id": packet.camera_id,
+                            "target_lock": target_lock.to_dict(),
+                            "control_path_impact": "none",
+                        },
+                    )
+            self._emit(
+                run_id,
+                task.task_id,
+                "perception.completed",
+                fsm,
+                {
+                    "agent": descriptor.name,
+                    "perception_mode": PerceptionMode.SHADOW_SCORE.value,
+                    "packet_id": packet.packet_id,
+                    "subtask_id": task.task_id,
+                    "step_id": step_id,
+                    "observation_id": packet.observation_id,
+                    "image_sha256": packet.image_sha256,
+                    "camera_id": packet.camera_id,
+                    "detection_count": len(packet.detections),
+                    "detections": packet_data["detections"],
+                    "timing": packet_data["timing"],
+                    "raw_packet": packet_data,
+                    "control_path_impact": "none",
+                },
+            )
+        except Exception as exc:
+            code = (
+                exc.code
+                if isinstance(exc, PerceptionError)
+                else FailureCode.PERCEPTION_UNAVAILABLE
+            )
+            message = str(exc)
+            if image is not None:
+                try:
+                    self.perception_evidence.record_failure(
+                        trace_id=run_id,
+                        task_id=task.task_id,
+                        subtask_id=task.task_id,
+                        step_id=step_id,
+                        observation_id=observation.observation_id,
+                        image=image,
+                        descriptor=descriptor,
+                        failure_code=code,
+                        message=message,
+                        mode=PerceptionMode.SHADOW_SCORE,
+                    )
+                except Exception as evidence_error:
+                    self._emit(
+                        run_id,
+                        task.task_id,
+                        "perception.evidence_write_failed",
+                        fsm,
+                        {
+                            "message": str(evidence_error),
+                            "control_path_impact": "none",
+                        },
+                    )
+            self._emit(
+                run_id,
+                task.task_id,
+                "perception.failed",
+                fsm,
+                {
+                    "agent": descriptor.name,
+                    "perception_mode": PerceptionMode.SHADOW_SCORE.value,
+                    "subtask_id": task.task_id,
+                    "step_id": step_id,
+                    "observation_id": observation.observation_id,
+                    "image_sha256": image.image_sha256 if image is not None else None,
+                    "failure_code": code.value,
+                    "message": message,
+                    "vla_recovery_untouched": True,
+                    "control_path_impact": "none",
+                },
+            )
+
+    @staticmethod
+    def _target_image_reference(observation: Any, target_object: Any) -> ImageReference:
+        stream_by_camera = {
+            "CAM_A_TOP": "arm_a_rgb",
+            "CAM_HANDOFF": "handoff_rgb",
+            "CAM_B_TOP": "arm_b_rgb",
+        }
+        camera = observation.data.get("camera")
+        if not isinstance(camera, Mapping):
+            raise ValueError("V2 observation camera must be an object")
+        stream_name = stream_by_camera.get(target_object.preferred_camera, "arm_a_rgb")
+        raw_image = camera.get(stream_name)
+        if not isinstance(raw_image, Mapping):
+            raise ValueError(f"V2 observation camera.{stream_name} is missing")
+        return ImageReference.from_dict(raw_image)
+
     def _terminal_state(
         self, observation: Any, task: TaskSchema
     ) -> tuple[bool, str | None]:
@@ -522,8 +907,8 @@ class V2Supervisor:
             token_history,
         )
 
-    @staticmethod
     def _result(
+        self,
         run_id: str,
         task_id: str,
         fsm: AgentFSM,
@@ -547,7 +932,7 @@ class V2Supervisor:
             transitions=tuple(fsm.history),
             verification=None,
             task_plan=plan.to_dict() if plan is not None else {},
-            events=(),
+            events=self.events.events_for_run(run_id),
         )
 
 

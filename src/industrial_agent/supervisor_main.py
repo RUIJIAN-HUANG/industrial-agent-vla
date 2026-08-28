@@ -34,6 +34,7 @@ from .errors import AgentError
 from .executor import EXECUTOR_CONFIG_FIELDS, Pi05Adapter, ProcessTransport
 from .http_transport import BoundedHTTPTransport, HTTPTransportError
 from .orchestrator import RunResult
+from .perception import build_perception_from_config
 from .v2_supervisor import V2Supervisor
 
 
@@ -199,7 +200,8 @@ def build_supervisor(
         checkpoint_sha=str(raw_pi05.get("checkpoint_sha", "")),
         norm_stats_sha=str(raw_pi05.get("norm_stats_sha", "")),
     )
-    return V2Supervisor.from_config(executor, config)
+    perception = build_perception_from_config(config, factory)
+    return V2Supervisor.from_config(executor, config, perception=perception)
 
 
 def resolve_environment_host(

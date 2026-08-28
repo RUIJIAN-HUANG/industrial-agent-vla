@@ -960,6 +960,59 @@ class FourAgentOrchestrationTests(unittest.TestCase):
         )
         self.assertTrue(all(item[3] == () for item in captured))
 
+    def test_formal_v2_task_filters_yolo_and_locks_target_detection(self) -> None:
+        captured: list[tuple[str, tuple[str, ...]]] = []
+
+        def capture_v2_target(
+            context: PerceptionContext,
+        ) -> tuple[Detection, ...]:
+            captured.append((context.subtask_id, context.allowed_class_names))
+            return (
+                Detection(
+                    detection_id=f"hex-nut-{context.image.image_sha256[-8:]}",
+                    class_id=2,
+                    class_name="hex_nut",
+                    confidence=0.91,
+                    bbox_xyxy=(100.0, 80.0, 240.0, 220.0),
+                    camera_id=context.image.camera_id,
+                    image_width=context.image.width,
+                    image_height=context.image.height,
+                    track_id="p01-track",
+                    zone_id="A",
+                ),
+            )
+
+        perception = MockPerceptionAgent(
+            checkpoint_sha=CHECKPOINT_SHA,
+            class_map_sha=CLASS_MAP_SHA,
+            config_sha=CONFIG_SHA,
+            detector=capture_v2_target,
+        )
+        agent, _, _ = self.make_agent(perception)
+
+        result = agent.run(
+            four_agent_task("P01_TO_S11"),
+            FixedDualArmMockSimulator(),
+        )
+
+        self.assertTrue(result.success)
+        self.assertTrue(captured)
+        self.assertTrue(all(item[1] == ("hex_nut",) for item in captured))
+        requested = [
+            event for event in result.events if event.event_type == "perception.requested"
+        ]
+        self.assertTrue(requested)
+        self.assertTrue(
+            all(event.payload["allowed_class_names"] == ["hex_nut"] for event in requested)
+        )
+        locked = [
+            event for event in result.events if event.event_type == "perception.target_locked"
+        ]
+        self.assertTrue(locked)
+        self.assertEqual(locked[0].payload["target_lock"]["object_id"], "P01")
+        self.assertEqual(locked[0].payload["target_lock"]["slot_id"], "S11")
+        self.assertEqual(locked[0].payload["target_lock"]["class_name"], "hex_nut")
+
     def test_repeated_handoff_image_sha_cannot_form_quorum(self) -> None:
         class RepeatedHandoffImageSimulator(FixedDualArmMockSimulator):
             def _observation(self) -> dict[str, object]:

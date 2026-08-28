@@ -1,0 +1,104 @@
+{
+  "catalog_id": "single_bin_manual_industrial_v2",
+  "scene_id": "single_bin_manual_industrial_v2",
+  "object_class_map": {
+    "nut": "hex_nut",
+    "shaft:upright": "shaft_upright",
+    "shaft:inverted": "shaft_inverted",
+    "wrench": "open_end_wrench",
+    "bin": "bin_box"
+  },
+  "objects": [
+    {
+      "object_id": "P01",
+      "display_name": "螺母",
+      "part_type": "nut",
+      "orientation_state": "flat",
+      "class_name": "hex_nut",
+      "zone_id": "A",
+      "preferred_camera": "CAM_A_TOP"
+    },
+    {
+      "object_id": "P02",
+      "display_name": "正放轴件",
+      "part_type": "shaft",
+      "orientation_state": "upright",
+      "class_name": "shaft_upright",
+      "zone_id": "A",
+      "preferred_camera": "CAM_A_TOP"
+    },
+    {
+      "object_id": "P03",
+      "display_name": "倒放轴件",
+      "part_type": "shaft",
+      "orientation_state": "inverted",
+      "class_name": "shaft_inverted",
+      "zone_id": "B",
+      "preferred_camera": "CAM_A_TOP"
+    },
+    {
+      "object_id": "P04",
+      "display_name": "倒放轴件",
+      "part_type": "shaft",
+      "orientation_state": "inverted",
+      "class_name": "shaft_inverted",
+      "zone_id": "B",
+      "preferred_camera": "CAM_A_TOP"
+    },
+    {
+      "object_id": "N01",
+      "display_name": "正放轴件",
+      "part_type": "shaft",
+      "orientation_state": "upright",
+      "class_name": "shaft_upright",
+      "zone_id": "C",
+      "preferred_camera": "CAM_A_TOP"
+    },
+    {
+      "object_id": "N02",
+      "display_name": "螺母",
+      "part_type": "nut",
+      "orientation_state": "flat",
+      "class_name": "hex_nut",
+      "zone_id": "C",
+      "preferred_camera": "CAM_A_TOP"
+    },
+    {
+      "object_id": "W01",
+      "display_name": "开口扳手",
+      "part_type": "wrench",
+      "orientation_state": "flat_y",
+      "class_name": "open_end_wrench",
+      "zone_id": "D",
+      "preferred_camera": "CAM_A_TOP"
+    },
+    {
+      "object_id": "W02",
+      "display_name": "开口扳手",
+      "part_type": "wrench",
+      "orientation_state": "flat_y",
+      "class_name": "open_end_wrench",
+      "zone_id": "D",
+      "preferred_camera": "CAM_A_TOP"
+    },
+    {
+      "object_id": "Bin_01",
+      "display_name": "料箱",
+      "part_type": "bin",
+      "orientation_state": "upright",
+      "class_name": "bin_box",
+      "zone_id": "PACK_STATION",
+      "preferred_camera": "CAM_HANDOFF"
+    }
+  ],
+  "slots": [
+    {"slot_id": "S11", "part_id": "P01", "profile": "nut", "slot_index": 1, "aliases": ["S01"]},
+    {"slot_id": "S12", "part_id": "P03", "profile": "shaft", "slot_index": 2, "aliases": ["S02"]},
+    {"slot_id": "S13", "part_id": "N01", "profile": "shaft", "slot_index": 3, "aliases": ["S03"]},
+    {"slot_id": "S14", "part_id": "W01", "profile": "wrench_y", "slot_index": 4, "aliases": ["S04"]},
+    {"slot_id": "S21", "part_id": "P02", "profile": "shaft", "slot_index": 5, "aliases": ["S05"]},
+    {"slot_id": "S22", "part_id": "P04", "profile": "shaft", "slot_index": 6, "aliases": ["S06"]},
+    {"slot_id": "S23", "part_id": "N02", "profile": "nut", "slot_index": 7, "aliases": ["S07"]},
+    {"slot_id": "S24", "part_id": "W02", "profile": "wrench_y", "slot_index": 8, "aliases": ["S08"]}
+  ]
+}

@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from industrial_agent.contracts import Observation
+from industrial_agent.v2_task_profile import require_formal_v2_task
+from industrial_agent.v2_targeting import resolve_v2_target_for_task
 from simulation.yolo_camera_probe import discover_yolo_http_agent, probe_yolo_cameras
 
 
@@ -60,6 +62,11 @@ def main() -> int:
         timeout_ms=args.timeout_ms,
         allow_mock=False,
     )
+    try:
+        target = resolve_v2_target_for_task(require_formal_v2_task(args.task_id))
+        allowed_class_names = target.allowed_class_names
+    except ValueError:
+        allowed_class_names = ()
     summary = probe_yolo_cameras(
         observation,
         perception,
@@ -68,7 +75,7 @@ def main() -> int:
         subtask_id=args.subtask_id,
         step_id=args.step_id,
         timeout_ms=args.timeout_ms,
-        allowed_class_names=(),
+        allowed_class_names=allowed_class_names,
         confidence_threshold=args.confidence_threshold,
         iou_threshold=args.iou_threshold,
         evidence_jsonl_path=Path(args.evidence_jsonl),

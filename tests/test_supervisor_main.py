@@ -114,7 +114,7 @@ class _Supervisor:
         return self.result
 
 
-def test_build_supervisor_wires_only_formal_v2_pi05_service() -> None:
+def test_build_supervisor_wires_formal_v2_pi05_and_shadow_yolo() -> None:
     config = _production_config()
     calls: list[tuple[str, str]] = []
 
@@ -124,7 +124,10 @@ def test_build_supervisor_wires_only_formal_v2_pi05_service() -> None:
 
     supervisor = build_supervisor(config, transport_factory=factory)
     assert isinstance(supervisor, V2Supervisor)
-    assert calls == [("pi05", "http://127.0.0.1:8101")]
+    assert calls == [
+        ("pi05", "http://127.0.0.1:8101"),
+        ("yolo", "http://127.0.0.1:8103"),
+    ]
 
 
 def test_build_supervisor_rejects_artifact_placeholders() -> None:

@@ -10,13 +10,27 @@ from industrial_agent.contracts import ActionChunk, ActionStep, TaskSchema
 from industrial_agent.environment import SafeStopReceipt
 from industrial_agent.executor import ExecutionContext, ExecutorDescriptor
 from industrial_agent.fsm import AgentState
+from industrial_agent.perception import (
+    Detection,
+    MockPerceptionAgent,
+    PerceptionContext,
+    PerceptionError,
+)
 from industrial_agent.supervisor_main import build_supervisor
 from industrial_agent.v2_supervisor import V2Supervisor
-from tests.test_v2_observation import v2_observation
 
 
 ROOT = Path(__file__).resolve().parents[1]
 PINNED_SHA = f"sha256:{'a' * 64}"
+PERCEPTION_CHECKPOINT_SHA = (
+    "sha256:2a8beca3ff52f6cd7a2f81f087df71793889d7017f81156a8286f4ffb106080f"
+)
+CLASS_MAP_SHA = (
+    "sha256:839fdb76e458f9148959e727d289a29495130ce9c868b10b57adcaab4323ba06"
+)
+PERCEPTION_CONFIG_SHA = (
+    "sha256:a28227b8296f736280a43e5b2defb559692fe49e14f6876cf6f918321b8f1e56"
+)
 
 
 def _task() -> TaskSchema:
@@ -38,6 +52,64 @@ def _config() -> dict[str, Any]:
     return config
 
 
+def _image(camera_id: str, digest: str = "a") -> dict[str, object]:
+    return {
+        "uri": f"cas://sha256/{digest * 64}",
+        "image_sha256": f"sha256:{digest * 64}",
+        "camera_id": camera_id,
+        "width": 1280,
+        "height": 720,
+    }
+
+
+def v2_observation(*, observation_id: str = "v2-obs-1", terminal: bool = False):
+    return {
+        "observation_version": "2.0",
+        "observation_id": observation_id,
+        "timestamp_ms": 1,
+        "camera": {
+            "full_image": _image("CAM_A_TOP"),
+            "arm_a_rgb": _image("CAM_A_TOP"),
+            "handoff_rgb": _image("CAM_HANDOFF", "b"),
+            "arm_b_rgb": _image("CAM_B_TOP", "c"),
+            "wrist_image": None,
+        },
+        "objects": [],
+        "robot": {
+            "active_arm": "Arm_A" if not terminal else "NONE",
+            "arm_a": {
+                "tcp_pose_m_rad": [0.4, 0.0, 0.5, 0.0, 0.0, 0.0],
+                "state": [0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 1.0],
+                "retreated": terminal,
+                "gripper_open": True,
+                "stationary": True,
+            },
+            "arm_b": {
+                "tcp_pose_m_rad": [0.4, 0.4, 0.5, 0.0, 0.0, 0.0],
+                "state": [0.4, 0.4, 0.5, 0.0, 0.0, 0.0, 1.0],
+                "retreated": True,
+                "gripper_open": True,
+                "stationary": True,
+            },
+        },
+        "safety": {
+            "emergency_stop": False,
+            "protective_stop": False,
+            "system_fault": None,
+        },
+        "task": {
+            "task_id": "P01_TO_S11",
+            "target_object_id": "P01",
+            "target_slot_id": "S11",
+            "status": "SUCCEEDED" if terminal else "ACTIVE",
+            "terminal": terminal,
+            "terminal_confidence": 0.9 if terminal else 0.0,
+            "verification_votes": 2 if terminal else 0,
+        },
+        "quality": {"confidence": 1.0},
+    }
+
+
 class _Executor:
     descriptor = ExecutorDescriptor(
         name="pi05",
@@ -47,12 +119,16 @@ class _Executor:
         norm_stats_sha=PINNED_SHA,
     )
 
+    def __init__(self) -> None:
+        self.observations: list[Any] = []
+
     def health(self) -> bool:
         return True
 
     def plan(
         self, task: TaskSchema, observation: Any, context: ExecutionContext
     ) -> ActionChunk:
+        self.observations.append(observation)
         return ActionChunk(
             contract_version="1.0",
             chunk_id=f"chunk-{context.step_id}",
@@ -63,6 +139,32 @@ class _Executor:
 
     def cancel(self, task_id: str, reason: str) -> None:
         pass
+
+
+def _hex_detection(context: PerceptionContext) -> tuple[Detection, ...]:
+    return (
+        Detection(
+            detection_id=f"p01-{context.step_id}",
+            class_id=2,
+            class_name="hex_nut",
+            confidence=0.91,
+            bbox_xyxy=(120.0, 80.0, 220.0, 180.0),
+            camera_id=context.image.camera_id,
+            image_width=context.image.width,
+            image_height=context.image.height,
+        ),
+    )
+
+
+def _perception(
+    detector: Any = _hex_detection,
+) -> MockPerceptionAgent:
+    return MockPerceptionAgent(
+        checkpoint_sha=PERCEPTION_CHECKPOINT_SHA,
+        class_map_sha=CLASS_MAP_SHA,
+        config_sha=PERCEPTION_CONFIG_SHA,
+        detector=detector,
+    )
 
 
 class _Environment:
@@ -99,7 +201,11 @@ class _Transport:
 
 
 def test_v2_supervisor_completes_sensor_closed_loop() -> None:
-    supervisor = V2Supervisor.from_config(_Executor(), _config())
+    supervisor = V2Supervisor.from_config(
+        _Executor(),
+        _config(),
+        perception=_perception(),
+    )
     environment = _Environment()
     result = supervisor.run(_task(), environment)
     assert result.success is True
@@ -112,7 +218,11 @@ def test_v2_supervisor_completes_sensor_closed_loop() -> None:
 def test_v2_supervisor_stops_when_decision_budget_is_exhausted() -> None:
     config = _config()
     config["recovery"]["max_decisions_per_task"] = 1
-    supervisor = V2Supervisor.from_config(_Executor(), config)
+    supervisor = V2Supervisor.from_config(
+        _Executor(),
+        config,
+        perception=_perception(),
+    )
     environment = _Environment(terminal_after_step=False)
     result = supervisor.run(_task(), environment)
     assert result.success is False
@@ -120,7 +230,7 @@ def test_v2_supervisor_stops_when_decision_budget_is_exhausted() -> None:
     assert environment.stops == 1
 
 
-def test_production_builder_wires_only_pi05() -> None:
+def test_production_builder_wires_pi05_and_shadow_yolo_sidecar() -> None:
     calls: list[tuple[str, str]] = []
 
     def factory(name: str, url: str) -> _Transport:
@@ -129,7 +239,79 @@ def test_production_builder_wires_only_pi05() -> None:
 
     supervisor = build_supervisor(_config(), transport_factory=factory)
     assert isinstance(supervisor, V2Supervisor)
-    assert calls == [("pi05", "http://127.0.0.1:8101")]
+    assert calls == [
+        ("pi05", "http://127.0.0.1:8101"),
+        ("yolo", "http://127.0.0.1:8103"),
+    ]
+
+
+def test_v2_supervisor_runs_yolo_sidecar_without_polluting_pi05_observation() -> None:
+    captured: list[PerceptionContext] = []
+
+    def detector(context: PerceptionContext) -> tuple[Detection, ...]:
+        captured.append(context)
+        return _hex_detection(context)
+
+    executor = _Executor()
+    supervisor = V2Supervisor.from_config(
+        executor,
+        _config(),
+        perception=_perception(detector),
+    )
+    result = supervisor.run(_task(), _Environment())
+
+    assert result.success is True
+    assert [context.allowed_class_names for context in captured] == [("hex_nut",)]
+    assert [context.subtask_id for context in captured] == ["P01_TO_S11"]
+    assert executor.observations
+    assert "detections" not in executor.observations[0].data["camera"]["arm_a_rgb"]
+    requested = [
+        event for event in result.events if event.event_type == "perception.requested"
+    ]
+    assert requested[0].payload["allowed_class_names"] == ["hex_nut"]
+    locked = [
+        event
+        for event in result.events
+        if event.event_type == "perception.target_locked"
+    ]
+    assert locked[0].payload["target_lock"]["object_id"] == "P01"
+    assert locked[0].payload["target_lock"]["slot_id"] == "S11"
+    assert locked[0].payload["target_lock"]["slot_index"] == 1
+    assert locked[0].payload["target_lock"]["detection"]["zone_id"] == "A"
+    assert all(
+        event.payload["control_path_impact"] == "none"
+        for event in result.events
+        if event.event_type.startswith("perception.")
+    )
+
+
+def test_v2_supervisor_yolo_failure_does_not_block_vla_execution() -> None:
+    def failing_detector(context: PerceptionContext) -> tuple[Detection, ...]:
+        del context
+        raise PerceptionError(
+            FailureCode.PERCEPTION_TIMEOUT,
+            "sidecar timeout",
+            retryable=True,
+        )
+
+    executor = _Executor()
+    supervisor = V2Supervisor.from_config(
+        executor,
+        _config(),
+        perception=_perception(failing_detector),
+    )
+    environment = _Environment()
+    result = supervisor.run(_task(), environment)
+
+    assert result.success is True
+    assert environment.steps == 1
+    assert len(executor.observations) == 1
+    failed = [
+        event for event in result.events if event.event_type == "perception.failed"
+    ]
+    assert failed
+    assert failed[0].payload["vla_recovery_untouched"] is True
+    assert failed[0].payload["control_path_impact"] == "none"
 
 
 def test_production_builder_rejects_abolished_v1() -> None:

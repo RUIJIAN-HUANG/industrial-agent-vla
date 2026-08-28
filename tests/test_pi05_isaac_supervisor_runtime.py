@@ -18,7 +18,7 @@ from simulation.pi05_isaac_supervisor_runtime import (
     run_supervisor_runtime,
     with_decision_budget,
 )
-from tests.test_v2_observation import v2_observation
+from tests.test_v2_supervisor import v2_observation
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -185,7 +185,7 @@ def test_budget_is_copied_and_real_v2_supervisor_path_records_commands() -> None
     assert report.run_result.failure_code is FailureCode.RECOVERY_EXHAUSTED
     assert environment.steps == 2
     assert environment.stops == 1
-    assert transport.routes == ["/health", "/v1/infer", "/v1/infer"]
+    assert transport.routes == ["/health", "/health", "/v1/infer", "/v1/infer"]
     assert [record.observation_id for record in report.actions] == [
         "observation-0",
         "observation-1",

@@ -68,6 +68,8 @@ from .perception import (
 from .safety import ActionSafetyValidator, SafetyPolicy, safety_state_failure
 from .sync_contract import canonical_state_7d
 from .telemetry import EventRecord, EventSink, MemoryStore, RunMemory
+from .v2_task_profile import require_formal_v2_task
+from .v2_targeting import resolve_v2_target_for_task, select_target_detection
 from .verifier import PostconditionVerifier, VerificationResult, Verdict
 
 # 泛型变量:让 _invoke_with_hard_deadline 保留调用方的返回值类型
@@ -1659,6 +1661,15 @@ class IndustrialAgent:
                 observation,
                 camera_key=phase_camera_key,
             )
+            v2_target = None
+            allowed_class_names: tuple[str, ...] = ()
+            v2_target_task_id = str(task.metadata.get("parent_task_id", task.task_id))
+            try:
+                formal_v2_task = require_formal_v2_task(v2_target_task_id)
+                v2_target = resolve_v2_target_for_task(formal_v2_task)
+                allowed_class_names = v2_target.allowed_class_names
+            except ValueError:
+                pass
             context = PerceptionContext(
                 run_id=self._run_id,
                 task_id=task.task_id,
@@ -1667,10 +1678,22 @@ class IndustrialAgent:
                 observation_id=observation.observation_id,
                 image=image,
                 timeout_ms=self.perception_timeout_ms,
-                # Empty means run the complete frozen class map for mAP.
-                allowed_class_names=(),
+                allowed_class_names=allowed_class_names,
                 confidence_threshold=self.perception_confidence_threshold,
                 iou_threshold=self.perception_iou_threshold,
+            )
+            v2_target_payload = (
+                {
+                    "target_object_id": v2_target.target_object.object_id,
+                    "target_slot_id": (
+                        v2_target.target_slot.slot_id
+                        if v2_target.target_slot is not None
+                        else None
+                    ),
+                    "target_class_name": v2_target.target_object.class_name,
+                }
+                if v2_target is not None
+                else None
             )
             self._emit(
                 "perception.requested",
@@ -1690,6 +1713,8 @@ class IndustrialAgent:
                     "checkpoint_sha": descriptor.checkpoint_sha,
                     "class_map_sha": descriptor.class_map_sha,
                     "config_sha": descriptor.config_sha,
+                    "allowed_class_names": list(context.allowed_class_names),
+                    "v2_target": v2_target_payload,
                     "confidence_threshold": self.perception_confidence_threshold,
                     "iou_threshold": self.perception_iou_threshold,
                     "control_path_impact": "none",
@@ -1783,6 +1808,29 @@ class IndustrialAgent:
                     f"YOLO packet correlation mismatch: {mismatches}",
                 )
             packet_data = packet.to_dict()
+            if v2_target is not None and packet.detections:
+                try:
+                    target_lock = select_target_detection(packet, v2_target)
+                except ValueError:
+                    target_lock = None
+                if target_lock is not None:
+                    self._emit(
+                        "perception.target_locked",
+                        {
+                            "agent": descriptor.name,
+                            "perception_mode": self.perception_mode.value,
+                            "packet_id": packet.packet_id,
+                            "trace_id": packet.trace_id,
+                            "task_id": v2_target_task_id,
+                            "subtask_id": subtask_id,
+                            "step_id": step_id,
+                            "observation_id": packet.observation_id,
+                            "image_sha256": packet.image_sha256,
+                            "camera_id": packet.camera_id,
+                            "target_lock": target_lock.to_dict(),
+                            "control_path_impact": "none",
+                        },
+                    )
             # 持久化证据包(写入失败仅告警,不影响控制路径)
             try:
                 self.perception_evidence.record_packet(
