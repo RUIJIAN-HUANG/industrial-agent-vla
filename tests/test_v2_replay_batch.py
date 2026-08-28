@@ -23,7 +23,7 @@ def _source(tmp_path: Path) -> batch.SourceEpisode:
         path=(tmp_path / "source-episode").resolve(),
         episode_id="w01-mother-001",
         task_id="W01_TO_S14",
-        instruction="请将扳手 W01 放置到料箱的 S14 格子中。",
+        instruction="把W01放到S14中",
         scene_config_sha256=f"sha256:{'a' * 64}",
         hdf5_sha256=f"sha256:{'b' * 64}",
         actions=_source_actions(),
@@ -57,7 +57,7 @@ def test_source_metadata_rejects_failed_episode() -> None:
             {
                 "outcome": "FAILED",
                 "task_id": "W01_TO_S14",
-                "instruction": "请将扳手 W01 放置到料箱的 S14 格子中。",
+                "instruction": "把W01放到S14中",
             }
         )
 

@@ -33,7 +33,7 @@ YOLO DetectionPacket 不是推理前置条件。π0.5 必须针对这一固定�
 
 V2 固定 `canonical_schema_version=2.0`、场景
 `single_bin_manual_industrial_v2`、任务 `P01_TO_S11` 和训练指令
-`请将轴件 P01 放置到料箱的 S11 格子中。`。`scripts/pi05/canonical_v2.py` 在读取时复核 JSON Schema、
+`把P01放到S11中`。`scripts/pi05/canonical_v2.py` 在读取时复核 JSON Schema、
 HDF5 SHA、三相机/双臂 Stream、有限 `float32[N,7]` state/action、无 padding 和
 Arm_A/`pi05` 身份。
 

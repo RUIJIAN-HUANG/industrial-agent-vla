@@ -26,7 +26,7 @@ def test_formal_v2_catalog_contains_only_current_training_tasks() -> None:
 
 def test_v2_instruction_resolves_to_supervisor_task_id() -> None:
     assert (
-        v2_task_for_instruction("请将扳手 W01 放置到料箱的 S14 格子中。").task_id
+        v2_task_for_instruction("把W01放到S14中").task_id
         == "W01_TO_S14"
     )
 
