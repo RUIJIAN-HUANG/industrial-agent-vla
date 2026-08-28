@@ -111,10 +111,7 @@ def test_v2_collection_boundary_preserves_w01_identity(tmp_path: Path) -> None:
 
     with CanonicalV2Reader(episode_path) as reader:
         assert reader.manifest["metadata"]["task_id"] == "W01_TO_S14"
-        assert (
-            reader.manifest["metadata"]["instruction"]
-            == "把W01放到S14中"
-        )
+        assert reader.manifest["metadata"]["instruction"] == "把W01放到S14中"
         assert reader._h5["actions/subtask_id"][0].decode() == "W01_TO_S14"
 
 

@@ -49,10 +49,7 @@ def test_task_id_resolves_to_same_option() -> None:
 
 
 def test_user_instruction_resolves_to_task_id_for_supervisor() -> None:
-    assert (
-        mvp_task_id_for_instruction("把P01放到S11中")
-        == "P01_TO_S11"
-    )
+    assert mvp_task_id_for_instruction("把P01放到S11中") == "P01_TO_S11"
 
 
 @pytest.mark.parametrize(

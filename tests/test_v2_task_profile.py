@@ -25,10 +25,7 @@ def test_formal_v2_catalog_contains_only_current_training_tasks() -> None:
 
 
 def test_v2_instruction_resolves_to_supervisor_task_id() -> None:
-    assert (
-        v2_task_for_instruction("把W01放到S14中").task_id
-        == "W01_TO_S14"
-    )
+    assert v2_task_for_instruction("把W01放到S14中").task_id == "W01_TO_S14"
 
 
 def test_ui_only_task_cannot_enter_formal_v2_pipeline() -> None:
