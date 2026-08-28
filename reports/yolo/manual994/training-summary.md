@@ -56,5 +56,12 @@ class_map_sha:  sha256:839fdb76e458f9148959e727d289a29495130ce9c868b10b57adcaab4
 config_sha:     sha256:f912e17a823bce66092ab730472919c90d024007d1e0cb5a497f54edb24fcff5
 ```
 
-The checkpoint is intentionally excluded from Git and must be supplied through
-the external model artifact store or team delivery bundle.
+The checkpoint is intentionally excluded from this source repository and is
+tracked in the model-delivery repository:
+
+```text
+repository: RUIJIAN-HUANG/industrial-agent-vla-model-yolo-manual800
+pull_request: https://github.com/RUIJIAN-HUANG/industrial-agent-vla-model-yolo-manual800/pull/1
+commit: 7e4c37ad01831e08d87239a26cfed65f8b3b8d99
+path: manual994/best.pt
+```
