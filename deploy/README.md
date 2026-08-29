@@ -1,6 +1,6 @@
 # 三模型生产部署
 
-本目录只部署 π0.5、OpenVLA-OFT 和 YOLO 三个模型服务。Isaac Sim 与
+本目录只部署一个可服务双臂的 π0.5 和 YOLO 两个模型服务。Isaac Sim 与
 Supervisor 必须在安装了 Isaac Sim 5.1 的目标机进程中运行，不进入这份普通模型
 Compose。
 
@@ -11,7 +11,7 @@ Isaac 目标机（Isaac Sim + Supervisor，写 CAS）
                  │ HTTP + 同一个共享 CAS
                  ▼
 Linux GPU 模型机（三个 Docker 容器，只读 CAS）
-  π0.5 :8101     OpenVLA-OFT :8102     YOLO :8103
+  π0.5 :8101                         YOLO :8103
 ```
 
 如果两台机器不能挂载同一个 NFS/SMB 目录，当前 `cas://sha256/...` 合同无法跨机
@@ -55,7 +55,6 @@ python deploy/preflight.py \
 预检会实际读取文件并复核：
 
 - π0.5 完整 checkpoint 目录摘要与 norm-stats 文件摘要；
-- OpenVLA checkpoint manifest、manifest 中每个文件、norm stats 和动作合同；
 - YOLO 权重文件摘要；
 - 三个不可变镜像 digest、端口、GPU ID、共享 CAS 和缓存挂载。
 
@@ -96,8 +95,8 @@ python deploy/preflight.py \
 这一阶段不只检查 HTTP 200，还会确认：
 
 - `status=ready`；
-- 服务名分别为 `pi05`、`openvla_oft`、`yolo`；
-- OpenVLA 和 YOLO 不是 mock 模式；
+- 服务名分别为 `pi05`、`yolo`；
+- π0.5 和 YOLO 不是 mock 模式；
 - `/health` 返回的 checkpoint、norm-stats、class-map 和 YOLO config SHA 与环境
   文件完全一致。
 
@@ -117,7 +116,6 @@ docker compose \
 
 - `perception.base_url` 为模型机 `http://<内网地址>:8103`；
 - `executors.pi05.base_url` 为 `http://<内网地址>:8101`；
-- `executors.openvla_oft.base_url` 为 `http://<内网地址>:8102`；
 - 所有 `REPLACE_WITH_PINNED_SHA`；
 - `image_cas.root` 为 Isaac 目标机看到的同一共享 CAS；
 - `isaac_runtime.command_ledger_path` 和证据输出目录；

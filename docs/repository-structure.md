@@ -2,7 +2,7 @@
 
 本文件定义代码、配置、数据说明、模型服务、仿真、实验和比赛材料的唯一归属。
 新成员上传文件前，应先按下表确定位置；不要在仓库根目录临时堆放文件。
-当前冻结主线为 Supervisor、π0.5、OpenVLA-OFT、YOLO 四 Agent，以及双 Franka
+当前冻结主线为总控 Supervisor、YOLO、单一 π0.5 三 Agent，以及双 Franka
 固定串行协作。目录调整不得产生第二套生命周期、第二个同职责服务或其他仿真
 平台主线。
 
@@ -35,9 +35,8 @@ industrial-agent-vla/
 ├── schemas/                   # 跨进程机器可校验 JSON Schema
 ├── scripts/                   # 项目级维护、校验和演示脚本
 ├── services/
-│   ├── openvla_oft/           # D：独立 OpenVLA-OFT 服务
-│   ├── pi05/                  # E：独立 π0.5/openpi 服务
-│   └── yolo/                  # F：同步调用、失败非门控的 YOLO 评分 sidecar
+│   ├── pi05/                  # π0.5 双臂推理服务
+│   └── yolo/                  # 同步调用、失败非门控的 YOLO 评分 sidecar
 ├── simulation/                # B：仿真环境、控制器、场景配置和环境适配
 ├── src/industrial_agent/      # A：轻量总 Agent 核心
 └── tests/                     # 单元、契约、回归测试
@@ -52,9 +51,8 @@ industrial-agent-vla/
 | 文件类型 | 唯一位置 | 可以进入 Git | 责任角色 |
 |---|---|---:|---|
 | 总 Agent Python 代码 | `src/industrial_agent/` | 是 | A |
-| OpenVLA-OFT 服务代码 | `services/openvla_oft/` | 是 | D |
-| π0.5/openpi 服务代码 | `services/pi05/` | 是 | E |
-| YOLO Agent 服务代码 | `services/yolo/` | 是 | F |
+| π0.5/openpi 服务代码 | `services/pi05/` | 是 | 模型服务 |
+| YOLO Agent 服务代码 | `services/yolo/` | 是 | 感知服务 |
 | 仿真/机器人适配代码 | `simulation/` | 是 | B |
 | 跨模块 JSON Schema | `schemas/` | 是 | A + 接口方 |
 | 默认或示例配置 | `configs/` 或模块内 `configs/` | 是，不含私密值 | 模块负责人 |
@@ -73,15 +71,15 @@ industrial-agent-vla/
 ## 3. 命名规则
 
 - 目录与代码文件：小写英文，使用 `snake_case`；服务目录可使用约定名
-  `openvla_oft`、`pi05`。
+  `pi05`、`yolo`。
 - Markdown 文档：小写英文 `kebab-case.md`；冻结官方原件和已有每日任务文件除外。
 - Python 测试：`test_<被测主题>.py`，测试函数为 `test_<行为>_<预期>`。
 - 配置：`<模块>.<环境>.json|yaml`，例如 `agent.default.json`、
-  `openvla.sim.yaml`；真实密钥通过环境变量或密钥管理系统提供。
+  真实密钥通过环境变量或密钥管理系统提供。
 - 实验：`YYYYMMDD_<模型>_<任务>_<短标识>/`；提交配置、Commit SHA、数据/权重
   SHA 和摘要，不提交完整输出。
 - 报告和证据：名称必须能关联 Gate、Issue 或实验 ID，例如
-  `G3_openvla_20-seed-summary.md`。
+  `G3_pi05_dual_arm_summary.md`。
 
 文件名不得包含个人姓名、`final-final`、`新建文件夹`、`副本` 等不可追踪描述。
 同一逻辑文件只有一个权威版本；历史版本由 Git 保存，不用 `_v2_copy` 复制。

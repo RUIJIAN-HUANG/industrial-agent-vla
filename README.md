@@ -25,9 +25,9 @@
 成功结束或安全停止
 ```
 
-系统不设置 NLP Agent，不在运行时改写用户指令，不让 YOLO DetectionPacket
-成为 π0.5 推理前置条件。Arm_B 在当前正式单件任务中保持退避和静止；V1 的
-四 Agent、双 VLA 和双臂自动交接流程仅作为历史回归材料。
+系统不设置额外的 NLP Agent，不在运行时改写用户指令，不让 YOLO DetectionPacket
+成为 π0.5 推理前置条件。总控、YOLO 和单一 π0.5 是唯一运行时 Agent；π0.5
+通过 `arm_id` 服务两只机械臂。
 
 ### 正式任务与精确指令
 
@@ -175,6 +175,20 @@ norm stats 和 release gate，详见 [`services/pi05/README.md`](services/pi05/R
 - [`configs/v2-task-profile.json`](configs/v2-task-profile.json)
 - 服务实现：[`services/pi05/`](services/pi05/)
 
+### 当前提交边界
+
+π0.5 的工业策略尚未完成训练和最终验收。因此当前仓库是“工程提交候选版”，
+不是可直接部署的模型发布版：
+
+- 任务合同、Supervisor、7D 动作安全边界、数据 Recorder/Reader、转换 Preflight
+  和服务接口可以进行审计与复现；
+- `configs/agent.default.json` 中的 `checkpoint_sha` 和 `norm_stats_sha` 仍是占位符，
+  这是有意保留的 fail-closed 状态，服务不会用占位符启动生产推理；
+- `reports/evidence-index.md` 中真实 VLA 闭环证据仍为 `PENDING`，不能用 Mock、
+  静态检查或接口测试替代真实模型结果；
+- 训练完成后必须补充外部 checkpoint、norm stats、完整 SHA-256、训练环境和评测
+  报告，再把模型清单状态从 `TRAINING` 更新为 `CANDIDATE` 或 `FROZEN`。
+
 ## 6. 当前模型与制品溯源
 
 仓库不提交 `.pt`、`.ckpt`、`.pth`、`.safetensors` 或 `.onnx` 权重，只提交模型卡、
@@ -190,7 +204,8 @@ norm stats 和 release gate，详见 [`services/pi05/README.md`](services/pi05/R
 | 训练数据 | 994 张人工清洗图像，train/val/test = 810/105/79 |
 | held-out mAP50 / mAP50-95 | `0.936 / 0.793` |
 
-完整信息见 [`models/MODEL_CARD_yolo_manual994.md`](models/MODEL_CARD_yolo_manual994.md)、
+Pi0.5 当前尚未有可发布 checkpoint；YOLO Manual-994 也仍是感知候选模型，不能据此
+宣称完整 VLA 闭环或生产放行。完整信息见 [`models/MODEL_CARD_yolo_manual994.md`](models/MODEL_CARD_yolo_manual994.md)、
 [`models/CHECKSUMS_yolo_manual994.json`](models/CHECKSUMS_yolo_manual994.json) 和
 [`models/MANIFEST.md`](models/MANIFEST.md)。模型元数据进入 Git 不代表权重已经下载、
 真实三相机探针或生产门禁已经通过。
@@ -204,7 +219,7 @@ docs/          需求、架构、采集、项目管理和验收文档
 models/        模型卡、来源和 SHA；不放权重
 schemas/       JSON Schema 与机器可校验合同
 scripts/       验证、转换、探针和发布门禁脚本
-services/      Pi0.5、OpenVLA-OFT、YOLO 独立服务
+services/      Pi0.5 双臂服务、YOLO 独立服务
 simulation/    V2 场景、Isaac Sim 适配和人工采集入口
 src/           总控、Supervisor、执行器、安全和数据合同
 tests/         单元、合同、服务和数据管线测试
@@ -232,4 +247,4 @@ tests/         单元、合同、服务和数据管线测试
   和团队授权，并通过独立 PR 添加合适的 `LICENSE`。
 
 更详细的协作规范见 [`CONTRIBUTING.md`](CONTRIBUTING.md) 和
-[`docs/project-management/project-management-guide.md`](docs/project-management/project-management-guide.md)。
+[`docs/project-management/dashboard.md`](docs/project-management/dashboard.md)。

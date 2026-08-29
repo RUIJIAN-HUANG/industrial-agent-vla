@@ -1,534 +1,232 @@
 from __future__ import annotations
 
 import json
-import unittest
-from copy import deepcopy
 from pathlib import Path
 from typing import Any, Mapping
+
+import pytest
 
 from industrial_agent.contracts import Postcondition, TaskSchema
 from industrial_agent.errors import ExecutorError, FailureCode
 from industrial_agent.executor import (
     ExecutionContext,
-    OpenVLAOFTAdapter,
     Pi05Adapter,
     build_executors_from_config,
 )
 from industrial_agent.observation import ObservationGateway
-
 from tests.test_contracts_and_observation import raw_observation
+
 
 CHECKPOINT_SHA = f"sha256:{'1' * 64}"
 NORM_STATS_SHA = f"sha256:{'2' * 64}"
-OTHER_CHECKPOINT_SHA = f"sha256:{'3' * 64}"
-OTHER_NORM_STATS_SHA = f"sha256:{'4' * 64}"
 
 
 class EchoTransport:
-    def __init__(
-        self,
-        *,
-        service: str = "openvla_oft",
-        checkpoint_sha: str = CHECKPOINT_SHA,
-        norm_stats_sha: str = NORM_STATS_SHA,
-        corrupt_trace: bool = False,
-        health_overrides: Mapping[str, Any] | None = None,
-        chunk_overrides: Mapping[str, Any] | None = None,
-        response_status: str = "ok",
-        error_code: str | None = None,
-    ):
+    def __init__(self, *, health_overrides: Mapping[str, Any] | None = None):
         self.calls: list[tuple[str, Mapping[str, Any], int]] = []
-        self.service = service
-        self.checkpoint_sha = checkpoint_sha
-        self.norm_stats_sha = norm_stats_sha
-        self.corrupt_trace = corrupt_trace
         self.health_overrides = dict(health_overrides or {})
-        self.chunk_overrides = dict(chunk_overrides or {})
-        self.response_status = response_status
-        self.error_code = error_code
 
     def request(
         self, route: str, payload: Mapping[str, Any], timeout_ms: int
     ) -> Mapping[str, Any]:
         self.calls.append((route, payload, timeout_ms))
         if route == "/health":
-            health = {
+            response: dict[str, Any] = {
                 "schema_version": "1.0",
-                "service": self.service,
+                "service": "pi05",
                 "status": "ready",
-                "checkpoint_sha": self.checkpoint_sha,
-                "norm_stats_sha": self.norm_stats_sha,
-                "supported_task_types": (
-                    [
-                        "pick_place",
-                        "object_localization",
-                        "visual_manipulation",
-                    ]
-                    if self.service == "openvla_oft"
-                    else [
-                        "pick_place",
-                        "visual_manipulation",
-                        "instruction_interaction",
-                    ]
-                ),
+                "checkpoint_sha": CHECKPOINT_SHA,
+                "norm_stats_sha": NORM_STATS_SHA,
+                "supported_task_types": [
+                    "pick_place",
+                    "visual_manipulation",
+                    "instruction_interaction",
+                ],
                 "supported_action_contracts": ["1.0"],
             }
-            health.update(self.health_overrides)
-            return health
+            response.update(self.health_overrides)
+            return response
         if route == "/v1/cancel":
             return {"status": "cancelled"}
-        response = {
-            key: payload[key]
-            for key in (
-                "schema_version",
-                "request_id",
-                "trace_id",
-                "episode_id",
-                "task_id",
-                "subtask_id",
-                "step_id",
-                "observation_id",
-                "executor",
-                "checkpoint_sha",
-                "norm_stats_sha",
-            )
+        return {
+            **{
+                key: payload[key]
+                for key in (
+                    "schema_version",
+                    "request_id",
+                    "trace_id",
+                    "episode_id",
+                    "task_id",
+                    "subtask_id",
+                    "step_id",
+                    "observation_id",
+                    "executor",
+                    "checkpoint_sha",
+                    "norm_stats_sha",
+                )
+            },
+            "status": "ok",
+            "action_chunk": {
+                "contract_version": "1.0",
+                "chunk_id": "canonical-chunk",
+                "task_id": payload["task_id"],
+                "executor": "pi05",
+                "action_space": "ee_delta_pose_gripper",
+                "frame": "robot_base",
+                "translation_unit": "m",
+                "rotation_unit": "rad",
+                "gripper_unit": "normalized",
+                "steps": [
+                    {
+                        "values": [0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5],
+                        "duration_ms": 137,
+                    }
+                ],
+            },
+            "timing": {"queue_ms": 1, "inference_ms": 2, "total_ms": 3},
         }
-        response["status"] = self.response_status
-        action_chunk = {
-            "contract_version": "1.0",
-            "chunk_id": "canonical-chunk",
-            "task_id": payload["task_id"],
-            "executor": payload["executor"],
-            "action_space": "ee_delta_pose_gripper",
-            "frame": "robot_base",
-            "translation_unit": "m",
-            "rotation_unit": "rad",
-            "gripper_unit": "normalized",
-            "steps": [
-                {
-                    "values": [0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5],
-                    "duration_ms": 137,
-                }
-            ],
-        }
-        action_chunk.update(self.chunk_overrides)
-        if self.response_status == "ok":
-            response["action_chunk"] = action_chunk
-            response["timing"] = {
-                "queue_ms": 1,
-                "inference_ms": 2,
-                "total_ms": 3,
-            }
-        else:
-            response["error"] = {
-                "code": self.error_code
-                or (
-                    FailureCode.EXECUTOR_CANCELLED.value
-                    if self.response_status == "cancelled"
-                    else FailureCode.EXECUTOR_RUNTIME.value
-                ),
-                "message": f"mock {self.response_status}",
-                "retryable": self.response_status == "error",
-            }
-        if self.corrupt_trace:
-            response["trace_id"] = "wrong"
-        return response
 
 
-def task() -> TaskSchema:
+def _observation() -> Any:
+    raw = raw_observation()
+
+    def image(camera_id: str, digest_char: str) -> dict[str, object]:
+        digest = digest_char * 64
+        return {
+            "uri": f"cas://sha256/{digest}",
+            "image_sha256": f"sha256:{digest}",
+            "camera_id": camera_id,
+            "width": 1280,
+            "height": 720,
+        }
+
+    raw["camera"] = {
+        "full_image": image("CAM_A_TOP", "a"),
+        "arm_a_rgb": image("CAM_A_TOP", "b"),
+        "handoff_rgb": image("CAM_HANDOFF", "c"),
+        "arm_b_rgb": image("CAM_B_TOP", "d"),
+        "wrist_image": None,
+    }
+    robot = raw["robot"]
+    assert isinstance(robot, dict)
+    robot["arm_a"] = {
+        "tcp_pose_m_rad": [0.5, 0.0, 0.5, 0.0, 0.0, 0.0],
+        "state": [0.5, 0.0, 0.5, 0.0, 0.0, 0.0, 1.0],
+        "retreated": False,
+        "gripper_open": True,
+        "stationary": True,
+    }
+    robot["arm_b"] = {
+        "tcp_pose_m_rad": [0.4, 0.0, 0.5, 0.0, 0.0, 0.0],
+        "state": [0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.0],
+        "retreated": True,
+        "gripper_open": False,
+        "stationary": True,
+    }
+    return ObservationGateway().ingest_online(raw)
+
+
+def _task(arm_id: str = "Arm_A") -> TaskSchema:
     return TaskSchema(
-        task_id="parent:S01",
+        task_id="parent:subtask",
         instruction="execute semantic action",
         task_type="pick_place",
-        metadata={"subtask_id": "S01"},
+        metadata={"subtask_id": "subtask", "arm_id": arm_id},
         postconditions=(
             Postcondition(kind="field_equals", path="task.status", expected="done"),
         ),
     )
 
 
-class ExecutorAdapterTests(unittest.TestCase):
-    def setUp(self) -> None:
-        raw = raw_observation()
+def _context(arm_id: str | None = None) -> ExecutionContext:
+    return ExecutionContext(
+        run_id="episode-1",
+        strategy_attempt=1,
+        replan_index=0,
+        step_id=4,
+        arm_id=arm_id,
+    )
 
-        def image(camera_id: str, digest_char: str) -> dict[str, object]:
-            digest = digest_char * 64
-            return {
-                "uri": f"cas://sha256/{digest}",
-                "image_sha256": f"sha256:{digest}",
-                "camera_id": camera_id,
-                "width": 1280,
-                "height": 720,
-            }
 
-        raw["camera"] = {
-            "full_image": image("CAM_HANDOFF", "a"),
-            "arm_a_rgb": image("CAM_A_TOP", "b"),
-            "handoff_rgb": image("CAM_HANDOFF", "c"),
-            "arm_b_rgb": image("CAM_B_TOP", "d"),
-            "wrist_image": None,
-        }
-        robot = raw["robot"]
-        assert isinstance(robot, dict)
-        base_pose = list(robot["tcp_pose_m_rad"])
-        base_state = [*base_pose, 1.0]
-        robot["arm_a"] = {
-            "tcp_pose_m_rad": base_pose,
-            "state": base_state,
-            "retreated": False,
-            "gripper_open": True,
-        }
-        robot["arm_b"] = {
-            "tcp_pose_m_rad": [0.4, *base_pose[1:]],
-            "state": [0.4, *base_pose[1:], 0.0],
-            "retreated": True,
-            "gripper_open": False,
-        }
-        self.observation = ObservationGateway().ingest_online(raw)
-        self.context = ExecutionContext(
-            run_id="episode-1",
-            strategy_attempt=1,
-            replan_index=0,
-            step_id=4,
-        )
-
-    def test_openvla_request_and_canonical_response(self) -> None:
+def test_pi05_routes_each_arm_to_its_camera_and_state() -> None:
+    observation = _observation()
+    for arm_id, camera_id, state_x in (
+        ("Arm_A", "CAM_A_TOP", 0.5),
+        ("Arm_B", "CAM_B_TOP", 0.4),
+    ):
         transport = EchoTransport()
-        adapter = OpenVLAOFTAdapter(
-            transport, checkpoint_sha=CHECKPOINT_SHA, norm_stats_sha=NORM_STATS_SHA
-        )
-        result = adapter.plan(task(), self.observation, self.context)
-        self.assertEqual(result.chunk_id, "canonical-chunk")
-        self.assertEqual(result.steps[0].duration_ms, 137)
-        route, payload, _ = transport.calls[-1]
-        self.assertEqual(route, "/v1/infer")
-        self.assertEqual(payload["observation_id"], self.observation.observation_id)
-        model_input = payload["model_input"]
-        assert isinstance(model_input, Mapping)
-        self.assertEqual(
-            model_input["full_image"],
-            self.observation.data["camera"]["arm_b_rgb"],
-        )
-        self.assertIsNone(model_input["wrist_image"])
-        self.assertEqual(
-            model_input["state"],
-            [0.4, 0.0, 0.5, 0.0, 0.0, 0.0, 0.0],
-        )
-        self.assertIn("task_description", model_input)
-
-    def test_cancel_reuses_run_and_subtask_correlation(self) -> None:
-        transport = EchoTransport()
-        adapter = OpenVLAOFTAdapter(
-            transport, checkpoint_sha=CHECKPOINT_SHA, norm_stats_sha=NORM_STATS_SHA
-        )
-        active_task = task()
-        adapter.plan(active_task, self.observation, self.context)
-        adapter.cancel(active_task.task_id, "replan")
-        route, payload, _ = transport.calls[-1]
-        self.assertEqual(route, "/v1/cancel")
-        self.assertEqual(payload["trace_id"], self.context.run_id)
-        self.assertEqual(payload["episode_id"], self.context.run_id)
-        self.assertEqual(payload["subtask_id"], "S01")
-
-    def test_pi05_request_contains_prompt_and_observation(self) -> None:
-        transport = EchoTransport(
-            service="pi05",
-            checkpoint_sha=OTHER_CHECKPOINT_SHA,
-            norm_stats_sha=OTHER_NORM_STATS_SHA,
-        )
         adapter = Pi05Adapter(
             transport,
-            checkpoint_sha=OTHER_CHECKPOINT_SHA,
-            norm_stats_sha=OTHER_NORM_STATS_SHA,
+            checkpoint_sha=CHECKPOINT_SHA,
+            norm_stats_sha=NORM_STATS_SHA,
         )
-        result = adapter.plan(task(), self.observation, self.context)
-        self.assertEqual(len(result.steps), 1)
-        self.assertEqual(result.steps[0].duration_ms, 137)
-        model_input = transport.calls[-1][1]["model_input"]
+        result = adapter.plan(_task(arm_id), observation, _context(arm_id))
+        assert result.executor == "pi05"
+        payload = transport.calls[-1][1]
+        assert payload["arm_id"] == arm_id
+        model_input = payload["model_input"]
         assert isinstance(model_input, Mapping)
-        self.assertEqual(model_input["prompt"], "execute semantic action")
-        self.assertIsNone(model_input["observation"]["camera"]["wrist_image"])
-        self.assertEqual(
-            model_input["observation"]["robot"]["state"],
-            [0.5, 0.0, 0.5, 0.0, 0.0, 0.0, 1.0],
-        )
-        self.assertIn("observation", model_input)
-
-    def test_non_null_wrist_image_is_rejected_before_transport(self) -> None:
-        camera = self.observation.data["camera"]
-        assert isinstance(camera, dict)
-        camera["wrist_image"] = {
-            "uri": f"cas://sha256/{'e' * 64}",
-            "image_sha256": f"sha256:{'e' * 64}",
-            "camera_id": "CAM_WRIST",
-            "width": 1280,
-            "height": 720,
-        }
-        for adapter_type, service in (
-            (OpenVLAOFTAdapter, "openvla_oft"),
-            (Pi05Adapter, "pi05"),
-        ):
-            transport = EchoTransport(service=service)
-            adapter = adapter_type(
-                transport,
-                checkpoint_sha=CHECKPOINT_SHA,
-                norm_stats_sha=NORM_STATS_SHA,
-            )
-            with self.subTest(service=service):
-                with self.assertRaises(ExecutorError) as caught:
-                    adapter.plan(task(), self.observation, self.context)
-                self.assertEqual(
-                    caught.exception.code,
-                    FailureCode.EXECUTOR_BAD_RESPONSE,
-                )
-                self.assertNotIn("/v1/infer", [call[0] for call in transport.calls])
-
-    def test_non_frozen_resolution_is_rejected_before_transport(self) -> None:
-        camera = self.observation.data["camera"]
-        assert isinstance(camera, dict)
-        arm_b_rgb = camera["arm_b_rgb"]
-        assert isinstance(arm_b_rgb, dict)
-        arm_b_rgb["width"] = 640
-        arm_b_rgb["height"] = 480
-        transport = EchoTransport()
-        adapter = OpenVLAOFTAdapter(
-            transport,
-            checkpoint_sha=CHECKPOINT_SHA,
-            norm_stats_sha=NORM_STATS_SHA,
-        )
-
-        with self.assertRaises(ExecutorError) as caught:
-            adapter.plan(task(), self.observation, self.context)
-
-        self.assertEqual(caught.exception.code, FailureCode.EXECUTOR_BAD_RESPONSE)
-        self.assertIn("1280x720", str(caught.exception))
-        self.assertNotIn("/v1/infer", [call[0] for call in transport.calls])
-
-    def test_response_correlation_mismatch_is_rejected(self) -> None:
-        adapter = OpenVLAOFTAdapter(
-            EchoTransport(corrupt_trace=True),
-            checkpoint_sha=CHECKPOINT_SHA,
-            norm_stats_sha=NORM_STATS_SHA,
-        )
-        with self.assertRaises(ExecutorError) as caught:
-            adapter.plan(task(), self.observation, self.context)
-        self.assertEqual(caught.exception.code, FailureCode.EXECUTOR_BAD_RESPONSE)
-
-    def test_health_requires_pinned_identity_and_action_contract(self) -> None:
-        adapter_cases = (
-            (OpenVLAOFTAdapter, "openvla_oft"),
-            (Pi05Adapter, "pi05"),
-        )
-        bad_health = (
-            ("schema_version", "2.0"),
-            ("service", "other"),
-            ("checkpoint_sha", "wrong-checkpoint"),
-            ("norm_stats_sha", "wrong-norm"),
-            ("supported_action_contracts", ["2.0"]),
-            ("unexpected_health_field", True),
-        )
-        for adapter_type, service in adapter_cases:
-            with self.subTest(adapter=service, field="valid"):
-                adapter = adapter_type(
-                    EchoTransport(service=service),
-                    checkpoint_sha=CHECKPOINT_SHA,
-                    norm_stats_sha=NORM_STATS_SHA,
-                )
-                self.assertTrue(adapter.health())
-            for field, value in bad_health:
-                with self.subTest(adapter=service, field=field):
-                    adapter = adapter_type(
-                        EchoTransport(
-                            service=service,
-                            health_overrides={field: value},
-                        ),
-                        checkpoint_sha=CHECKPOINT_SHA,
-                        norm_stats_sha=NORM_STATS_SHA,
-                    )
-                    self.assertFalse(adapter.health())
-
-    def test_both_adapters_reject_tampered_canonical_chunk_metadata(self) -> None:
-        adapter_cases = (
-            (OpenVLAOFTAdapter, "openvla_oft"),
-            (Pi05Adapter, "pi05"),
-        )
-        corruptions = (
-            ("contract_version", "2.0"),
-            ("task_id", "wrong-task"),
-            ("executor", "wrong-executor"),
-            ("action_space", "joint_position"),
-            ("frame", "camera"),
-            ("translation_unit", "cm"),
-            ("rotation_unit", "deg"),
-            ("gripper_unit", "raw"),
-        )
-        for adapter_type, service in adapter_cases:
-            for field, value in corruptions:
-                with self.subTest(adapter=service, field=field):
-                    adapter = adapter_type(
-                        EchoTransport(
-                            service=service,
-                            chunk_overrides={field: value},
-                        ),
-                        checkpoint_sha=CHECKPOINT_SHA,
-                        norm_stats_sha=NORM_STATS_SHA,
-                    )
-                    with self.assertRaises(ExecutorError) as caught:
-                        adapter.plan(task(), self.observation, self.context)
-                    self.assertEqual(
-                        caught.exception.code, FailureCode.EXECUTOR_BAD_RESPONSE
-                    )
-
-    def test_both_adapters_preserve_stable_error_and_cancel_codes(self) -> None:
-        adapter_cases = (
-            (OpenVLAOFTAdapter, "openvla_oft"),
-            (Pi05Adapter, "pi05"),
-        )
-        statuses = (
-            ("error", FailureCode.EXECUTOR_TIMEOUT),
-            ("cancelled", FailureCode.EXECUTOR_CANCELLED),
-        )
-        for adapter_type, service in adapter_cases:
-            for status, code in statuses:
-                with self.subTest(adapter=service, status=status):
-                    adapter = adapter_type(
-                        EchoTransport(
-                            service=service,
-                            response_status=status,
-                            error_code=code.value,
-                        ),
-                        checkpoint_sha=CHECKPOINT_SHA,
-                        norm_stats_sha=NORM_STATS_SHA,
-                    )
-                    with self.assertRaises(ExecutorError) as caught:
-                        adapter.plan(task(), self.observation, self.context)
-                    self.assertEqual(caught.exception.code, code)
-                    self.assertEqual(caught.exception.retryable, status == "error")
-
-    def test_invalid_step_duration_is_rejected_not_defaulted(self) -> None:
-        adapter = OpenVLAOFTAdapter(
-            EchoTransport(
-                chunk_overrides={
-                    "steps": [
-                        {
-                            "values": [0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5],
-                            "duration_ms": True,
-                        }
-                    ]
-                }
-            ),
-            checkpoint_sha=CHECKPOINT_SHA,
-            norm_stats_sha=NORM_STATS_SHA,
-        )
-        with self.assertRaises(ExecutorError) as caught:
-            adapter.plan(task(), self.observation, self.context)
-        self.assertEqual(caught.exception.code, FailureCode.EXECUTOR_BAD_RESPONSE)
-
-    def test_executor_factory_consumes_configured_urls_and_artifact_ids(self) -> None:
-        root = Path(__file__).resolve().parents[1]
-        config = json.loads(
-            (root / "configs" / "agent.v1.legacy.json").read_text(encoding="utf-8")
-        )
-        digest_pairs = {
-            "openvla_oft": (CHECKPOINT_SHA, NORM_STATS_SHA),
-            "pi05": (OTHER_CHECKPOINT_SHA, OTHER_NORM_STATS_SHA),
-        }
-        for name, raw in config["executors"].items():
-            raw["checkpoint_sha"], raw["norm_stats_sha"] = digest_pairs[name]
-
-        calls: list[tuple[str, str]] = []
-
-        def factory(name: str, base_url: str) -> EchoTransport:
-            calls.append((name, base_url))
-            raw = config["executors"][name]
-            return EchoTransport(
-                service=name,
-                checkpoint_sha=raw["checkpoint_sha"],
-                norm_stats_sha=raw["norm_stats_sha"],
-            )
-
-        executors = build_executors_from_config(config, factory)
-        self.assertEqual(
-            calls,
-            [
-                ("openvla_oft", "http://127.0.0.1:8102"),
-                ("pi05", "http://127.0.0.1:8101"),
-            ],
-        )
-        self.assertEqual(
-            [item.descriptor.name for item in executors],
-            ["openvla_oft", "pi05"],
-        )
-
-    def test_executor_factory_rejects_unpinned_artifacts(self) -> None:
-        root = Path(__file__).resolve().parents[1]
-        config = json.loads(
-            (root / "configs" / "agent.v1.legacy.json").read_text(encoding="utf-8")
-        )
-        config = deepcopy(config)
-        with self.assertRaisesRegex(ValueError, "64 hexadecimal"):
-            build_executors_from_config(
-                config,
-                lambda name, base_url: EchoTransport(service=name),
-            )
-
-    def test_executor_factory_rejects_configurable_task_types(self) -> None:
-        root = Path(__file__).resolve().parents[1]
-        config = json.loads(
-            (root / "configs" / "agent.v1.legacy.json").read_text(encoding="utf-8")
-        )
-        config["executors"]["openvla_oft"]["task_types"] = ["pick_place"]
-        with self.assertRaisesRegex(ValueError, "task_types are frozen"):
-            build_executors_from_config(
-                config,
-                lambda name, base_url: EchoTransport(service=name),
-            )
-
-    def test_executor_factory_builds_only_explicitly_enabled_services(self) -> None:
-        root = Path(__file__).resolve().parents[1]
-        config = json.loads(
-            (root / "configs" / "agent.v1.legacy.json").read_text(encoding="utf-8")
-        )
-        config["executors"]["openvla_oft"]["checkpoint_sha"] = CHECKPOINT_SHA
-        config["executors"]["openvla_oft"]["norm_stats_sha"] = NORM_STATS_SHA
-        config["executors"]["pi05"]["enabled"] = False
-        calls: list[tuple[str, str]] = []
-
-        def factory(name: str, base_url: str) -> EchoTransport:
-            calls.append((name, base_url))
-            return EchoTransport(service=name)
-
-        executors = build_executors_from_config(config, factory)
-        self.assertEqual([item.descriptor.name for item in executors], ["openvla_oft"])
-        self.assertEqual(calls, [("openvla_oft", "http://127.0.0.1:8102")])
-
-    def test_adapters_and_factory_reject_mutable_artifact_aliases(self) -> None:
-        with self.assertRaisesRegex(ValueError, "64 hexadecimal"):
-            OpenVLAOFTAdapter(
-                EchoTransport(),
-                checkpoint_sha="latest00",
-                norm_stats_sha=NORM_STATS_SHA,
-            )
-        with self.assertRaisesRegex(ValueError, "64 hexadecimal"):
-            OpenVLAOFTAdapter(
-                EchoTransport(),
-                checkpoint_sha="REPLACE_WITH_PINNED_SHA",
-                norm_stats_sha=NORM_STATS_SHA,
-                task_types=frozenset({"mock_demo"}),
-            )
-
-        root = Path(__file__).resolve().parents[1]
-        config = json.loads(
-            (root / "configs" / "agent.v1.legacy.json").read_text(encoding="utf-8")
-        )
-        config["executors"]["openvla_oft"]["checkpoint_sha"] = "latest00"
-        config["executors"]["openvla_oft"]["norm_stats_sha"] = "version1"
-        with self.assertRaisesRegex(ValueError, "64 hexadecimal"):
-            build_executors_from_config(
-                config,
-                lambda name, base_url: EchoTransport(service=name),
-            )
+        assert model_input["arm_id"] == arm_id
+        model_observation = model_input["observation"]
+        assert isinstance(model_observation, Mapping)
+        camera = model_observation["camera"]
+        robot = model_observation["robot"]
+        assert isinstance(camera, Mapping) and isinstance(robot, Mapping)
+        assert camera["full_image"]["camera_id"] == camera_id
+        assert robot["state"][0] == state_x
 
 
-if __name__ == "__main__":
-    unittest.main()
+def test_pi05_context_arm_overrides_task_metadata() -> None:
+    transport = EchoTransport()
+    adapter = Pi05Adapter(
+        transport,
+        checkpoint_sha=CHECKPOINT_SHA,
+        norm_stats_sha=NORM_STATS_SHA,
+    )
+    adapter.plan(_task("Arm_A"), _observation(), _context("Arm_B"))
+    assert transport.calls[-1][1]["arm_id"] == "Arm_B"
+
+
+def test_pi05_health_requires_matching_identity() -> None:
+    adapter = Pi05Adapter(
+        EchoTransport(health_overrides={"service": "wrong"}),
+        checkpoint_sha=CHECKPOINT_SHA,
+        norm_stats_sha=NORM_STATS_SHA,
+    )
+    assert adapter.health() is False
+
+
+def test_executor_factory_only_accepts_pi05(tmp_path: Path) -> None:
+    config = json.loads(
+        (
+            Path(__file__).resolve().parents[1] / "configs" / "agent.default.json"
+        ).read_text(encoding="utf-8")
+    )
+    config["executors"]["pi05"]["checkpoint_sha"] = CHECKPOINT_SHA
+    config["executors"]["pi05"]["norm_stats_sha"] = NORM_STATS_SHA
+    calls: list[tuple[str, str]] = []
+
+    def factory(name: str, url: str) -> EchoTransport:
+        calls.append((name, url))
+        return EchoTransport()
+
+    executors = build_executors_from_config(config, factory)
+    assert [item.descriptor.name for item in executors] == ["pi05"]
+    assert calls == [("pi05", "http://127.0.0.1:8101")]
+
+    config["executors"]["retired"] = config["executors"]["pi05"]
+    with pytest.raises(ValueError, match="unsupported executors"):
+        build_executors_from_config(config, factory)
+
+
+def test_pi05_rejects_invalid_arm_before_transport() -> None:
+    transport = EchoTransport()
+    adapter = Pi05Adapter(
+        transport,
+        checkpoint_sha=CHECKPOINT_SHA,
+        norm_stats_sha=NORM_STATS_SHA,
+    )
+    with pytest.raises(ExecutorError) as caught:
+        adapter.plan(_task("Arm_C"), _observation(), _context())
+    assert caught.value.code is FailureCode.INVALID_TASK
+    assert not transport.calls

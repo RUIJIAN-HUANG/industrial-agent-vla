@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from .contracts import OPENVLA_OFT_EXECUTOR_NAME, PI05_EXECUTOR_NAME
+from .contracts import PI05_EXECUTOR_NAME
 from .errors import FailureCode, ImageCasError
 from .image_cas import ImageCas, ResolvedRgbFrame
 from .observation import FROZEN_IMAGE_HEIGHT, FROZEN_IMAGE_WIDTH
@@ -24,9 +24,9 @@ FROZEN_RGB_CAMERA_IDS = frozenset(
         "CAM_B_TOP",
     }
 )
-VLA_CAMERA_BY_EXECUTOR = {
-    PI05_EXECUTOR_NAME: "CAM_A_TOP",
-    OPENVLA_OFT_EXECUTOR_NAME: "CAM_B_TOP",
+VLA_CAMERA_BY_ARM = {
+    "Arm_A": "CAM_A_TOP",
+    "Arm_B": "CAM_B_TOP",
 }
 
 
@@ -71,27 +71,33 @@ class CasRequestImageResolver:
         executor = request.get("executor")
         if not isinstance(executor, str):
             raise _metadata_error("VLA infer request.executor must be a string")
-        expected_camera_id = VLA_CAMERA_BY_EXECUTOR.get(executor)
+        arm_id = request.get("arm_id", "Arm_A")
+        if executor != PI05_EXECUTOR_NAME:
+            raise _metadata_error(
+                f"unsupported executor: {executor!r}; only pi05 is deployed"
+            )
+        expected_camera_id = VLA_CAMERA_BY_ARM.get(arm_id)
         if expected_camera_id is None:
-            raise _metadata_error(f"unsupported frozen VLA executor: {executor!r}")
+            raise _metadata_error(
+                f"unsupported frozen VLA arm/executor: {arm_id!r}/{executor!r}"
+            )
         model_input = request.get("model_input")
         if not isinstance(model_input, Mapping):
             raise _metadata_error("VLA infer request.model_input must be an object")
+        if (
+            executor == PI05_EXECUTOR_NAME
+            and model_input.get("arm_id", "Arm_A") != arm_id
+        ):
+            raise _metadata_error("π0.5 request arm_id must match model_input.arm_id")
 
-        if executor == OPENVLA_OFT_EXECUTOR_NAME:
-            full_image = model_input.get("full_image")
-            wrist_image = model_input.get("wrist_image")
-        else:
-            observation = model_input.get("observation")
-            camera = (
-                observation.get("camera") if isinstance(observation, Mapping) else None
+        observation = model_input.get("observation")
+        camera = observation.get("camera") if isinstance(observation, Mapping) else None
+        if not isinstance(camera, Mapping):
+            raise _metadata_error(
+                "π0.5 model_input.observation.camera must be an object"
             )
-            if not isinstance(camera, Mapping):
-                raise _metadata_error(
-                    "π0.5 model_input.observation.camera must be an object"
-                )
-            full_image = camera.get("full_image")
-            wrist_image = camera.get("wrist_image")
+        full_image = camera.get("full_image")
+        wrist_image = camera.get("wrist_image")
 
         if wrist_image is not None:
             raise _metadata_error(

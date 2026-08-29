@@ -3,7 +3,7 @@
 - Task ID: `BIN01_TO_FINISHED01`
 - Canonical instruction: `把Bin_01搬到FINISHED_01`
 - Active-arm sequence: `Arm_A -> HANDOFF_VERIFY -> Arm_B`
-- Executor identities: `Arm_A/pi05`, then `Arm_B/openvla_oft`
+- Executor identities: `Arm_A/pi05`, then `Arm_B/pi05`
 - Training cameras/state: all three frozen cameras and both arm states; each action
   stores its actual `arm_id` and executor
 

@@ -4,8 +4,6 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
-import pytest
-
 from industrial_agent.contracts import ActionChunk, ActionStep, TaskSchema
 from industrial_agent.environment import SafeStopReceipt
 from industrial_agent.executor import ExecutionContext, ExecutorDescriptor
@@ -130,11 +128,3 @@ def test_production_builder_wires_only_pi05() -> None:
     supervisor = build_supervisor(_config(), transport_factory=factory)
     assert isinstance(supervisor, V2Supervisor)
     assert calls == [("pi05", "http://127.0.0.1:8101")]
-
-
-def test_production_builder_rejects_abolished_v1() -> None:
-    legacy = json.loads(
-        (ROOT / "configs" / "agent.v1.legacy.json").read_text(encoding="utf-8")
-    )
-    with pytest.raises(ValueError, match="V1 is abolished"):
-        build_supervisor(legacy, transport_factory=lambda _name, _url: _Transport())

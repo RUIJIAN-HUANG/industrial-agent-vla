@@ -19,14 +19,11 @@ _ZERO_DIGEST = "sha256:" + "0" * 64
 _REQUIRED_DIRECTORIES = (
     "SHARED_CAS_DIR",
     "PI05_CACHE_DIR_HOST",
-    "OPENVLA_CACHE_DIR_HOST",
     "YOLO_CACHE_DIR_HOST",
     "PI05_CHECKPOINT_DIR_HOST",
-    "OPENVLA_MODEL_DIR_HOST",
 )
 _WRITABLE_DIRECTORIES = (
     "PI05_CACHE_DIR_HOST",
-    "OPENVLA_CACHE_DIR_HOST",
     "YOLO_CACHE_DIR_HOST",
 )
 _REQUIRED_FILES = (
@@ -35,14 +32,11 @@ _REQUIRED_FILES = (
 )
 _IMAGE_IDENTITIES = (
     ("PI05_IMAGE_REPOSITORY", "PI05_IMAGE_DIGEST"),
-    ("OPENVLA_IMAGE_REPOSITORY", "OPENVLA_IMAGE_DIGEST"),
     ("YOLO_IMAGE_REPOSITORY", "YOLO_IMAGE_DIGEST"),
 )
 _ARTIFACT_DIGESTS = (
     "PI05_CHECKPOINT_SHA",
     "PI05_NORM_STATS_SHA",
-    "OPENVLA_CHECKPOINT_SHA",
-    "OPENVLA_NORM_STATS_SHA",
     "YOLO_CHECKPOINT_SHA",
     "YOLO_CLASS_MAP_SHA",
     "YOLO_CONFIG_SHA",
@@ -156,73 +150,6 @@ def _pi05_directory_digest(root: Path) -> str:
     return "sha256:" + manifest.hexdigest()
 
 
-def _resolve_inside(root: Path, relative_path: str) -> Path:
-    candidate = (root / relative_path).resolve()
-    try:
-        candidate.relative_to(root)
-    except ValueError as exc:
-        raise PreflightError(
-            f"OpenVLA manifest path escapes model directory: {relative_path!r}"
-        ) from exc
-    return candidate
-
-
-def _verify_openvla_artifacts(
-    root: Path,
-    *,
-    expected_manifest_sha: str,
-    expected_norm_sha: str,
-) -> None:
-    manifest_path = root / "checkpoint.manifest.json"
-    if not manifest_path.is_file():
-        raise PreflightError(f"OpenVLA manifest is missing: {manifest_path}")
-    actual_manifest_sha = _sha256_file(manifest_path)
-    if actual_manifest_sha != expected_manifest_sha:
-        raise PreflightError(
-            "OpenVLA manifest digest mismatch: "
-            f"expected={expected_manifest_sha}, actual={actual_manifest_sha}"
-        )
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise PreflightError("OpenVLA manifest is not valid UTF-8 JSON") from exc
-    if not isinstance(manifest, dict) or manifest.get("schema_version") != "1.0":
-        raise PreflightError("OpenVLA manifest must use schema_version 1.0")
-    files = manifest.get("files")
-    if not isinstance(files, list) or not files:
-        raise PreflightError("OpenVLA manifest must contain a non-empty files list")
-    seen: set[str] = set()
-    for index, entry in enumerate(files):
-        if not isinstance(entry, dict):
-            raise PreflightError(f"OpenVLA manifest files[{index}] must be an object")
-        relative_path = entry.get("path")
-        expected_sha = entry.get("sha256")
-        if (
-            not isinstance(relative_path, str)
-            or not relative_path
-            or not isinstance(expected_sha, str)
-            or not re.fullmatch(r"[0-9a-fA-F]{64}", expected_sha)
-        ):
-            raise PreflightError(f"OpenVLA manifest files[{index}] is invalid")
-        if relative_path in seen:
-            raise PreflightError(f"OpenVLA manifest repeats path: {relative_path}")
-        seen.add(relative_path)
-        artifact = _resolve_inside(root, relative_path)
-        if not artifact.is_file():
-            raise PreflightError(f"OpenVLA artifact is missing: {artifact}")
-        actual_sha = _sha256_file(artifact).removeprefix("sha256:")
-        if actual_sha != expected_sha.casefold():
-            raise PreflightError(f"OpenVLA artifact digest mismatch: {relative_path}")
-    norm_stats = root / "dataset_statistics.json"
-    if not norm_stats.is_file():
-        raise PreflightError(f"OpenVLA norm stats are missing: {norm_stats}")
-    if _sha256_file(norm_stats) != expected_norm_sha:
-        raise PreflightError("OpenVLA norm-stats digest mismatch")
-    action_contract = root / "action_contract.json"
-    if not action_contract.is_file():
-        raise PreflightError(f"OpenVLA action contract is missing: {action_contract}")
-
-
 def _record_check(
     results: list[dict[str, str]],
     name: str,
@@ -271,7 +198,6 @@ def validate_environment(
 
     for name, default in (
         ("PI05_PORT", 8101),
-        ("OPENVLA_PORT", 8102),
         ("YOLO_PORT", 8103),
     ):
         _record_check(
@@ -282,12 +208,7 @@ def validate_environment(
             ),
         )
 
-    _record_check(
-        results,
-        "openvla:unnorm-key",
-        lambda: _require(environment, "OPENVLA_UNNORM_KEY"),
-    )
-    for name in ("PI05_GPU_ID", "OPENVLA_GPU_ID", "YOLO_GPU_ID"):
+    for name in ("PI05_GPU_ID", "YOLO_GPU_ID"):
         _record_check(
             results,
             f"gpu:{name}",
@@ -297,7 +218,6 @@ def validate_environment(
         environment.get(name, "").strip()
         for name in (
             "PI05_GPU_ID",
-            "OPENVLA_GPU_ID",
             "YOLO_GPU_ID",
         )
     ]
@@ -355,19 +275,6 @@ def validate_environment(
                 )
             return actual
 
-        def check_openvla_checkpoint() -> str:
-            root = directories.get("OPENVLA_MODEL_DIR_HOST")
-            if root is None:
-                raise PreflightError("OpenVLA model mount did not validate")
-            manifest_sha = _require_digest(environment, "OPENVLA_CHECKPOINT_SHA")
-            norm_sha = _require_digest(environment, "OPENVLA_NORM_STATS_SHA")
-            _verify_openvla_artifacts(
-                root,
-                expected_manifest_sha=manifest_sha,
-                expected_norm_sha=norm_sha,
-            )
-            return manifest_sha
-
         def check_yolo_checkpoint() -> str:
             path = files.get("YOLO_MODEL_FILE_HOST")
             if path is None:
@@ -382,7 +289,6 @@ def validate_environment(
 
         _record_check(results, "asset:pi05-checkpoint", check_pi05_checkpoint)
         _record_check(results, "asset:pi05-norm-stats", check_pi05_norm)
-        _record_check(results, "asset:openvla-checkpoint", check_openvla_checkpoint)
         _record_check(results, "asset:yolo-checkpoint", check_yolo_checkpoint)
 
     status = "PASS" if all(item["status"] == "PASS" for item in results) else "FAIL"
@@ -424,14 +330,6 @@ def validate_services(
             {
                 "checkpoint_sha": "PI05_CHECKPOINT_SHA",
                 "norm_stats_sha": "PI05_NORM_STATS_SHA",
-            },
-        ),
-        (
-            "openvla_oft",
-            _require_port(environment, "OPENVLA_PORT", 8102),
-            {
-                "checkpoint_sha": "OPENVLA_CHECKPOINT_SHA",
-                "norm_stats_sha": "OPENVLA_NORM_STATS_SHA",
             },
         ),
         (

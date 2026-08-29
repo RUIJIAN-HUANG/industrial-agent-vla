@@ -5,8 +5,8 @@
 当前状态：HTTP 服务、Ultralytics 运行时适配器和 Isaac 三相机探针已接入；
 生产权重仍由部署方通过只读挂载提供，不进入仓库。
 
-本目录是第四个 Agent 的独立部署边界，也是同步调用、失败非门控的评分
-sidecar。服务每次只检测一张不可变相机帧，不调用 π0.5 或 OpenVLA-OFT，
+本目录是三 Agent 架构中 YOLO 的独立部署边界，也是同步调用、失败非门控的评分
+sidecar。服务每次只检测一张不可变相机帧，不调用 π0.5，
 不发放双臂令牌，也不决定 Supervisor 生命周期。在线进程禁止读取离线标注、
 目标真实位姿、抓取点或其他特权信息。
 
@@ -19,9 +19,9 @@ YOLO 调用时延计入端到端日志。
 同步调用不等于硬门：
 
 - 合法空检测、超时、服务不可用或坏响应只记录 sidecar 证据；
-- YOLO 成功不是 π0.5 或 OpenVLA-OFT 请求的必填条件；
+- YOLO 成功不是 π0.5 请求的必填条件；
 - YOLO 成功不是 `A_ONLY → HANDOFF_VERIFY → B_ONLY` 的令牌条件；
-- YOLO 故障不消耗 VLA 重试预算，也不改变两个 VLA 的固定职责；
+- YOLO 故障不消耗 π0.5 重试预算，也不改变双臂的固定职责；
 - Supervisor 仍依据冻结 FSM、新鲜在线观测、机器人遥测和安全条件继续、
   重试当前固定子任务或安全停止。
 
@@ -79,7 +79,7 @@ HTTP 下载、任意文件路径或自行维护另一套 CAS resolver。
 
 在线 YOLO 只产生原始预测。离线评测器把归档预测与冻结 COCO GT 结合，计算
 AP50、AP75、mAP50:95、Precision/Recall、每类指标和时延统计。GT 目录不得
-挂载到 Supervisor、YOLO、π0.5、OpenVLA-OFT 或在线 Verifier 容器。
+挂载到 Supervisor、YOLO、π0.5 或在线 Verifier 容器。
 
 ## Python 客户端与测试替身
 

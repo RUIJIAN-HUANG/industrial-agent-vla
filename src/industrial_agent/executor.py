@@ -14,7 +14,6 @@ from uuid import uuid4
 
 from .contracts import (
     ACTION_CONTRACT_VERSION,
-    OPENVLA_OFT_EXECUTOR_NAME,
     PI05_EXECUTOR_NAME,
     ActionChunk,
     ActionStep,
@@ -27,9 +26,6 @@ from .sync_contract import canonical_state_7d
 
 ARTIFACT_DIGEST_PATTERN = re.compile(r"sha256:[0-9a-fA-F]{64}")
 CAS_IMAGE_URI_PATTERN = re.compile(r"cas://sha256/([0-9a-fA-F]{64})")
-OPENVLA_OFT_TASK_TYPES = frozenset(
-    {"pick_place", "object_localization", "visual_manipulation"}
-)
 PI05_TASK_TYPES = frozenset(
     {"pick_place", "visual_manipulation", "instruction_interaction"}
 )
@@ -84,6 +80,7 @@ class ExecutionContext:
     step_id: int = 0
     timeout_ms: int = 15_000
     original_instruction: str | None = None
+    arm_id: str | None = None
 
 
 @runtime_checkable
@@ -624,136 +621,6 @@ def _parse_canonical_chunk(
     return chunk
 
 
-class OpenVLAOFTAdapter:
-    """Adapter for a separately deployed OpenVLA-OFT inference service.
-
-    Expected model request fields follow the upstream serving convention:
-    `full_image`, optional `wrist_image`, `state`, and `task_description`.
-    The service response must contain `action_chunk`.
-    """
-
-    def __init__(
-        self,
-        transport: ProcessTransport,
-        *,
-        checkpoint_sha: str,
-        norm_stats_sha: str,
-        task_types: frozenset[str] | None = None,
-    ):
-        checkpoint_sha = _require_pinned_artifact_digest(
-            checkpoint_sha, "checkpoint_sha"
-        )
-        norm_stats_sha = _require_pinned_artifact_digest(
-            norm_stats_sha, "norm_stats_sha"
-        )
-        self.transport = transport
-        self.descriptor = ExecutorDescriptor(
-            name=OPENVLA_OFT_EXECUTOR_NAME,
-            task_types=task_types or OPENVLA_OFT_TASK_TYPES,
-            action_contract_version=ACTION_CONTRACT_VERSION,
-            checkpoint_sha=checkpoint_sha,
-            norm_stats_sha=norm_stats_sha,
-        )
-        self._cancel_context_by_task: dict[str, tuple[str, str]] = {}
-
-    def health(self) -> bool:
-        try:
-            response = self.transport.request("/health", {}, 1_000)
-            if not isinstance(response, Mapping):
-                return False
-            _validate_health_response(response, self.descriptor)
-            return True
-        except Exception:
-            return False
-
-    def plan(
-        self, task: TaskSchema, observation: Observation, context: ExecutionContext
-    ) -> ActionChunk:
-        full_image, wrist_image, state, _ = _phase_vla_inputs(
-            observation,
-            arm_key="arm_b",
-            camera_key="arm_b_rgb",
-        )
-        request_id = str(uuid4())
-        subtask_id = str(task.metadata.get("subtask_id", task.task_id))
-        self._cancel_context_by_task[task.task_id] = (context.run_id, subtask_id)
-        model_input = {
-            "task_description": context.original_instruction or task.instruction,
-            "full_image": full_image,
-            "wrist_image": wrist_image,
-            "state": state,
-        }
-        payload = {
-            "schema_version": "1.0",
-            "request_id": request_id,
-            "trace_id": context.run_id,
-            "episode_id": context.run_id,
-            "task_id": task.task_id,
-            "subtask_id": subtask_id,
-            "step_id": context.step_id,
-            "observation_id": observation.observation_id,
-            "deadline_ms": context.timeout_ms,
-            "executor": self.descriptor.name,
-            "checkpoint_sha": self.descriptor.checkpoint_sha,
-            "norm_stats_sha": self.descriptor.norm_stats_sha,
-            "expected_action_contract": ACTION_CONTRACT_VERSION,
-            "model_input": model_input,
-        }
-        try:
-            response = self.transport.request("/v1/infer", payload, context.timeout_ms)
-        except TimeoutError as exc:
-            raise ExecutorError(
-                FailureCode.EXECUTOR_TIMEOUT, "OpenVLA-OFT inference timed out"
-            ) from exc
-        except ExecutorError:
-            raise
-        except Exception as exc:
-            raise ExecutorError(
-                FailureCode.EXECUTOR_UNAVAILABLE,
-                f"OpenVLA-OFT transport failed: {exc}",
-            ) from exc
-        if not isinstance(response, Mapping):
-            raise ExecutorError(
-                FailureCode.EXECUTOR_BAD_RESPONSE,
-                "OpenVLA-OFT response must be an object",
-            )
-        _validate_response_envelope(
-            response,
-            request_id=request_id,
-            context=context,
-            task=task,
-            observation=observation,
-            descriptor=self.descriptor,
-        )
-        return _parse_canonical_chunk(
-            response,
-            task=task,
-            descriptor=self.descriptor,
-        )
-
-    def cancel(self, task_id: str, reason: str) -> None:
-        trace_id, subtask_id = self._cancel_context_by_task.get(
-            task_id, (task_id, task_id)
-        )
-        try:
-            self.transport.request(
-                "/v1/cancel",
-                {
-                    "schema_version": "1.0",
-                    "request_id": str(uuid4()),
-                    "trace_id": trace_id,
-                    "episode_id": trace_id,
-                    "task_id": task_id,
-                    "subtask_id": subtask_id,
-                    "reason": reason,
-                },
-                1_000,
-            )
-        except Exception:
-            # Cancellation is best-effort; the supervisor still drops its queue.
-            return
-
-
 class Pi05Adapter:
     """Adapter for a separately deployed openpi π0.5 policy server.
 
@@ -799,16 +666,25 @@ class Pi05Adapter:
     def plan(
         self, task: TaskSchema, observation: Observation, context: ExecutionContext
     ) -> ActionChunk:
+        arm_id = context.arm_id or task.metadata.get("arm_id", "Arm_A")
+        if arm_id not in {"Arm_A", "Arm_B"}:
+            raise ExecutorError(
+                FailureCode.INVALID_TASK,
+                f"π0.5 task arm_id must be Arm_A or Arm_B, got {arm_id!r}",
+            )
+        arm_key = "arm_a" if arm_id == "Arm_A" else "arm_b"
+        camera_key = "arm_a_rgb" if arm_id == "Arm_A" else "arm_b_rgb"
         full_image, wrist_image, state, tcp_pose = _phase_vla_inputs(
             observation,
-            arm_key="arm_a",
-            camera_key="arm_a_rgb",
+            arm_key=arm_key,
+            camera_key=camera_key,
         )
         request_id = str(uuid4())
         subtask_id = str(task.metadata.get("subtask_id", task.task_id))
         self._cancel_context_by_task[task.task_id] = (context.run_id, subtask_id)
         model_input = {
             "prompt": context.original_instruction or task.instruction,
+            "arm_id": arm_id,
             "observation": {
                 "camera": {
                     "full_image": full_image,
@@ -826,6 +702,7 @@ class Pi05Adapter:
             "trace_id": context.run_id,
             "episode_id": context.run_id,
             "task_id": task.task_id,
+            "arm_id": arm_id,
             "subtask_id": subtask_id,
             "step_id": context.step_id,
             "observation_id": observation.observation_id,
@@ -905,13 +782,15 @@ def build_executors_from_config(
     if not isinstance(raw_executors, Mapping):
         raise ValueError("executors config must be an object")
 
-    adapter_types = {
-        OPENVLA_OFT_EXECUTOR_NAME: OpenVLAOFTAdapter,
-        PI05_EXECUTOR_NAME: Pi05Adapter,
-    }
+    adapter_types = {PI05_EXECUTOR_NAME: Pi05Adapter}
     built: list[Executor] = []
-    for name, adapter_type in adapter_types.items():
-        raw = raw_executors.get(name)
+    unknown_names = set(raw_executors) - set(adapter_types)
+    if unknown_names:
+        raise ValueError(
+            f"config.executors contains unsupported executors: {sorted(unknown_names)}"
+        )
+    for name, raw in raw_executors.items():
+        adapter_type = adapter_types[name]
         if not isinstance(raw, Mapping):
             raise ValueError(f"config.executors.{name} must be an object")
         if set(raw) != EXECUTOR_CONFIG_FIELDS:
@@ -955,7 +834,7 @@ def build_executors_from_config(
 
 
 class ExecutorRegistry:
-    """Registry for the two lifecycle-assigned VLA services."""
+    """Registry for the single lifecycle-assigned π0.5 service."""
 
     def __init__(
         self,

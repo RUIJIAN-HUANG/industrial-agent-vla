@@ -9,7 +9,7 @@
   保留像素审计样例。
 - §3.3.1 Para185：模型返回动作块后，适配器裁维、加
   space_id/frame/control_hz/checkpoint_sha；反归一化由 openpi output_transform 在
-  policy.infer 内完成（用 compute_norm_stats 生成的本项目自有统计，满足 Para186 不沿用 OpenVLA），
+  policy.infer 内完成（用 compute_norm_stats 生成的本项目自有统计），
   适配器不再二次反归一化。
 - §3.3.1 Para186：失败切换时清空动作队列与客户端缓存，重新传当前图像。
 - Table 21 Row3（§3.3）：需要 LoRA 时必须走 JAX 路径。
@@ -285,7 +285,7 @@ class Pi05Executor(BaseExecutor):
         """记录本项目 norm_stats 的 SHA（方案书 §7.2：日志定位唯一统计资产）。
 
         反归一化由 openpi output_transform 在 policy.infer 内完成，使用 compute_norm_stats
-        生成的本项目自有统计（满足 §3.3.1 Para186 不沿用 OpenVLA）；适配器不再二次反归一化，
+        生成的本项目自有统计；适配器不再二次反归一化，
         此处只读取 SHA 用于追溯。
         """
         path = self.norm_stats_path

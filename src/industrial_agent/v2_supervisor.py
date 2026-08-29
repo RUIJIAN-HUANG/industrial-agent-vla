@@ -1,4 +1,4 @@
-"""Formal V2 π0.5/Arm_A continuous closed-loop Supervisor."""
+"""Formal V2 π0.5 closed-loop Supervisor for either configured arm."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from .environment import ExecutionEnvironment, execution_guard_digest
 from .errors import AgentError, FailureCode
 from .executor import ExecutionContext, Executor
 from .fsm import AgentFSM, AgentState
-from .orchestrator import RunResult
+from .run_result import RunResult
 from .safety import ActionSafetyValidator, SafetyPolicy, safety_state_failure
 from .v2_observation import V2ObservationGateway
 from .v2_task_profile import (
@@ -85,6 +85,7 @@ class V2TaskPlanner:
             preconditions=(),
             postconditions=task.postconditions,
             assigned_executor="pi05",
+            arm_id=spec.active_arm,
             repeat_until_postcondition=True,
             max_iterations=100,
             status=SubtaskStatus.READY,
@@ -210,7 +211,10 @@ class V2Supervisor:
                     executor_history,
                     token_history,
                 )
-            fsm.transition(AgentState.PLANNING, "V2 task mapped to pi05/Arm_A")
+            fsm.transition(
+                AgentState.PLANNING,
+                f"V2 task mapped to pi05/{plan.subtasks[0].arm_id}",
+            )
             if not self.executor.health():
                 fsm.transition(AgentState.FAILED, "pi05 health check failed")
                 return self._result(
@@ -288,8 +292,13 @@ class V2Supervisor:
                             token_history,
                         )
 
-                    fsm.transition(AgentState.ASSIGNING_ROLE, "grant A_ONLY to pi05")
-                    token_history.append(V2_CONTROL_TOKEN)
+                    arm_id = plan.subtasks[0].arm_id or "Arm_A"
+                    control_token = "A_ONLY" if arm_id == "Arm_A" else "B_ONLY"
+                    fsm.transition(
+                        AgentState.ASSIGNING_ROLE,
+                        f"grant {control_token} to pi05",
+                    )
+                    token_history.append(control_token)
                     fsm.transition(
                         AgentState.EXECUTING, "request and execute one 7D action"
                     )
@@ -300,14 +309,15 @@ class V2Supervisor:
                         step_id=step_id,
                         timeout_ms=self.executor_timeout_ms,
                         original_instruction=task.instruction,
+                        arm_id=arm_id,
                     )
                     chunk = self.executor.plan(task, observation, context)
                     executor_history.append("pi05")
                     decision = self.safety.validate_and_limit(
                         chunk,
                         observation,
-                        arm_id="Arm_A",
-                        control_token=V2_CONTROL_TOKEN,
+                        arm_id=arm_id,
+                        control_token=control_token,
                     )
                     if not decision.accepted or decision.chunk is None:
                         return self._stop_result(
@@ -325,8 +335,8 @@ class V2Supervisor:
                     motion_started = True
                     next_raw = environment.step(
                         action,
-                        arm_id="Arm_A",
-                        control_token=V2_CONTROL_TOKEN,
+                        arm_id=arm_id,
+                        control_token=control_token,
                         command_id=f"{run_id}-command-{step_id:06d}",
                         expected_observation_id=observation.observation_id,
                         expected_state_digest=execution_guard_digest(observation.data),

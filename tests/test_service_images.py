@@ -30,28 +30,24 @@ class ServiceImageResolverTests(unittest.TestCase):
             camera_id=camera_id,
         ).to_dict()
 
-    def test_resolves_pi05_openvla_and_yolo_requests_to_verified_pixels(self) -> None:
-        pi05 = self.resolver.resolve_vla_request(
-            {
-                "executor": "pi05",
-                "model_input": {
-                    "observation": {
-                        "camera": {
-                            "full_image": self._reference("CAM_A_TOP"),
-                            "wrist_image": None,
-                        }
-                    }
-                },
-            }
-        )
-        openvla = self.resolver.resolve_vla_request(
-            {
-                "executor": "openvla_oft",
-                "model_input": {
-                    "full_image": self._reference("CAM_B_TOP"),
-                    "wrist_image": None,
-                },
-            }
+    def test_resolves_pi05_for_both_arm_cameras_and_yolo(self) -> None:
+        pi05_images = tuple(
+            self.resolver.resolve_vla_request(
+                {
+                    "executor": "pi05",
+                    "arm_id": arm_id,
+                    "model_input": {
+                        "arm_id": arm_id,
+                        "observation": {
+                            "camera": {
+                                "full_image": self._reference(camera_id),
+                                "wrist_image": None,
+                            }
+                        },
+                    },
+                }
+            ).full_image
+            for arm_id, camera_id in (("Arm_A", "CAM_A_TOP"), ("Arm_B", "CAM_B_TOP"))
         )
         yolo = self.resolver.resolve_yolo_request(
             {
@@ -60,7 +56,7 @@ class ServiceImageResolverTests(unittest.TestCase):
             }
         )
 
-        for resolved in (pi05.full_image, openvla.full_image, yolo.image):
+        for resolved in (*pi05_images, yolo.image):
             self.assertEqual(
                 (resolved.width, resolved.height),
                 FROZEN_RGB_SIZE,
@@ -119,10 +115,16 @@ class ServiceImageResolverTests(unittest.TestCase):
         with self.assertRaises(ImageCasError) as caught:
             self.resolver.resolve_vla_request(
                 {
-                    "executor": "openvla_oft",
+                    "executor": "pi05",
+                    "arm_id": "Arm_B",
                     "model_input": {
-                        "full_image": missing,
-                        "wrist_image": None,
+                        "arm_id": "Arm_B",
+                        "observation": {
+                            "camera": {
+                                "full_image": missing,
+                                "wrist_image": None,
+                            }
+                        },
                     },
                 }
             )

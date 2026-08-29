@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "industrial-agent-vla"
 version = "0.1.0"
-description = "Lightweight industrial supervisor agent with dual-VLA executors"
+description = "Lightweight industrial supervisor agent with a dual-arm pi05 executor"
 requires-python = ">=3.10"
 dependencies = [
     "h5py>=3.11,<4",
@@ -53,6 +53,6 @@ ignore = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "services/openvla_oft/tests", "services/yolo/tests"]
+testpaths = ["tests", "services/yolo/tests"]
 pythonpath = ["src"]
 addopts = "-ra --strict-config --strict-markers"

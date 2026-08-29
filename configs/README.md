@@ -18,6 +18,5 @@
 `agent.default.json` 一致。`v2-task-profile.json` 是任务 ID、用户指令、对象和槽位
 的一一对应真源。五条 UI 指令中，尚未具备正式数据合同的三条不得进入推理。
 
-`agent.v1.legacy.json` 仅供历史回归测试读取。V1 已废除，生产
-`build_supervisor()` 会明确拒绝任何 1.x 配置；该文件不得用于部署、演示、评测或
-新数据采集。
+仓库不再保留旧版 Agent 配置。生产入口只接受 V2 配置，模型服务的 YOLO 参数
+单独位于 `perception.yolo-*.json`，π0.5 参数位于 `agent.default.json`。

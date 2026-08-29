@@ -418,9 +418,7 @@ def print_summary(config: Any, config_name: str, args: argparse.Namespace) -> No
     print(f"  openpi 可用:        {pi05_config.OPENPI_AVAILABLE}")
     print(f"  Mock 模式:          {args.mock}")
     print("-" * 72)
-    print(
-        f"  LoRA Rank:          {lora_rank}  (方案书 §3.2.1 OpenVLA-OFT 示例；π0.5 初始候选值)"
-    )
+    print(f"  LoRA Rank:          {lora_rank}  (公开 LoRA 示例；π0.5 初始候选值)")
     print(f"  model action_dim:   {model_action_dim}  (兼容 pi05_base 投影层)")
     print(
         f"  service action_dim: {canonical_action_dim}"

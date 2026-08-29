@@ -1045,11 +1045,13 @@ def _make_http_infer_body(
         "observation_id": "obs-1029",
         "deadline_ms": 15000,
         "executor": "pi05",
+        "arm_id": "Arm_A",
         "checkpoint_sha": TEST_CKPT_SHA_HTTP,
         "norm_stats_sha": TEST_NORM_SHA_HTTP,
         "expected_action_contract": "1.0",
         "model_input": {
             "prompt": prompt,
+            "arm_id": "Arm_A",
             "observation": {
                 "camera": {
                     "full_image": full_image,
@@ -1373,7 +1375,7 @@ def test_http_infer_sha_mismatch_rejected(test_client, mock_executor):
 def test_http_infer_executor_name_mismatch(test_client, mock_executor):
     """HTTP /v1/infer 在校验 executor 字段不匹配时返回 400 TASK_1001_INVALID。"""
     body = _make_http_infer_body()
-    body["executor"] = "openvla_oft"  # 应为 pi05
+    body["executor"] = "retired_executor"  # 应为 pi05
 
     resp = test_client.post("/v1/infer", json=body)
     assert resp.status_code == 400

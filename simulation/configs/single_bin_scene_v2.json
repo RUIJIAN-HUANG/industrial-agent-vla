@@ -26,7 +26,7 @@
     {
       "id": "Arm_B",
       "model": "franka_panda",
-      "executor": "openvla_oft",
+      "executor": "pi05",
       "role": "manual_bin_transport",
       "base_pose": {"position_m": [0.5, -0.3, 0.75], "rpy_deg": [0.0, 0.0, 90.0]},
       "soft_work_radius_m": 0.65,
@@ -102,7 +102,7 @@
   "cameras": [
     {"id": "CAM_A_TOP", "prim_path": "/World/Cameras/CAM_A_TOP", "pose": {"position_m": [-0.6, -0.02, 1.9]}, "look_at_m": [-0.55, 0.08, 0.78], "resolution_px": [1280, 720], "horizontal_fov_deg": 82.0, "consumers": ["pi05", "yolo"]},
     {"id": "CAM_HANDOFF", "prim_path": "/World/Cameras/CAM_HANDOFF", "pose": {"position_m": [0.0, -0.35, 1.6]}, "look_at_m": [0.0, 0.03, 0.82], "resolution_px": [1280, 720], "horizontal_fov_deg": 82.0, "consumers": ["yolo", "verifier"]},
-    {"id": "CAM_B_TOP", "prim_path": "/World/Cameras/CAM_B_TOP", "pose": {"position_m": [0.45, -0.02, 1.9]}, "look_at_m": [0.35, 0.08, 0.78], "resolution_px": [1280, 720], "horizontal_fov_deg": 82.0, "consumers": ["openvla_oft", "yolo"]}
+    {"id": "CAM_B_TOP", "prim_path": "/World/Cameras/CAM_B_TOP", "pose": {"position_m": [0.45, -0.02, 1.9]}, "look_at_m": [0.35, 0.08, 0.78], "resolution_px": [1280, 720], "horizontal_fov_deg": 82.0, "consumers": ["pi05", "yolo"]}
   ],
   "safety": {"handoff_zone": {"x_m": [-0.18, 0.18], "y_m": [-0.15, 0.15], "z_m": [0.74, 1.2]}},
   "workflow": {

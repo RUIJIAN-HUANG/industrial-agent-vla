@@ -1,15 +1,15 @@
 # 贡献与协作规范
 
 本仓库由 6 名成员在短周期内并行开发。所有贡献都应当可追踪、可复现、可评审、可回退。完整的新手操作步骤见
-[GitHub 与团队协作指南](docs/project-management/github-collaboration-guide.md)。
+项目状态与当前工作入口见 [项目看板](docs/project-management/dashboard.md)。
 
 ## 1. 不可变更的项目基线
 
 1. `docs/official/` 下两份比赛官方 PDF 是需求与验收的唯一最高优先级依据，不得改写、替换或用团队推测覆盖。
-2. 已冻结的系统架构是四 Agent、双 Franka、固定串行：
-   π0.5/Arm_A → `HANDOFF_VERIFY` → OpenVLA-OFT/Arm_B，YOLO 为同步调用、
-   失败非门控的评分 sidecar。任何成员不得自行调整 Agent 数量、机械臂数量、
-   固定职责或令牌顺序。确需变更时，必须先创建 Issue，说明官方依据、影响范围、
+2. 当前系统架构是双 Franka、固定串行、单 π0.5 双臂服务：
+   π0.5/Arm_A → `HANDOFF_VERIFY` → π0.5/Arm_B，YOLO 为同步调用、失败非门控的
+   评分 sidecar。Arm_B 的控制权仍必须经过 `B_ONLY` 令牌；不得因复用模型服务而
+   绕过交接、重观察或安全停止。架构变更必须先创建 Issue，说明官方依据、影响范围、
    回退方案，并由 A（项目负责人/Supervisor/集成）确认。
 3. `main` 始终保持可运行。禁止直接向 `main` 推送，所有变更均通过 Pull Request（PR）合入。
 4. 模型权重、原始/生成数据集、仿真录屏、训练缓存、密钥和个人环境文件默认不得进入 Git。
@@ -21,8 +21,8 @@
 | A | 项目管理、需求与评分冻结、Supervisor、状态机、令牌、固定生命周期、集成 | Supervisor、跨模块契约、最终集成 |
 | B | Isaac Sim、双 Franka、夹爪、控制器、物理与仿真性能 | 仿真环境、执行器、双臂安全状态机 |
 | C | 场景、资产、数据与教师轨迹 | 数据格式、场景资产、数据切分 |
-| D | OpenVLA-OFT、训练/推理服务与相机适配 | OpenVLA 服务及动作输出 |
-| E | π0.5/openpi、训练/推理服务与动作适配 | π0.5 服务及动作输出 |
+| D | VLA 数据与服务迁移支持 | 双臂 VLA 数据和接口评审 |
+| E | π0.5/openpi、训练/推理服务与动作适配 | 双臂 π0.5 服务及动作输出 |
 | F | 测试、复现、评测、日志、CI、材料与证据链 | 测试、指标、日志、复现和提交材料 |
 
 成员的 GitHub 用户名确认后，再由 A 更新 `.github/CODEOWNERS`。在此之前，PR 作者需在 PR 中手动请求对应角色评审。
@@ -44,7 +44,7 @@ Issue → 从最新 main 建分支 → 小步提交 → 自测 → Push → Draf
 feature/123-a-agent-fsm
 fix/124-b-sim-timeout
 data/125-c-canonical-split
-experiment/126-d-openvla-oft
+experiment/126-e-pi05-dual-arm
 docs/127-f-evidence-index
 hotfix/128-e-action-contract
 ```

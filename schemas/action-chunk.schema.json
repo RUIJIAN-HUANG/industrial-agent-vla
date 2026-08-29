@@ -30,10 +30,7 @@
       "minLength": 1
     },
     "executor": {
-      "enum": [
-        "openvla_oft",
-        "pi05"
-      ]
+      "const": "pi05"
     },
     "action_space": {
       "const": "ee_delta_pose_gripper"

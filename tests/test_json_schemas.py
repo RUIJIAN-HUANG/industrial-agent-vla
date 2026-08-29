@@ -117,7 +117,7 @@ class JsonSchemaTests(unittest.TestCase):
             "subtask_id": "S01",
             "step_id": 0,
             "observation_id": "obs-1",
-            "executor": "openvla_oft",
+            "executor": "pi05",
             "checkpoint_sha": CHECKPOINT_SHA,
             "norm_stats_sha": NORM_STATS_SHA,
             "status": "ok",
@@ -125,7 +125,7 @@ class JsonSchemaTests(unittest.TestCase):
                 "contract_version": "1.0",
                 "chunk_id": "chunk-1",
                 "task_id": "task:S01",
-                "executor": "openvla_oft",
+                "executor": "pi05",
                 "action_space": "ee_delta_pose_gripper",
                 "frame": "robot_base",
                 "translation_unit": "m",
@@ -153,7 +153,7 @@ class JsonSchemaTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             validator.validate(mutable_alias)
 
-    def test_vla_request_schemas_require_null_wrist_images(self) -> None:
+    def test_pi05_request_schema_requires_null_wrist_images(self) -> None:
         schema = json.loads(
             (self.root / "schemas" / "executor-infer.schema.json").read_text(
                 encoding="utf-8"
@@ -161,31 +161,23 @@ class JsonSchemaTests(unittest.TestCase):
         )
         definitions = schema["$defs"]
         self.assertIsNone(
-            definitions["openVlaModelInput"]["properties"]["wrist_image"]["const"]
-        )
-        self.assertIsNone(
             definitions["pi05ModelInput"]["properties"]["observation"]["properties"][
                 "camera"
             ]["properties"]["wrist_image"]["const"]
         )
-        openvla_image = definitions["openVlaModelInput"]["properties"]["full_image"][
-            "allOf"
-        ][1]["properties"]
         pi05_image = definitions["pi05ModelInput"]["properties"]["observation"][
             "properties"
         ]["camera"]["properties"]["full_image"]["allOf"][1]["properties"]
-        for image_schema in (openvla_image, pi05_image):
-            self.assertEqual(image_schema["width"]["const"], 1280)
-            self.assertEqual(image_schema["height"]["const"], 720)
+        self.assertEqual(pi05_image["width"]["const"], 1280)
+        self.assertEqual(pi05_image["height"]["const"], 720)
 
-        openvla_state = definitions["openVlaModelInput"]["properties"]["state"]
         pi05_robot = definitions["pi05ModelInput"]["properties"]["observation"][
             "properties"
         ]["robot"]["properties"]
-        for state_schema in (openvla_state, pi05_robot["state"]):
-            self.assertEqual(state_schema["minItems"], 7)
-            self.assertEqual(state_schema["maxItems"], 7)
-            self.assertIn("rotation vector", state_schema["description"])
+        state_schema = pi05_robot["state"]
+        self.assertEqual(state_schema["minItems"], 7)
+        self.assertEqual(state_schema["maxItems"], 7)
+        self.assertIn("rotation vector", state_schema["description"])
         self.assertEqual(pi05_robot["tcp_pose_m_rad"]["minItems"], 6)
         self.assertEqual(pi05_robot["tcp_pose_m_rad"]["maxItems"], 6)
 

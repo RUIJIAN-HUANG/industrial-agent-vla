@@ -77,16 +77,14 @@ V2 的静态 PASS 不代表 GUI、物理、IK、抓取或满载搬运通过。�
 及训练就绪命令见
 [`../docs/v2-replay-batch-generation.md`](../docs/v2-replay-batch-generation.md)。
 
-## 历史 V1 工具（已废除，仅回归）
+## Isaac Sim 场景工具
 
-`single_bin_pack_handoff_v1` 不再用于部署、演示或评测。下列工具只为重放历史
-证据保留，生产默认入口不会装配它们。
-
-V1 场景工具如下：
+场景工具负责几何、物理、相机和双臂执行环境；Agent 边界由 V2 Supervisor
+和服务合同负责。场景工具如下：
 
 ```text
 simulation/
-├── configs/single_bin_scene_v1.json  # V1 自动闭环场景坐标合同
+├── configs/single_bin_scene_v1.json  # 兼容场景坐标合同
 ├── scene_layout.py                   # 无 Isaac Sim 也可运行的静态预检
 ├── isaac_compat.py                   # Isaac Sim 4.2/4.5/5.1 薄兼容层
 ├── single_bin_scene_builder.py       # USD 几何、物理、相机与机器人构建
@@ -97,7 +95,7 @@ simulation/
 ```
 
 执行 Adapter 的线程 Gate、durable command journal、Linux 双臂 smoke 和明确未覆盖
-范围见 [`../docs/simulation/isaac-execution-adapter.md`](../docs/simulation/isaac-execution-adapter.md)。
+范围以对应脚本的 `--help`、测试和运行日志为准。
 
 场景构建入口负责“可导入的场景 USD + Camera Prim”，尚不自动创建运行期
 RenderProduct。创建 RGB Annotator 后，必须把其 `uint8 H×W×3/4` 输出传给
@@ -107,14 +105,13 @@ RenderProduct。创建 RGB Annotator 后，必须把其 `uint8 H×W×3/4` 输出
 
 场景 JSON 只保存几何、物理、相机和场景事件名。交接稳定帧数属于 Supervisor
 生命周期配置，机械臂正常工作空间属于控制器安全配置，历史机器真源为
-`configs/agent.v1.legacy.json`；不得在场景 JSON 中重复维护
+    `configs/agent.default.json`；不得在场景 JSON 中重复维护
 `handoff_verify_stable_cycles` 或 `normal_workspace_limits`。
 Reset 后的物理稳定步数也不属于静态 USD 场景合同；应由 G0 运行/验收入口通过
 显式参数执行并记录。在该运行入口落地前，不得用场景 JSON 中未消费的
 `reset_settle_steps` 宣称已经完成自动稳定。
 
-成员 B 补做 D00-D03 时，使用
-[`run_g0_acceptance.py`](run_g0_acceptance.py) 完成 1000 步、20 次 Reset、
+使用 [`run_g0_acceptance.py`](run_g0_acceptance.py) 完成 1000 步、20 次 Reset、
 双臂状态和三相机样本的 G0 验收。Linux 一键入口与逐步说明分别是：
 
 ```bash
@@ -124,7 +121,7 @@ EXPECTED_GIT_SHA="$(git rev-parse HEAD)" \
 ```
 
 - [`../scripts/run_g0_linux.sh`](../scripts/run_g0_linux.sh)
-- [`../docs/simulation/member-b-catch-up-guide.md`](../docs/simulation/member-b-catch-up-guide.md)
+- 运行产物写入被 Git 忽略的 `artifacts/g0/`；只提交小型证据索引。
 
 原始结果写入被 Git 忽略的 `artifacts/g0/`；只提交填写后的 Markdown、代码和
 小型证据索引，不能把失败结果手工改成通过。
@@ -132,7 +129,7 @@ EXPECTED_GIT_SHA="$(git rev-parse HEAD)" \
 主开发与最终 Docker 建议冻结 **Isaac Sim 5.1.x**。代码兼容 4.5，并为 4.2
 保留最低限度的导入回退；不要把多个 Isaac Sim 版本混入同一个正式镜像。
 
-### V1-1. 先做本地合同与距离预检
+### 先做本地合同与距离预检
 
 这一步只需要普通 Python 3.10+：
 
@@ -146,7 +143,7 @@ python -m pytest tests\test_scene_layout.py
 通过仅表示场景数量、坐标、区域配方和水平软半径没有明显错误，不代表机器人 IK、
 碰撞或抓取物理已经通过。
 
-### V1-2. 在 Isaac Sim 中生成 USD
+### 在 Isaac Sim 中生成 USD
 
 若使用 NVIDIA 安装包，在 PowerShell 中将路径替换为自己的 Isaac Sim 安装目录：
 
@@ -178,7 +175,7 @@ python simulation\build_single_bin_scene.py `
 `/Isaac/Robots/Franka/franka.usd`。找不到资产时脚本会明确失败，不会悄悄生成两台
 “空机器人”。
 
-### V1-3. 打开并复核
+### 打开并复核
 
 在 Isaac Sim 中选择 **File → Open**，打开：
 
@@ -208,7 +205,7 @@ simulation/generated/single_bin_scene_v1.usda
 色块是各 Station 下的 `Marker` 子节点。后续控制器应读取 Station 根节点，不能把
 色块表面高度误当成料箱中心高度。
 
-### V1-4. Isaac Sim 内的硬验收
+### Isaac Sim 内的硬验收
 
 生成 USD 后，必须按顺序完成：
 
@@ -217,7 +214,7 @@ simulation/generated/single_bin_scene_v1.usda
 3. B 臂只在 durable `handoff.ready` 事件确认后抓取前侧把手并搬到 `FINISHED_01`；
 4. 完整机械臂碰撞体不能同时进入共享区；
 5. 连续 Reset 20 次无穿模、弹飞和 NaN；
-6. 教师策略完整闭环至少连续 3 次成功，再接入双 VLA。
+6. 教师策略完整闭环至少连续 3 次成功，再接入单一 π0.5 双臂服务。
 
 最终 Docker 不应依赖比赛现场联网下载 Franka 资产。发布前应在断网环境重新打开
 生成的 USD，并检查两台 Articulation、外部引用和三台相机都完整。
