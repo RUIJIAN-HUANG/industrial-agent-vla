@@ -3,7 +3,11 @@
   "checkpoint": {
     "filename": "best.pt",
     "sha256": "sha256:67a70dd1f575919bde9184a993097771bbdbaa7516cdd251c1f91b2a490f1e5c",
-    "git_storage": "external_artifact_required"
+    "git_storage": "external_model_repository",
+    "source_repository": "RUIJIAN-HUANG/industrial-agent-vla-model-yolo-manual800",
+    "source_pull_request": "https://github.com/RUIJIAN-HUANG/industrial-agent-vla-model-yolo-manual800/pull/1",
+    "source_commit": "7e4c37ad01831e08d87239a26cfed65f8b3b8d99",
+    "source_path": "manual994/best.pt"
   },
   "class_map": {
     "path": "services/yolo/src/yolo_service/resources/class_map.single_bin_v2.json",
