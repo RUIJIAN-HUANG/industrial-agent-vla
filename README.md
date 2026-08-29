@@ -1,116 +1,101 @@
 # XH-202607 工业环境 VLA 智能体
 
-面向“工业环境下物体感知识别与指令交互型智能体研发”比赛的六人协作仓库。
-项目正式目标是在 V2 场景中完成单一、可审计的连续闭环：
+面向工业环境中的视觉感知、语言指令和机械臂执行。本仓库目前以 V2
+`single_bin_manual_industrial_v2` 为唯一正式开发口径，重点维护可审计的
+π0.5/Arm_A 连续闭环、人工 Canonical Episode 采集和模型服务合同。
 
-> 用户选择冻结指令 → 总控发送对应 V2 task_id → π0.5 控制 Arm_A →
-> 每次执行一个 7D 微动作并重新观测 → 3 帧 2 票终局核验 → 安全停止。
+> 当前边界（2026-08-29）：V2 场景、任务合同、Canonical V2 Recorder/Reader、
+> Pi0.5 数据 Preflight 和相关 CI 已进入 `main`。完整的 Isaac Sim GUI、物理、IK、
+> 抓取、碰撞和满载搬运证据仍需在目标 Isaac Sim 环境中单独完成；代码存在不等于
+> 真实机器人或正式比赛验收已经通过。
 
-总控不做 NLP、复杂度判断或模型选择，只验证冻结的 task_id、指令、对象和槽位
-是否逐字匹配。V1 四 Agent/双 VLA 生命周期已经废除，不属于正式演示或评测入口。
+## 1. 当前正式闭环
 
-当前状态（2026-08-18）：**V2 人工工业场景源码、静态合同、键盘采集、Pink IK
-与 Canonical Episode 入口已经合入 `main`；完整 Python CI 已通过。Isaac Sim
-可见 GUI、物理、IK、抓取和满载搬运仍需按 V2 Gate 生成正式证据。**
+```text
+用户选择冻结指令
+        ↓
+总控校验 task_id、指令、对象和槽位的一一对应
+        ↓
+π0.5（唯一正式 VLA，固定控制 Arm_A）
+        ↓
+执行一个 7D 微动作 → 获取新鲜观测 → 再推理
+        ↓
+3 个新鲜终局帧中至少 2 票通过
+        ↓
+成功结束或安全停止
+```
 
-## 当前工业场景口径
+系统不设置 NLP Agent，不在运行时改写用户指令，不让 YOLO DetectionPacket
+成为 π0.5 推理前置条件。Arm_B 在当前正式单件任务中保持退避和静止；V1 的
+四 Agent、双 VLA 和双臂自动交接流程仅作为历史回归材料。
 
-当前场景真源是 `single_bin_manual_industrial_v2`，用于人工工业数据采集：
+### 正式任务与精确指令
 
-- 两台 Franka：`Arm_A` 负责零件装箱与交接，`Arm_B` 负责料箱搬运；
+`task_id` 和用户指令必须逐字匹配。以下两条同时用于界面、采集数据、训练
+和 Pi0.5 推理：
+
+| task_id | 精确指令 | 目标 |
+|---|---|---|
+| `P01_TO_S11` | `把P01放到S11中` | 将轴件 P01 放入料箱 S11 |
+| `W01_TO_S14` | `把W01放到S14中` | 将扳手 W01 放入料箱 S14 |
+
+对应机器真源：[`configs/v2-task-profile.json`](configs/v2-task-profile.json)、
+[`configs/mvp-instruction-options.json`](configs/mvp-instruction-options.json)。
+不要把自然语言扩写成“请将……放置……”；任何标点、空格或措辞差异都可能导致
+任务解析、Canonical 校验或 Pi0.5 服务拒绝请求。
+
+当前 UI 还登记了三条未开放正式数据采集的任务：
+`P03_UPRIGHT_TO_S12`、`BIN01_TO_FINISHED01` 和 `PACK_ALL_AND_FINISH`。
+它们必须先完成各自的任务合同和验收，不能伪装成上述两个正式任务的数据。
+
+## 2. V2 场景
+
+- 两台 Franka：`Arm_A` 负责单件装箱，`Arm_B` 当前正式任务保持静止；
 - 三台固定 RGB 相机：`CAM_A_TOP`、`CAM_HANDOFF`、`CAM_B_TOP`；
-- 8 个程序化工业零件：4 个轴件、2 个六角螺母、2 把开口扳手；
-- A/B/C/D 四个区域各放 2 件，P03/P04 初始倒立；
-- 一个 `2×4` 料箱，S11-S24 与 P01-P04/N01-N02/W01-W02 固定映射；
-- 料箱中央提梁提供 `BIN_CARRY_TCP`，计划满载质量为 `1.0 kg`；
-- 人工键盘动作按 `10 Hz` 写入 Canonical Episode，在线 Observation 禁止 GT。
+- 8 个工业零件：P01–P04、N01–N02、W01–W02；
+- 一个 `2×4` 料箱，槽位为 S11–S24，并使用中央提梁 `BIN_CARRY_TCP`；
+- A/B/C/D 四个区域各放置 2 件物体，P03/P04 初始为倒立状态；
+- 采集动作频率为 10 Hz，Canonical state/action 均为有限值的 `float32[N,7]`；
+- 在线 Observation、VLA 输入和在线终局证据禁止包含 GT，GT 只能写入离线证据目录。
 
-角色 E 的 π0.5 Isaac 闭环入口默认使用
-`configs/agent.default.json`、V2 task catalog 和
-`P01_TO_S11/W01_TO_S14` 正式任务。
+固定槽位映射：
 
-V2 的配置、构建、采集与验收入口见
-[V2 人工工业采集说明](docs/v2-manual-industrial-collection.md)。
+| 槽位 | S11 | S12 | S13 | S14 | S21 | S22 | S23 | S24 |
+|---|---|---|---|---|---|---|---|---|
+| 零件 | P01 | P03 | N01 | W01 | P02 | P04 | N02 | W02 |
+| 类型 | 轴件 | 轴件 | 螺母 | 扳手 | 轴件 | 轴件 | 螺母 | 扳手 |
 
-历史 V1 源码与 `configs/agent.v1.legacy.json` 仅用于回归审计；生产组合入口会
-明确拒绝 1.x 配置。
+场景机器真源是 [`simulation/configs/single_bin_scene_v2.json`](simulation/configs/single_bin_scene_v2.json)，
+完整采集顺序见 [`docs/v2-manual-industrial-collection.md`](docs/v2-manual-industrial-collection.md)。
 
-![中文版：冻结四 Agent 双 VLA 双臂闭环](docs/architecture/assets/four-agent-fixed-dual-vla-architecture-v4-zh.png)
+## 3. 快速开始
 
-[查看简化 SVG 可编辑版](docs/architecture/assets/four-agent-single-bin-static-handoff-framework-v3.svg)
+要求 Python 3.10+。普通 Python 环境可以运行合同检查、Mock 回归和大部分单元测试；
+Isaac Sim、LeRobot、OpenPI 和真实模型权重需要各自固定的专用环境。
 
-## 不可变项目基线
+### 安装测试依赖
 
-- 两份官方 PDF 是需求与验收的唯二官方真源，原字节保存在
-  [`docs/official/`](docs/official/)。
-- 当前架构图保存在 [`docs/architecture/assets/`](docs/architecture/assets/)；
-  原始冻结图与 A-F 分工快照保存在 [`docs/assets/`](docs/assets/)。
-- 初版方案 DOCX 仅是可修订参考，保存在 [`docs/source/`](docs/source/)。
-- 运行 `python scripts/verify_official_baselines.py` 校验唯二官方 PDF；
-  `python scripts/verify_project_frozen_inputs.py` 单独校验两张冻结图和初版 DOCX 快照。
-- 冲突、评分和六项提交物的工程化索引见
-  [官方需求基线](docs/requirements/official-requirements-baseline.md)。
-
-任何 PR 都不得修改官方 PDF 或弱化每步重观察、失败恢复、仿真初赛等硬要求。
-
-V2 正式运行边界：
-
-- 生产 Agent 为总控与 π0.5；不设置 NLP Agent；
-- π0.5 固定控制 Arm_A，Arm_B 在当前正式任务中保持退避和静止；
-- 控制令牌只使用 `NONE → A_ONLY → NONE`；
-- 每个动作后必须获取新鲜 V2 Observation；
-- 终局必须由在线传感提供器给出 3 帧至少 2 票证据；
-- GT 不得进入 VLA、Supervisor 或在线终局提供器。
-
-## 现在从这里开始
-
-| 你要做什么 | 入口 |
-|---|---|
-| 查看 D01-D40 任务、Gate 和降级点 | [40 天逐日计划](docs/project-management/daily-plan.md) |
-| 查看 Epic/User Story/Task 分解 | [项目 WBS](docs/project-management/wbs.md) |
-| 查看每日 A-F 任务 | [每日任务公告索引](docs/project-management/daily/README.md) |
-| 查看每日 09:00 自动发布规则 | [每日任务自动化](docs/project-management/daily-task-automation.md) |
-| 学习 clone、分支、提交、PR、冲突处理 | [GitHub 协作指南](docs/project-management/github-collaboration-guide.md) |
-| 判断代码、模型、数据和报告应放哪里 | [仓库目录与文件规范](docs/repository-structure.md) |
-| 查看团队的 Issue/PR/DoD 规则 | [CONTRIBUTING.md](CONTRIBUTING.md) |
-| 查看总 Agent 设计 | [Agent 架构文档](docs/architecture/agent-framework.md) |
-| 查看当前 V2 工业场景 | [V2 人工工业采集说明](docs/v2-manual-industrial-collection.md) |
-| 查看 V2 正式闭环与历史 V1 边界 | [场景与流程总说明](docs/architecture/final-frozen-scene-and-flow.md) |
-| 对接 D/E/B/F 服务 | [极详细接口契约](docs/architecture/interface-contracts.md) |
-| 采集训练数据并安排 B-F 工作 | [数据采集与五人执行指南](docs/project-management/data-collection-and-five-member-execution-guide.md) |
-| 查看真实完成度与评分缺口 | [项目看板](docs/project-management/dashboard.md) |
-| 查看风险与回退 | [风险登记册](docs/project-management/risk-register.md) |
-
-## 历史 V1 Mock（仅回归）
-
-要求 Python 3.10+。核心包没有第三方运行时依赖。
+PowerShell：
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -e ".[test]"
-python scripts/run_mock_demo.py
-python -m unittest discover -s tests -v
-python scripts/verify_official_baselines.py
-python scripts/verify_project_frozen_inputs.py
 ```
 
-macOS/Linux 使用：
+macOS/Linux：
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e ".[test]"
-python scripts/run_mock_demo.py
-python -m pytest -q
 ```
 
-该 Mock 读取 `agent.v1.legacy.json`，只保留历史回归价值，不能作为正式演示。
-
-开发验收：
+### 本地质量检查
 
 ```powershell
-python -m pip install -e ".[test]"
+python scripts/verify_official_baselines.py
+python scripts/verify_project_frozen_inputs.py
 python -m ruff format --check .
 python -m ruff check .
 python -m pytest -q
@@ -118,55 +103,133 @@ python scripts/check_repository_hygiene.py
 git diff --check
 ```
 
-## 核心代码
+两份官方 PDF、冻结架构图和初版方案快照位于 [`docs/official/`](docs/official/)
+及 [`docs/assets/`](docs/assets/)。任何 PR 都不得修改官方 PDF，或弱化每步重观察、
+失败恢复、仿真初赛和安全停止等硬要求。
 
-```text
-src/industrial_agent/
-├── contracts.py       # Task/Observation/7D Action 合同
-├── v2_task_profile.py # V2 task_id 与用户指令目录
-├── v2_observation.py  # V2 在线观测白名单和终局证据
-├── v2_supervisor.py   # π0.5/Arm_A 连续闭环总控
-├── lifecycle.py       # 冻结任务画像、双臂阶段与独占令牌
-├── fsm.py             # 显式状态机
-├── executor.py        # 双 VLA 固定角色与独立进程适配器
-├── observation.py     # 在线观测白名单和 GT 隔离
-├── perception.py      # YOLO 失败非门控 sidecar 合同与 mAP 证据
-├── safety.py          # NaN、限幅、工作空间与系统故障
-├── verifier.py        # 多帧后置条件核验
-├── orchestrator.py    # Arm_A→三帧交接核验→Arm_B 的闭环总循环
-└── mock.py            # 无第三方依赖演示环境
+## 4. V2 仿真与人工采集
+
+### 静态场景合同
+
+```powershell
+python simulation\run_v2_scene_acceptance.py `
+  --evidence-dir artifacts\v2\static
 ```
 
-机器可校验合同位于 [`schemas/`](schemas/)，默认配置位于
-[`configs/agent.default.json`](configs/agent.default.json)。
+这一步只验证配置、资产、槽位、质量预算和相机合同，不能替代 GUI、HOME、IK、
+碰撞、抓取或满载搬运证据。
 
-## A-F 冻结职责
+### Isaac Sim 验收顺序
 
-| 角色 | 主责 | 关键验收/备份 |
-|---|---|---|
-| A（队长） | 需求、TaskEnvelope、FSM、令牌/恢复、总集成、答辩 | 验收 B 的动作/安全接口 |
-| B | 仿真、Franka/夹爪、控制器、物理、headless | 备份 A 的安全状态机 |
-| C | 场景、资产、教师轨迹、canonical 数据、split | 备份 F 的数据 QA |
-| D | OpenVLA-OFT 复现、转换、微调、服务 | 备份 E 的服务协议 |
-| E | π0.5/openpi、LeRobot、norm stats、训练、服务 | 备份 D 的动作适配 |
-| F | YOLO/核验、评测、CI、复现、报告/视频 | 备份 C 的数据 QA |
+按以下顺序执行，并为每一步保存证据：
 
-B-F 姓名与 GitHub 用户名必须由 A 确认后再启用 CODEOWNERS；不得按成员名单
-顺序自行猜测映射。
+1. 可见 GUI 构建场景、保存 USD、检查三路相机图；
+2. 验证两臂 HOME、目标位 IK、碰撞和共享区安全互锁；
+3. 验证抓取、放置和满载搬运；
+4. 通过采集预检后，使用键盘入口采集正式 Canonical Episode。
 
-## 项目节奏
+主要入口：
 
-- D01：2026-07-25；D40 内部封版：2026-09-02。
-- 2026-09-03 至 09-05 仅用于复现、校验、上传和回退。
-- 每天 09:00 发布每人一个主任务，17:00 交付，18:00 集成。
-- 先 Issue，再短分支，再 Draft PR；禁止直接 push `main`。
-- 模型权重、数据、录像、密钥不得进入普通 Git 历史。
+| 入口 | 用途 |
+|---|---|
+| `simulation/run_v2_gui_scene_acceptance.py` | GUI 场景与相机证据 |
+| `simulation/run_v2_home_acceptance.py` | 两臂 HOME 验收 |
+| `simulation/run_v2_ik_reachability_acceptance.py` | V2 目标位 IK 验收 |
+| `simulation/run_v2_dual_arm_micro_motion_acceptance.py` | 双臂微动作与安全门禁 |
+| `simulation/run_v2_keyboard_collection.py` | 人工键盘 Canonical Episode 采集 |
+| `simulation/v2_collection_preflight.py` | 正式采集前检查 |
 
-完整管理规则见
-[项目管理执行指南](docs/project-management/project-management-guide.md)。
+### Canonical V2 → LeRobot / Pi0.5
 
-## 许可证状态
+拿到成功母 Episode 和经过 SHA 校验的 Split Registry 后，先运行只读 Preflight：
 
-仓库当前尚未声明开源许可证。A 应在对外分发或允许第三方复用前确认比赛规则、
-上游模型/资产许可证与团队授权，再通过独立 PR 添加合适的 `LICENSE`；在此之前
-默认不授予外部复制、修改或再分发权利。
+```powershell
+python scripts\pi05\convert_openpi_v2.py `
+  --data-dir <CANONICAL_V2_ROOT> `
+  --split-registry <SPLIT_REGISTRY_JSON> `
+  --preflight-only
+```
+
+V2 转换要求连续 10 Hz 动作；N 条动作只能生成 N−9 个完整 `[10,7]` 窗口。
+缺少精确 tick、padding、NaN/Inf、错误 task identity 或非 Arm_A/`pi05` 身份时，
+流程必须 fail-closed。正式训练还需要在固定 LeRobot/OpenPI 环境中执行转换、
+norm stats 和 release gate，详见 [`services/pi05/README.md`](services/pi05/README.md)。
+
+## 5. Pi0.5 服务边界
+
+π0.5 服务使用 V2 配置和固定角色：
+
+- 服务启动必须设置 `PI05_TASK_PROFILE_VERSION=v2`；
+- 只接受 `P01_TO_S11` 或 `W01_TO_S14` 的精确指令；
+- 只向 `Arm_A` 输出统一的 7D 动作；
+- 请求入口必须先通过 CAS 图像解析和输入合同校验；
+- `CAM_A_TOP` 是 V2 Pi0.5 的完整 RGB 输入，`wrist_image` 必须为 `null`；
+- 缺图、坏 SHA、解码失败、错误机械臂或错误指令都必须拒绝请求；
+- 生产配置中的 checkpoint 和 norm-stats 必须替换为完整的 `sha256:<64位摘要>`，
+  不能使用 `latest`、占位符或版本昵称。
+
+默认配置：
+
+- [`configs/agent.default.json`](configs/agent.default.json)
+- [`configs/agent.v2.default.json`](configs/agent.v2.default.json)
+- [`configs/v2-task-profile.json`](configs/v2-task-profile.json)
+- 服务实现：[`services/pi05/`](services/pi05/)
+
+## 6. 当前模型与制品溯源
+
+仓库不提交 `.pt`、`.ckpt`、`.pth`、`.safetensors` 或 `.onnx` 权重，只提交模型卡、
+来源、兼容性和固定 SHA。当前 Manual-994 YOLO 候选的元数据已合入 `main`：
+
+| 项目 | 当前值 |
+|---|---|
+| 模型 | `yolo_manual994_yolo11n_e10_cpu` |
+| 权重文件 | `manual994/best.pt` |
+| 权重 SHA-256 | `sha256:67a70dd1f575919bde9184a993097771bbdbaa7516cdd251c1f91b2a490f1e5c` |
+| 来源仓库 | [`industrial-agent-vla-model-yolo-manual800`](https://github.com/RUIJIAN-HUANG/industrial-agent-vla-model-yolo-manual800) |
+| 来源 commit | `7e4c37ad01831e08d87239a26cfed65f8b3b8d99` |
+| 训练数据 | 994 张人工清洗图像，train/val/test = 810/105/79 |
+| held-out mAP50 / mAP50-95 | `0.936 / 0.793` |
+
+完整信息见 [`models/MODEL_CARD_yolo_manual994.md`](models/MODEL_CARD_yolo_manual994.md)、
+[`models/CHECKSUMS_yolo_manual994.json`](models/CHECKSUMS_yolo_manual994.json) 和
+[`models/MANIFEST.md`](models/MANIFEST.md)。模型元数据进入 Git 不代表权重已经下载、
+真实三相机探针或生产门禁已经通过。
+
+## 7. 目录导航
+
+```text
+configs/       运行配置、任务目录和服务配置
+data/          数据卡、Manifest 和小型测试夹具；不放训练数据
+docs/          需求、架构、采集、项目管理和验收文档
+models/        模型卡、来源和 SHA；不放权重
+schemas/       JSON Schema 与机器可校验合同
+scripts/       验证、转换、探针和发布门禁脚本
+services/      Pi0.5、OpenVLA-OFT、YOLO 独立服务
+simulation/    V2 场景、Isaac Sim 适配和人工采集入口
+src/           总控、Supervisor、执行器、安全和数据合同
+tests/         单元、合同、服务和数据管线测试
+```
+
+推荐入口：
+
+| 目标 | 文档 |
+|---|---|
+| 了解 V2 场景和采集顺序 | [`docs/v2-manual-industrial-collection.md`](docs/v2-manual-industrial-collection.md) |
+| 了解 Agent 与闭环 | [`docs/architecture/agent-framework.md`](docs/architecture/agent-framework.md) |
+| 了解服务接口 | [`docs/architecture/interface-contracts.md`](docs/architecture/interface-contracts.md) |
+| 了解仓库放置规则 | [`docs/repository-structure.md`](docs/repository-structure.md) |
+| 了解贡献、Issue 和 PR 规则 | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
+| 了解计划、WBS 和验收缺口 | [`docs/project-management/`](docs/project-management/) |
+
+## 8. 协作与发布规则
+
+- 先创建 Issue，再使用短分支和 PR；禁止直接 push `main`；
+- 模型权重、训练数据、录像、缓存、密钥和个人机器路径不得进入普通 Git 历史；
+- 每个正式数据或模型制品必须有不可变 Manifest 和 SHA-256；
+- 练习 Episode 默认不可训练，必须通过预检、终局、回放、GT 隔离和数据 QA；
+- 静态 PASS 只能证明静态合同通过，不能写成真实执行或完整训练验收；
+- 当前仓库尚未声明开源许可证。对外分发前必须确认比赛规则、上游模型/资产许可
+  和团队授权，并通过独立 PR 添加合适的 `LICENSE`。
+
+更详细的协作规范见 [`CONTRIBUTING.md`](CONTRIBUTING.md) 和
+[`docs/project-management/project-management-guide.md`](docs/project-management/project-management-guide.md)。
