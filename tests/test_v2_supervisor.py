@@ -4,8 +4,6 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
-import pytest
-
 from industrial_agent.contracts import ActionChunk, ActionStep, TaskSchema
 from industrial_agent.environment import SafeStopReceipt
 from industrial_agent.executor import ExecutionContext, ExecutorDescriptor
