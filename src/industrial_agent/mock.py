@@ -214,7 +214,7 @@ class FixedDualArmMockSimulator:
     ) -> dict[str, object]:
         expected = {
             "Arm_A": ("A_ONLY", "pi05"),
-            "Arm_B": ("B_ONLY", "openvla_oft"),
+            "Arm_B": ("B_ONLY", "pi05"),
         }
         if arm_id not in expected:
             raise RuntimeError(f"fixed dual-arm adapter rejected arm_id={arm_id!r}")

@@ -866,7 +866,7 @@ class IsaacSimFrankaController:
             )
             # The frozen canonical command is binary at the hardware boundary:
             # values >= 0.5 mean open, and values < 0.5 mean closed. This maps
-            # pi0.5's 0/1 and OpenVLA-OFT's -1/+1 endpoints identically.
+            # π0.5's normalized gripper endpoints have identical physical meaning.
             finger_position_m = _gripper_opening_m(action.values[6])
 
             base_position, base_orientation = arm.get_world_pose()

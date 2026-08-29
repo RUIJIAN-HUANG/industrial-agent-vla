@@ -88,10 +88,13 @@ def generate(output_root: Path) -> Path:
             f"refusing to overwrite existing Golden Episode: {fixture_path}"
         )
 
-    config_path = REPO_ROOT / "configs" / "agent.v1.legacy.json"
-    task_profile = json.loads(config_path.read_text(encoding="utf-8"))["lifecycle"][
-        "task_profile"
-    ]
+    config_path = REPO_ROOT / "configs" / "v2-task-profile.json"
+    task_profile = json.loads(config_path.read_text(encoding="utf-8"))
+    arm_a_instruction = next(
+        task["instruction"]
+        for task in task_profile["tasks"]
+        if task["active_arm"] == "Arm_A"
+    )
     with TemporaryDirectory(prefix="golden-episode-cas-") as temporary_cas:
         image_cas = ImageCas(ImageCasConfig(root=Path(temporary_cas)))
         recorder = CanonicalRecorder(
@@ -99,7 +102,7 @@ def generate(output_root: Path) -> Path:
             EpisodeMetadata(
                 episode_id=EPISODE_ID,
                 task_id="golden-task-v1",
-                instruction=task_profile["arm_a_instruction"],
+                instruction=arm_a_instruction,
                 scene_seed=20260803,
                 git_sha=_git_sha(),
                 scene_config_sha256=_file_sha256(config_path),

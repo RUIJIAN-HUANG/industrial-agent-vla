@@ -324,12 +324,10 @@ def test_original_instruction_takes_priority_over_task_instruction(resolved_came
     with patch.object(Pi05Executor, "infer", side_effect=capture_infer):
         adapter = Pi05ContractAdapter(resolver=resolver)
         task = _make_task()
-        context = _make_context(
-            original_instruction="冻结指令（来自 FixedDualVLAPlanner）"
-        )
+        context = _make_context(original_instruction="冻结指令（来自总控 Planner）")
         adapter.plan(task, _make_observation(camera=camera), context)
 
-    assert captured.get("instruction") == "冻结指令（来自 FixedDualVLAPlanner）"
+    assert captured.get("instruction") == "冻结指令（来自总控 Planner）"
 
 
 def test_task_instruction_fallback_when_original_is_none(resolved_camera):

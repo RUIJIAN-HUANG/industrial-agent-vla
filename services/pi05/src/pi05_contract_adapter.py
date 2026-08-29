@@ -52,10 +52,16 @@ class Pi05ContractAdapter:
     def plan(
         self, task: TaskSchema, observation: Observation, context: ExecutionContext
     ) -> ActionChunk:
-        # 方案书 interface-contracts.md §7.3 / executor.py Pi05Adapter.plan()：
-        # Pi05Adapter 从 observation.data.robot.arm_a 提取状态，
-        # 从 observation.data.camera.arm_a_rgb 提取图像（camera_id=CAM_A_TOP）。
-        # 框架 _phase_vla_inputs 要求 camera.arm_a_rgb 必须存在，不做 fallback。
+        # 同一个 π0.5 服务按生命周期子任务服务两只手臂；arm_id 由 Planner
+        # 注入 TaskSchema.metadata，缺省只保留单臂 V2 的 Arm_A 兼容路径。
+        arm_id = task.metadata.get("arm_id", "Arm_A")
+        if arm_id not in {"Arm_A", "Arm_B"}:
+            raise ExecutorError(
+                FailureCode.INVALID_TASK,
+                f"π0.5 task arm_id must be Arm_A or Arm_B, got {arm_id!r}",
+            )
+        arm_key = "arm_a" if arm_id == "Arm_A" else "arm_b"
+        camera_key = "arm_a_rgb" if arm_id == "Arm_A" else "arm_b_rgb"
         camera = observation.data.get("camera", {})
         robot = observation.data.get("robot", {})
         if not isinstance(camera, Mapping):
@@ -63,12 +69,12 @@ class Pi05ContractAdapter:
         if not isinstance(robot, Mapping):
             robot = {}
 
-        # ---- arm_a_rgb：只接受冻结 ImageReference，并统一通过公共 CAS resolver ----
-        raw_front = camera.get("arm_a_rgb")
+        # ---- 当前控制臂的 top-view：只接受冻结 ImageReference ----
+        raw_front = camera.get(camera_key)
         if not is_image_reference(raw_front):
             raise ExecutorError(
                 FailureCode.EXECUTOR_BAD_RESPONSE,
-                "camera.arm_a_rgb must be a frozen ImageReference",
+                f"camera.{camera_key} must be a frozen ImageReference",
             )
         if self._resolver is None:
             raise ExecutorError(
@@ -81,6 +87,7 @@ class Pi05ContractAdapter:
         raw_wrist = camera.get("wrist_image")
         request = {
             "executor": "pi05",
+            "arm_id": arm_id,
             "model_input": {
                 "observation": {
                     "camera": {
@@ -101,23 +108,23 @@ class Pi05ContractAdapter:
         rgb_front = resolved.full_image.rgb
         rgb_wrist = None
 
-        # ---- arm_a.state（框架 _phase_vla_inputs arm_key="arm_a"）----
-        arm_a = robot.get("arm_a", {})
-        if not isinstance(arm_a, Mapping):
-            arm_a = {}
+        # ---- 当前控制臂状态 ----
+        arm_state = robot.get(arm_key, {})
+        if not isinstance(arm_state, Mapping):
+            arm_state = {}
         try:
             state_7d = canonical_state_7d(
-                arm_a.get("tcp_pose_m_rad"),
-                arm_a.get("gripper_open"),
+                arm_state.get("tcp_pose_m_rad"),
+                arm_state.get("gripper_open"),
             )
         except (TypeError, ValueError) as exc:
             raise ExecutorError(
                 FailureCode.EXECUTOR_BAD_RESPONSE,
-                f"robot.arm_a cannot produce canonical state_7d: {exc}",
+                f"robot.{arm_key} cannot produce canonical state_7d: {exc}",
             ) from exc
         robot_state = np.asarray(state_7d, dtype=np.float32)
 
-        # 优先使用 context.original_instruction（FixedDualVLAPlanner 设定的冻结指令）
+        # 优先使用 context.original_instruction（总控设定的冻结指令）
         # 回退 task.instruction（方案书 executor.py Pi05Adapter.plan() L771）
         instruction = context.original_instruction or task.instruction
 
@@ -129,7 +136,7 @@ class Pi05ContractAdapter:
             rgb_wrist=rgb_wrist,
             robot_state=robot_state,
             instruction=instruction,
-            runtime_flags={},
+            runtime_flags={"arm_id": arm_id},
         )
         try:
             canonical = self._executor.infer(obs_packet)

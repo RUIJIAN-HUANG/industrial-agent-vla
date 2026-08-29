@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from pathlib import Path
 
 from deploy import preflight
@@ -32,9 +31,8 @@ def test_production_env_pins_packaged_yolo_class_map() -> None:
 def _valid_environment(tmp_path: Path) -> dict[str, str]:
     cas = tmp_path / "cas"
     pi05_cache = tmp_path / "pi05-cache"
-    openvla_cache = tmp_path / "openvla-cache"
     yolo_cache = tmp_path / "yolo-cache"
-    for directory in (cas, pi05_cache, openvla_cache, yolo_cache):
+    for directory in (cas, pi05_cache, yolo_cache):
         directory.mkdir()
 
     pi05_checkpoint = tmp_path / "pi05-checkpoint"
@@ -43,63 +41,26 @@ def _valid_environment(tmp_path: Path) -> dict[str, str]:
     pi05_norm = tmp_path / "pi05-norm.json"
     pi05_norm.write_text('{"mean":[0]}', encoding="utf-8")
 
-    openvla_model = tmp_path / "openvla"
-    openvla_model.mkdir()
-    weights = openvla_model / "weights.bin"
-    weights.write_bytes(b"openvla-weights")
-    openvla_norm = openvla_model / "dataset_statistics.json"
-    openvla_norm.write_text('{"industrial_arm_b":{}}', encoding="utf-8")
-    (openvla_model / "action_contract.json").write_text(
-        '{"schema_version":"1.0"}',
-        encoding="utf-8",
-    )
-    manifest = openvla_model / "checkpoint.manifest.json"
-    manifest.write_text(
-        json.dumps(
-            {
-                "schema_version": "1.0",
-                "files": [
-                    {
-                        "path": "weights.bin",
-                        "sha256": _sha256_file(weights).removeprefix("sha256:"),
-                    }
-                ],
-            },
-            sort_keys=True,
-        ),
-        encoding="utf-8",
-    )
-
     yolo_model = tmp_path / "best.pt"
     yolo_model.write_bytes(b"yolo-weights")
     digest_a = "sha256:" + "a" * 64
     digest_b = "sha256:" + "b" * 64
-    digest_c = "sha256:" + "c" * 64
     return {
         "PI05_IMAGE_REPOSITORY": "registry.example.com/pi05:0.1.0",
         "PI05_IMAGE_DIGEST": digest_a,
-        "OPENVLA_IMAGE_REPOSITORY": "registry.example.com/openvla:0.1.0",
-        "OPENVLA_IMAGE_DIGEST": digest_b,
         "YOLO_IMAGE_REPOSITORY": "registry.example.com/yolo:0.1.0",
-        "YOLO_IMAGE_DIGEST": digest_c,
+        "YOLO_IMAGE_DIGEST": digest_b,
         "PI05_PORT": "8101",
-        "OPENVLA_PORT": "8102",
         "YOLO_PORT": "8103",
         "PI05_GPU_ID": "0",
-        "OPENVLA_GPU_ID": "1",
-        "YOLO_GPU_ID": "2",
+        "YOLO_GPU_ID": "1",
         "SHARED_CAS_DIR": str(cas),
         "PI05_CACHE_DIR_HOST": str(pi05_cache),
-        "OPENVLA_CACHE_DIR_HOST": str(openvla_cache),
         "YOLO_CACHE_DIR_HOST": str(yolo_cache),
         "PI05_CHECKPOINT_DIR_HOST": str(pi05_checkpoint),
         "PI05_NORM_STATS_FILE_HOST": str(pi05_norm),
         "PI05_CHECKPOINT_SHA": preflight._pi05_directory_digest(pi05_checkpoint),
         "PI05_NORM_STATS_SHA": _sha256_file(pi05_norm),
-        "OPENVLA_MODEL_DIR_HOST": str(openvla_model),
-        "OPENVLA_CHECKPOINT_SHA": _sha256_file(manifest),
-        "OPENVLA_NORM_STATS_SHA": _sha256_file(openvla_norm),
-        "OPENVLA_UNNORM_KEY": "industrial_arm_b",
         "YOLO_MODEL_FILE_HOST": str(yolo_model),
         "YOLO_CHECKPOINT_SHA": _sha256_file(yolo_model),
         "YOLO_CLASS_MAP_SHA": digest_a,
@@ -144,13 +105,6 @@ def test_service_preflight_rejects_mock_health(
                 "status": "ready",
                 "checkpoint_sha": environment["PI05_CHECKPOINT_SHA"],
                 "norm_stats_sha": environment["PI05_NORM_STATS_SHA"],
-            }
-        if url.endswith(":8102/health"):
-            return {
-                "service": "openvla_oft",
-                "status": "ready",
-                "checkpoint_sha": environment["OPENVLA_CHECKPOINT_SHA"],
-                "norm_stats_sha": environment["OPENVLA_NORM_STATS_SHA"],
                 "device": {"mode": "mock"},
             }
         return {
@@ -170,8 +124,8 @@ def test_service_preflight_rejects_mock_health(
     failed = [item for item in report["checks"] if item["status"] == "FAIL"]
     assert failed == [
         {
-            "name": "health:openvla_oft",
+            "name": "health:pi05",
             "status": "FAIL",
-            "detail": "openvla_oft health reports non-real mode",
+            "detail": "pi05 health reports non-real mode",
         }
     ]

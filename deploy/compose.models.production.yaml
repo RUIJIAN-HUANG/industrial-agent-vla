@@ -74,54 +74,6 @@ services:
       retries: 3
     stop_grace_period: 30s
 
-  openvla-oft:
-    <<: *service-defaults
-    image: "${OPENVLA_IMAGE_REPOSITORY:?set OPENVLA_IMAGE_REPOSITORY}@${OPENVLA_IMAGE_DIGEST:?set OPENVLA_IMAGE_DIGEST}"
-    environment:
-      OPENVLA_OFT_USE_MOCK: "0"
-      OPENVLA_OFT_CHECKPOINT_DIR: /models/openvla-oft
-      OPENVLA_OFT_UPSTREAM_DIR: /opt/openvla-oft
-      OPENVLA_OFT_CHECKPOINT_SHA: "${OPENVLA_CHECKPOINT_SHA:?set OPENVLA_CHECKPOINT_SHA}"
-      OPENVLA_OFT_NORM_STATS_SHA: "${OPENVLA_NORM_STATS_SHA:?set OPENVLA_NORM_STATS_SHA}"
-      OPENVLA_OFT_UNNORM_KEY: "${OPENVLA_UNNORM_KEY:?set OPENVLA_UNNORM_KEY}"
-      INDUSTRIAL_AGENT_CAS_ROOT: /var/lib/industrial-agent/cas
-      HF_HOME: /var/cache/huggingface
-      XDG_CACHE_HOME: /var/cache
-    ports:
-      - "${MODEL_BIND_IP:-127.0.0.1}:${OPENVLA_PORT:-8102}:8102"
-    volumes:
-      - type: bind
-        source: "${OPENVLA_MODEL_DIR_HOST:?set OPENVLA_MODEL_DIR_HOST}"
-        target: /models/openvla-oft
-        read_only: true
-      - type: bind
-        source: "${SHARED_CAS_DIR:?set SHARED_CAS_DIR}"
-        target: /var/lib/industrial-agent/cas
-        read_only: true
-      - type: bind
-        source: "${OPENVLA_CACHE_DIR_HOST:?set OPENVLA_CACHE_DIR_HOST}"
-        target: /var/cache
-    tmpfs:
-      - /tmp:size=2g,mode=1777
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              device_ids: ["${OPENVLA_GPU_ID:?set OPENVLA_GPU_ID}"]
-              capabilities: [gpu]
-    healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8102/health', timeout=3)"
-      interval: 30s
-      timeout: 5s
-      start_period: 300s
-      retries: 3
-    stop_grace_period: 30s
-
   yolo:
     <<: *service-defaults
     image: "${YOLO_IMAGE_REPOSITORY:?set YOLO_IMAGE_REPOSITORY}@${YOLO_IMAGE_DIGEST:?set YOLO_IMAGE_DIGEST}"

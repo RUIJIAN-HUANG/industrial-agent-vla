@@ -205,7 +205,7 @@ class ImageCasTests(unittest.TestCase):
     def test_config_uses_explicit_environment_override(self) -> None:
         root = Path(__file__).resolve().parents[1]
         raw = json.loads(
-            (root / "configs" / "agent.v1.legacy.json").read_text(encoding="utf-8")
+            (root / "configs" / "agent.v2.default.json").read_text(encoding="utf-8")
         )["image_cas"]
         configured = ImageCasConfig.from_mapping(
             raw,
@@ -220,7 +220,7 @@ class ImageCasTests(unittest.TestCase):
     def test_protocol_constants_cannot_be_reconfigured(self) -> None:
         root = Path(__file__).resolve().parents[1]
         baseline = json.loads(
-            (root / "configs" / "agent.v1.legacy.json").read_text(encoding="utf-8")
+            (root / "configs" / "agent.v2.default.json").read_text(encoding="utf-8")
         )["image_cas"]
         for field, value in (
             ("layout", "flat"),

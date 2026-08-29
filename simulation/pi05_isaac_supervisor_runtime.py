@@ -22,7 +22,7 @@ from industrial_agent.executor import (
     Executor,
     ProcessTransport,
 )
-from industrial_agent.orchestrator import RunResult
+from industrial_agent.run_result import RunResult
 from industrial_agent.supervisor_main import build_supervisor
 from industrial_agent.v2_supervisor import V2Supervisor
 

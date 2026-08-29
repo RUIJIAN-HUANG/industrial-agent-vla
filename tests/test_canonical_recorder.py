@@ -128,7 +128,7 @@ def test_invalid_shapes_and_wrong_executor_fail_closed(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="requires executor"):
         recorder.add_action(
             arm_id="Arm_A",
-            executor="openvla_oft",
+            executor="retired_executor",
             subtask_id="S01_ARM_A_PACK_HANDOFF",
             chunk_id="chunk-bad",
             timestamp_ns=1,

@@ -19,10 +19,7 @@
       "pattern": "^1\\.[0-9]+$"
     },
     "service": {
-      "enum": [
-        "openvla_oft",
-        "pi05"
-      ]
+      "const": "pi05"
     },
     "service_version": {
       "type": "string"

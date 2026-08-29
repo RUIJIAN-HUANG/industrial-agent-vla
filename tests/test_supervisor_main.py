@@ -12,7 +12,7 @@ from industrial_agent.contracts import ActionStep, Postcondition, TaskSchema
 from industrial_agent.environment import SafeStopReceipt
 from industrial_agent.errors import FailureCode
 from industrial_agent.fsm import AgentState
-from industrial_agent.orchestrator import RunResult
+from industrial_agent.run_result import RunResult
 from industrial_agent.supervisor_main import (
     DirectEnvironmentHost,
     build_supervisor,

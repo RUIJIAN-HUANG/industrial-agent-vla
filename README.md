@@ -25,9 +25,9 @@
 成功结束或安全停止
 ```
 
-系统不设置 NLP Agent，不在运行时改写用户指令，不让 YOLO DetectionPacket
-成为 π0.5 推理前置条件。Arm_B 在当前正式单件任务中保持退避和静止；V1 的
-四 Agent、双 VLA 和双臂自动交接流程仅作为历史回归材料。
+系统不设置额外的 NLP Agent，不在运行时改写用户指令，不让 YOLO DetectionPacket
+成为 π0.5 推理前置条件。总控、YOLO 和单一 π0.5 是唯一运行时 Agent；π0.5
+通过 `arm_id` 服务两只机械臂。
 
 ### 正式任务与精确指令
 
@@ -219,7 +219,7 @@ docs/          需求、架构、采集、项目管理和验收文档
 models/        模型卡、来源和 SHA；不放权重
 schemas/       JSON Schema 与机器可校验合同
 scripts/       验证、转换、探针和发布门禁脚本
-services/      Pi0.5、OpenVLA-OFT、YOLO 独立服务
+services/      Pi0.5 双臂服务、YOLO 独立服务
 simulation/    V2 场景、Isaac Sim 适配和人工采集入口
 src/           总控、Supervisor、执行器、安全和数据合同
 tests/         单元、合同、服务和数据管线测试
@@ -247,4 +247,4 @@ tests/         单元、合同、服务和数据管线测试
   和团队授权，并通过独立 PR 添加合适的 `LICENSE`。
 
 更详细的协作规范见 [`CONTRIBUTING.md`](CONTRIBUTING.md) 和
-[`docs/project-management/project-management-guide.md`](docs/project-management/project-management-guide.md)。
+[`docs/project-management/dashboard.md`](docs/project-management/dashboard.md)。

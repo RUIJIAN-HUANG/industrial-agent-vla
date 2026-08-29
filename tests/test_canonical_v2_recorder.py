@@ -77,9 +77,7 @@ def _record_complete_episode(
                 state_7d=[0.4, 0.0, 0.3, 0.0, 0.0, 0.0, 0.375],
             )
         arm_id, executor = (
-            ("Arm_B", "openvla_oft")
-            if task_id == "BIN01_TO_FINISHED01"
-            else ("Arm_A", "pi05")
+            ("Arm_B", "pi05") if task_id == "BIN01_TO_FINISHED01" else ("Arm_A", "pi05")
         )
         recorder.add_action(
             arm_id=arm_id,
@@ -155,7 +153,7 @@ def test_bin01_v2_recorder_accepts_ordered_dual_arm_actions(tmp_path: Path) -> N
                 state_7d=[0.0] * 7,
             )
         for sequence_id, (arm_id, executor) in enumerate(
-            (("Arm_A", "pi05"), ("Arm_B", "openvla_oft"))
+            (("Arm_A", "pi05"), ("Arm_B", "pi05"))
         ):
             physics_tick = sequence_id * 12
             recorder.add_action(
@@ -214,7 +212,7 @@ def test_v2_recorder_rejects_padding_policy(tmp_path: Path) -> None:
     ("field", "value"),
     [
         ("arm_id", "Arm_B"),
-        ("executor", "openvla_oft"),
+        ("executor", "retired_executor"),
         ("subtask_id", "P02_TO_S21"),
     ],
 )

@@ -14,7 +14,7 @@ openpi API 关键事实（官方源码 Policy.infer）：
   infer(obs) 内部依次执行 input_transform（resize 图像 / tokenize prompt / pad state / normalize）
   与 output_transform（Unnormalize 反归一化）。
   因此 create_trained_policy 返回的 policy，其 infer(example)["actions"] 已经是【物理动作】，
-  反归一化使用 compute_norm_stats 生成的统计（本项目自有，满足 §3.3.1 Para186 不沿用 OpenVLA）。
+  反归一化使用 compute_norm_stats 生成的本项目自有统计。
 """
 
 from __future__ import annotations
