@@ -23,6 +23,8 @@ Linux GPU 模型机（三个 Docker 容器，只读 CAS）
 - 三个服务强制使用 real 模式，没有 Mock 自动回退；
 - checkpoint、norm stats 和 YOLO 类别表必须提供完整非零 SHA-256；
 - 模型和 CAS 以只读方式挂载，只有独立缓存目录可写；
+- `PI05_GPU_IDS` 使用逗号分隔的物理 GPU id；π0.5 网关为每个 id 启动一个 worker，
+  例如 `PI05_GPU_IDS=0,1`；
 - Compose 不包含 Supervisor，也不接受 offline GT、Stage Transform 或硬编码状态；
 - `MODEL_BIND_IP=127.0.0.1` 只允许模型机本机访问。远程 Isaac 目标机需要填写模型
   机的受控内网地址，并同时配置主机防火墙；不要把未加密 HTTP 端口暴露到公网。

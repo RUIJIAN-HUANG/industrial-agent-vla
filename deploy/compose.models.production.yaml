@@ -30,6 +30,7 @@ services:
       PI05_NORM_STATS_PATH: /models/pi05/norm_stats.json
       PI05_CHECKPOINT_SHA: "${PI05_CHECKPOINT_SHA:?set PI05_CHECKPOINT_SHA}"
       PI05_NORM_STATS_SHA: "${PI05_NORM_STATS_SHA:?set PI05_NORM_STATS_SHA}"
+      PI05_GPU_IDS: "${PI05_GPU_IDS:?set PI05_GPU_IDS}"
       INDUSTRIAL_AGENT_CAS_ROOT: /var/lib/industrial-agent/cas
       OPENPI_DATA_HOME: /var/cache/openpi
       XDG_CACHE_HOME: /var/cache
@@ -55,12 +56,15 @@ services:
         target: /var/cache
     tmpfs:
       - /tmp:size=2g,mode=1777
+    # The gateway starts one process per id in PI05_GPU_IDS.  Compose exposes
+    # all requested GPUs; each worker narrows CUDA_VISIBLE_DEVICES to one id.
+    gpus: all
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ["${PI05_GPU_ID:?set PI05_GPU_ID}"]
+              count: all
               capabilities: [gpu]
     healthcheck:
       test:

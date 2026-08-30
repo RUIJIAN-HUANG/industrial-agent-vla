@@ -191,6 +191,9 @@ GRADIENT_ACCUMULATION_STEPS: int = int(
 MIXED_PRECISION: str = os.environ.get("PI05_MIXED_PRECISION", "bf16")
 # eval_interval：验证评测间隔步数（方案书 §6.3 要求每个 checkpoint 在独立验证 seed 闭环评测）
 EVAL_INTERVAL: int = int(os.environ.get("PI05_EVAL_INTERVAL", "1000"))
+# JAX/OpenPI 单机模型分片使用的 GPU 数。显式配置，避免容器 GPU 映射与
+# CUDA_VISIBLE_DEVICES 不一致时静默落回单卡。
+FSDP_DEVICES: int = _read_int_env("PI05_FSDP_DEVICES", 1)
 
 
 # ---------------------------------------------------------------------------
@@ -509,7 +512,7 @@ def _build_pi05_industrial_config() -> TrainConfig:
         # ---- 其他 ----
         overwrite=True,
         wandb_enabled=True,
-        fsdp_devices=1,  # 单卡用 1（方案书 §3.3：JAX 路径）
+        fsdp_devices=FSDP_DEVICES,
     )
     return cfg
 
@@ -648,7 +651,10 @@ def _print_summary() -> None:
     print(f"dataset repo_id:    {DATASET_REPO_ID}")
     print(f"input format:       {PI05_INPUT_FORMAT}")
     print(f"output_dir:         {OUTPUT_DIR}")
-    print("fsdp_devices:       1   (单卡，方案书 §3.3 JAX 路径)")
+    print(
+        f"fsdp_devices:       {FSDP_DEVICES}   "
+        "(JAX/OpenPI 单机模型分片卡数；PI05_FSDP_DEVICES)"
+    )
     print(f"本地配置已注册:      {_REGISTERED}")
     # LoRA 安全闸门提示
     _lora_ok = validate_lora_ready()

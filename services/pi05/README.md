@@ -80,6 +80,24 @@ python scripts\pi05\compute_norm_stats.py `
 `POST /v1/infer` 强制入口核心：它先解析并校验 CAS，再把只读 RGB 数组替换进
 `model_input` 后调用注入的 π0.5 backend。HTTP/WebSocket 外壳不得绕过该 handler。
 
+## 多 GPU 推理
+
+生产镜像入口是 [`serve_multi_gpu.py`](serve_multi_gpu.py)。它按
+`PI05_GPU_IDS` 启动一个独立进程/策略实例，并在公共端口上做稳定路由：同一
+`episode_id`/`task_id` 始终落到同一个 worker，不同 episode 分摊到不同 GPU。
+每个 worker 都会设置自己的 `CUDA_VISIBLE_DEVICES`，不会把“多张可见卡”误报成
+单进程模型并行。
+
+```bash
+PI05_GPU_IDS=0,1 \
+PI05_SERVICE_MODE=real PI05_TASK_PROFILE_VERSION=v2 \
+python -m services.pi05.serve_multi_gpu
+```
+
+`/health` 会汇总所有 worker；只有全部 worker ready 时才返回 `status=ready`。
+单卡仍可使用 `PI05_GPU_ID=0` 作为兼容配置。训练的 `fsdp_devices` 和推理的
+worker 数是两个独立参数：前者用于单进程模型分片，后者用于多进程推理吞吐。
+
 ## 历史 Canonical v1 数据 Gate（禁止用于正式训练）
 
 以下内容仅用于验证旧数据可读性。`scripts/pi05/canonical_v1.py` 是角色 E 的薄适配层，底层强制复用主线

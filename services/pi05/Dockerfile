@@ -83,6 +83,7 @@ RUN uv sync --frozen --python 3.11 \
 #          权重不 COPY，通过 volume 挂载到 /workspace/openpi/checkpoints
 # -----------------------------------------------------------------------------
 COPY services/pi05/src/ /workspace/project/services/pi05/src/
+COPY services/pi05/serve_multi_gpu.py /workspace/project/services/pi05/serve_multi_gpu.py
 COPY services/__init__.py /workspace/project/services/__init__.py
 COPY services/pi05/__init__.py /workspace/project/services/pi05/__init__.py
 COPY services/pi05/handler.py /workspace/project/services/pi05/handler.py
@@ -165,10 +166,10 @@ EXPOSE 8101
 VOLUME ["/workspace/openpi_data", "/workspace/project/data", "/workspace/openpi/checkpoints"]
 
 # -----------------------------------------------------------------------------
-# 12. 启动命令：openpi_service HTTP 服务
+# 12. 启动命令：π0.5 多 GPU 网关
 #     契约 §2 / §6 / §7 / §8：HTTP 主路径 POST /v1/infer、GET /health、POST /v1/cancel
 #     通过 uvicorn CLI 显式指定 --port 8101，覆盖源码默认端口；
 #     使用 openpi venv 的 python -m uvicorn，确保使用已安装 uvicorn 的解释器。
 #     启动时必须通过部署环境显式提供 PI05_SERVICE_MODE=dummy|real
 # -----------------------------------------------------------------------------
-CMD ["/workspace/openpi/.venv/bin/python", "-m", "uvicorn", "services.pi05.src.openpi_service:app", "--host", "0.0.0.0", "--port", "8101"]
+CMD ["/workspace/openpi/.venv/bin/python", "-m", "services.pi05.serve_multi_gpu"]
