@@ -4,12 +4,12 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
-from industrial_agent.contracts import ActionChunk, ActionStep, TaskSchema
+from industrial_agent.contracts import ActionChunk, ActionStep, Postcondition, TaskSchema
 from industrial_agent.environment import SafeStopReceipt
 from industrial_agent.executor import ExecutionContext, ExecutorDescriptor
 from industrial_agent.fsm import AgentState
 from industrial_agent.supervisor_main import build_supervisor
-from industrial_agent.v2_supervisor import V2Supervisor
+from industrial_agent.v2_supervisor import V2Supervisor, V2TaskPlanner
 from tests.test_v2_observation import v2_observation
 
 
@@ -25,6 +25,34 @@ def _task() -> TaskSchema:
             )
         )
     )
+
+
+def _bin_task() -> TaskSchema:
+    return TaskSchema(
+        task_id="BIN01_TO_FINISHED01",
+        instruction="把Bin_01搬到FINISHED_01",
+        task_type="visual_manipulation",
+        target_object="Bin_01",
+        target_location="FINISHED_01",
+        constraints={"scene_id": "single_bin_manual_industrial_v2"},
+        metadata={"profile_id": "single_bin_manual_industrial_v2"},
+        postconditions=(
+            Postcondition(
+                kind="object_in_zone",
+                object_id="Bin_01",
+                zone_id="FINISHED_01",
+            ),
+        ),
+    )
+
+
+def test_bin_task_plans_ordered_arm_a_then_arm_b_handoff() -> None:
+    plan = V2TaskPlanner().plan(_bin_task(), "run-bin")
+    assert [(item.sequence, item.arm_id) for item in plan.subtasks] == [
+        (1, "Arm_A"),
+        (2, "Arm_B"),
+    ]
+    assert plan.subtasks[1].depends_on == ("BIN01_TO_HANDOFF_CENTER",)
 
 
 def _config() -> dict[str, Any]:

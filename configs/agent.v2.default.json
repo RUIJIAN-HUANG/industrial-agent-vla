@@ -3,7 +3,7 @@
   "profile_id": "single_bin_manual_industrial_v2",
   "scene_id": "single_bin_manual_industrial_v2",
   "task_profile": "configs/v2-task-profile.json",
-  "formal_task_ids": ["P01_TO_S11", "W01_TO_S14"],
+  "formal_task_ids": ["P01_TO_S11", "W01_TO_S14", "BIN01_TO_FINISHED01"],
   "verification": {
     "frames": 3,
     "required_votes": 2,

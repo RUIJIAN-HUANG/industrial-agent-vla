@@ -1,8 +1,8 @@
 """Versioned V2 task catalog shared by the UI, Supervisor boundary and π0.5.
 
 The V2 catalog deliberately separates the five user-visible options from the
-two tasks that currently have a formal Canonical V2 data contract.  A task may
-be displayed before its collection/evaluation pipeline is released, but it
+three tasks that currently have a formal Canonical V2 data contract. A task
+may be displayed before its collection/evaluation pipeline is released, but it
 must not silently enter training or inference as another task.
 """
 
@@ -24,14 +24,17 @@ class V2TaskSpec:
     target_slot: str | None
     active_arm: str
     formal_data: bool
+    target_zone: str | None = None
 
     def validate(self) -> None:
         if not self.task_id or not self.instruction.strip():
             raise ValueError("V2 task_id and instruction are required")
         if self.active_arm not in {"Arm_A", "Arm_B"}:
             raise ValueError(f"unsupported V2 active arm: {self.active_arm!r}")
-        if self.formal_data and self.target_slot is None:
-            raise ValueError("formal V2 manipulation tasks require target_slot")
+        if self.formal_data and self.target_slot is None and self.target_zone is None:
+            raise ValueError(
+                "formal V2 tasks require target_slot or target_zone"
+            )
 
 
 V2_TASKS: tuple[V2TaskSpec, ...] = (
@@ -61,11 +64,12 @@ V2_TASKS: tuple[V2TaskSpec, ...] = (
     ),
     V2TaskSpec(
         task_id="BIN01_TO_FINISHED01",
-        instruction="请将料箱 Bin_01 搬运到成品区 FINISHED_01。",
+        instruction="把Bin_01搬到FINISHED_01",
         target_object="Bin_01",
         target_slot=None,
-        active_arm="Arm_B",
-        formal_data=False,
+        active_arm="Arm_A",
+        formal_data=True,
+        target_zone="FINISHED_01",
     ),
     V2TaskSpec(
         task_id="PACK_ALL_AND_FINISH",
@@ -117,6 +121,11 @@ def v2_task_from_mapping(value: Mapping[str, Any]) -> V2TaskSpec:
         target_slot=value.get("target_slot"),
         active_arm=str(value.get("active_arm", "")),
         formal_data=bool(value.get("formal_data", False)),
+        target_zone=(
+            str(value["target_zone"])
+            if value.get("target_zone") is not None
+            else None
+        ),
     )
     expected = v2_task(task.task_id)
     if task != expected:

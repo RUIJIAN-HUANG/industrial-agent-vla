@@ -25,9 +25,12 @@ class DocumentationContractTests(unittest.TestCase):
         architecture = (
             ROOT / "docs" / "architecture" / "agent-framework.md"
         ).read_text(encoding="utf-8")
-        self.assertEqual(profile["formal_task_ids"], ["P01_TO_S11", "W01_TO_S14"])
         self.assertEqual(
-            {task["active_arm"] for task in profile["tasks"]}, {"Arm_A", "Arm_B"}
+            profile["formal_task_ids"],
+            ["P01_TO_S11", "W01_TO_S14", "BIN01_TO_FINISHED01"],
+        )
+        self.assertEqual(
+            {task["active_arm"] for task in profile["tasks"]}, {"Arm_A"}
         )
         self.assertIn("只有三个 Agent", architecture)
         self.assertIn("唯一 VLA", architecture)

@@ -14,7 +14,7 @@ from .observation import (
     _frozen_camera_failure,
     find_forbidden_online_path,
 )
-from .v2_task_profile import require_formal_v2_task
+from .v2_task_profile import V2TaskSpec, require_formal_v2_task
 
 
 V2_OBSERVATION_VERSION = "2.0"
@@ -89,10 +89,10 @@ class V2ObservationGateway:
         camera_failure = _frozen_camera_failure(raw.get("camera"))
         if camera_failure:
             self._invalid(camera_failure)
-        self._validate_robot(raw.get("robot"))
+        task_spec = self._validate_task(raw.get("task"))
+        self._validate_robot(raw.get("robot"), task_id=task_spec.task_id)
         self._validate_safety(raw.get("safety"))
         self._validate_quality(raw.get("quality"))
-        self._validate_task(raw.get("task"))
 
         data = {
             key: deepcopy(value)
@@ -109,7 +109,7 @@ class V2ObservationGateway:
         )
 
     @classmethod
-    def _validate_task(cls, value: Any) -> None:
+    def _validate_task(cls, value: Any) -> V2TaskSpec:
         if not isinstance(value, Mapping) or set(value) != cls._TASK_FIELDS:
             cls._invalid(
                 f"V2 task state must contain exactly {sorted(cls._TASK_FIELDS)}"
@@ -142,12 +142,24 @@ class V2ObservationGateway:
             cls._invalid("V2 task verification_votes must be an integer in [0, 3]")
         if terminal != (status == "SUCCEEDED"):
             cls._invalid("V2 terminal must be true exactly when status is SUCCEEDED")
+        return spec
 
     @classmethod
-    def _validate_robot(cls, value: Any) -> None:
+    def _validate_robot(cls, value: Any, *, task_id: str) -> None:
         if not isinstance(value, Mapping):
             cls._invalid("robot must be an object")
-        if value.get("active_arm") not in {"Arm_A", "NONE"}:
+        active_arm = value.get("active_arm")
+        allowed_active_arms = (
+            {"Arm_A", "Arm_B", "NONE"}
+            if task_id == "BIN01_TO_FINISHED01"
+            else {"Arm_A", "NONE"}
+        )
+        if active_arm not in allowed_active_arms:
+            if task_id == "BIN01_TO_FINISHED01":
+                cls._invalid(
+                    "formal V2 bin handoff permits only Arm_A, Arm_B or NONE "
+                    "as robot.active_arm"
+                )
             cls._invalid("formal V2 permits only Arm_A or NONE as robot.active_arm")
         for arm_key in ("arm_a", "arm_b"):
             arm = value.get(arm_key)
@@ -166,9 +178,25 @@ class V2ObservationGateway:
             for flag in ("retreated", "gripper_open", "stationary"):
                 if not isinstance(arm.get(flag), bool):
                     cls._invalid(f"robot.{arm_key}.{flag} must be boolean")
+        arm_a = value["arm_a"]
         arm_b = value["arm_b"]
-        if arm_b.get("retreated") is not True or arm_b.get("stationary") is not True:
-            cls._invalid("Arm_B must remain retreated and stationary in formal V2")
+        if task_id != "BIN01_TO_FINISHED01":
+            if arm_b.get("retreated") is not True or arm_b.get("stationary") is not True:
+                cls._invalid("Arm_B must remain retreated and stationary in formal V2")
+            return
+        if active_arm == "Arm_A" and (
+            arm_b.get("retreated") is not True or arm_b.get("stationary") is not True
+        ):
+            cls._invalid("Arm_B must remain retreated and stationary while Arm_A acts")
+        if active_arm == "Arm_B" and (
+            arm_a.get("retreated") is not True or arm_a.get("stationary") is not True
+        ):
+            cls._invalid("Arm_A must remain retreated and stationary while Arm_B acts")
+        if active_arm == "NONE" and not all(
+            arm.get("retreated") is True and arm.get("stationary") is True
+            for arm in (arm_a, arm_b)
+        ):
+            cls._invalid("both arms must be retreated and stationary during handoff verification")
 
     @classmethod
     def _validate_safety(cls, value: Any) -> None:

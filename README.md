@@ -31,22 +31,23 @@
 
 ### 正式任务与精确指令
 
-`task_id` 和用户指令必须逐字匹配。以下两条同时用于界面、采集数据、训练
+`task_id` 和用户指令必须逐字匹配。以下三条同时用于界面、采集数据、训练
 和 Pi0.5 推理：
 
 | task_id | 精确指令 | 目标 |
 |---|---|---|
 | `P01_TO_S11` | `把P01放到S11中` | 将轴件 P01 放入料箱 S11 |
 | `W01_TO_S14` | `把W01放到S14中` | 将扳手 W01 放入料箱 S14 |
+| `BIN01_TO_FINISHED01` | `把Bin_01搬到FINISHED_01` | Arm_A 搬至交接区后由 Arm_B 接力搬至成品区 |
 
 对应机器真源：[`configs/v2-task-profile.json`](configs/v2-task-profile.json)、
 [`configs/mvp-instruction-options.json`](configs/mvp-instruction-options.json)。
 不要把自然语言扩写成“请将……放置……”；任何标点、空格或措辞差异都可能导致
 任务解析、Canonical 校验或 Pi0.5 服务拒绝请求。
 
-当前 UI 还登记了三条未开放正式数据采集的任务：
-`P03_UPRIGHT_TO_S12`、`BIN01_TO_FINISHED01` 和 `PACK_ALL_AND_FINISH`。
-它们必须先完成各自的任务合同和验收，不能伪装成上述两个正式任务的数据。
+当前 UI 还登记了两条未开放正式数据采集的任务：
+`P03_UPRIGHT_TO_S12` 和 `PACK_ALL_AND_FINISH`。
+它们必须先完成各自的任务合同和验收，不能伪装成上述三个正式任务的数据。
 
 ## 2. V2 场景
 
@@ -151,7 +152,7 @@ python scripts\pi05\convert_openpi_v2.py `
 ```
 
 V2 转换要求连续 10 Hz 动作；N 条动作只能生成 N−9 个完整 `[10,7]` 窗口。
-缺少精确 tick、padding、NaN/Inf、错误 task identity 或非 Arm_A/`pi05` 身份时，
+缺少精确 tick、padding、NaN/Inf、错误 task identity 或非任务允许的臂/`pi05` 身份时，
 流程必须 fail-closed。正式训练还需要在固定 LeRobot/OpenPI 环境中执行转换、
 norm stats 和 release gate，详见 [`services/pi05/README.md`](services/pi05/README.md)。
 
@@ -160,8 +161,8 @@ norm stats 和 release gate，详见 [`services/pi05/README.md`](services/pi05/R
 π0.5 服务使用 V2 配置和固定角色：
 
 - 服务启动必须设置 `PI05_TASK_PROFILE_VERSION=v2`；
-- 只接受 `P01_TO_S11` 或 `W01_TO_S14` 的精确指令；
-- 只向 `Arm_A` 输出统一的 7D 动作；
+- 接受 `P01_TO_S11`、`W01_TO_S14` 和 `BIN01_TO_FINISHED01` 的精确指令；
+- 每次只向当前控制臂输出统一的 7D 动作；任务三按 Arm_A→Arm_B 串行交接；
 - 请求入口必须先通过 CAS 图像解析和输入合同校验；
 - `CAM_A_TOP` 是 V2 Pi0.5 的完整 RGB 输入，`wrist_image` 必须为 `null`；
 - 缺图、坏 SHA、解码失败、错误机械臂或错误指令都必须拒绝请求；

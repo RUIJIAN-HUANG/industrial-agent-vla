@@ -1,0 +1,26 @@
+{
+  "schema_version": "1.0",
+  "task_id": "BIN01_TO_FINISHED01",
+  "instruction": "把Bin_01搬到FINISHED_01",
+  "task_type": "visual_manipulation",
+  "target_object": "Bin_01",
+  "target_location": "FINISHED_01",
+  "constraints": {
+    "scene_id": "single_bin_manual_industrial_v2",
+    "online_ground_truth": false,
+    "handoff_sequence": ["Arm_A", "HANDOFF_VERIFY", "Arm_B"]
+  },
+  "metadata": {
+    "profile_id": "single_bin_manual_industrial_v2",
+    "subtask_id": "BIN01_TO_FINISHED01"
+  },
+  "postconditions": [
+    {
+      "kind": "object_in_zone",
+      "object_id": "Bin_01",
+      "zone_id": "FINISHED_01",
+      "min_confidence": 0.6,
+      "required_votes": 2
+    }
+  ]
+}

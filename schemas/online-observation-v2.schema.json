@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://industrial-agent.local/schemas/online-observation-v2.schema.json",
   "title": "V2 Online Observation",
-  "description": "Sensor-only observation for the V2 single-arm π0.5 closed loop.",
+  "description": "Sensor-only observation for the V2 single-active-arm π0.5 closed loop.",
   "type": "object",
   "additionalProperties": false,
   "required": ["observation_version", "observation_id", "timestamp_ms", "camera", "robot", "safety", "task", "quality"],
@@ -19,14 +19,37 @@
       "additionalProperties": false,
       "required": ["task_id", "target_object_id", "target_slot_id", "status", "terminal", "terminal_confidence", "verification_votes"],
       "properties": {
-        "task_id": {"enum": ["P01_TO_S11", "W01_TO_S14"]},
+        "task_id": {"enum": ["P01_TO_S11", "W01_TO_S14", "BIN01_TO_FINISHED01"]},
         "target_object_id": {"type": "string", "minLength": 1},
-        "target_slot_id": {"type": "string", "pattern": "^S1[1-4]$"},
+        "target_slot_id": {
+          "type": ["string", "null"],
+          "pattern": "^S1[1-4]$"
+        },
         "status": {"enum": ["ACTIVE", "SUCCEEDED", "FAILED"]},
         "terminal": {"type": "boolean"},
         "terminal_confidence": {"type": "number", "minimum": 0, "maximum": 1},
         "verification_votes": {"type": "integer", "minimum": 0, "maximum": 3}
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"task_id": {"enum": ["P01_TO_S11", "W01_TO_S14"]}},
+            "required": ["task_id"]
+          },
+          "then": {
+            "properties": {
+              "target_slot_id": {"type": "string", "pattern": "^S1[1-4]$"}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"task_id": {"const": "BIN01_TO_FINISHED01"}},
+            "required": ["task_id"]
+          },
+          "then": {"properties": {"target_slot_id": {"const": null}}}
+        }
+      ]
     },
     "quality": {"$ref": "online-observation-common.schema.json#/$defs/quality"}
   }

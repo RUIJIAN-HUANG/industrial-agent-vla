@@ -111,3 +111,24 @@ def test_v2_gateway_rejects_active_arm_b() -> None:
     raw["robot"]["active_arm"] = "Arm_B"
     with pytest.raises(ObservationError, match="Arm_A or NONE"):
         V2ObservationGateway().ingest_online(raw)
+
+
+def test_v2_gateway_accepts_bin_handoff_arm_b() -> None:
+    raw = v2_observation()
+    raw["robot"]["active_arm"] = "Arm_B"
+    raw["robot"]["arm_a"]["retreated"] = True
+    raw["robot"]["arm_a"]["stationary"] = True
+    raw["robot"]["arm_b"]["retreated"] = False
+    raw["robot"]["arm_b"]["stationary"] = False
+    raw["task"] = {
+        "task_id": "BIN01_TO_FINISHED01",
+        "target_object_id": "Bin_01",
+        "target_slot_id": None,
+        "status": "ACTIVE",
+        "terminal": False,
+        "terminal_confidence": 0.0,
+        "verification_votes": 0,
+    }
+    assert V2ObservationGateway().ingest_online(raw).data["task"]["task_id"] == (
+        "BIN01_TO_FINISHED01"
+    )
