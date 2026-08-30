@@ -15,7 +15,7 @@
     "scene_id": {"const": "single_bin_manual_industrial_v2"},
     "task_profile": {"const": "configs/v2-task-profile.json"},
     "formal_task_ids": {
-      "const": ["P01_TO_S11", "W01_TO_S14"]
+      "const": ["P01_TO_S11", "W01_TO_S14", "BIN01_TO_FINISHED01"]
     },
     "verification": {
       "type": "object",

@@ -64,7 +64,7 @@
       "additionalProperties": false,
       "required": ["active_arm", "arm_a", "arm_b"],
       "properties": {
-        "active_arm": {"enum": ["Arm_A", "NONE"]},
+        "active_arm": {"enum": ["Arm_A", "Arm_B", "NONE"]},
         "arm_a": {"$ref": "#/$defs/armObservation"},
         "arm_b": {"$ref": "#/$defs/armObservation"}
       }

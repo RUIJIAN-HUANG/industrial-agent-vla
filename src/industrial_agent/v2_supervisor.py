@@ -7,7 +7,7 @@ from threading import Lock
 from typing import Any
 from uuid import uuid4
 
-from .contracts import Subtask, SubtaskStatus, TaskPlan, TaskSchema
+from .contracts import Postcondition, Subtask, SubtaskStatus, TaskPlan, TaskSchema
 from .environment import ExecutionEnvironment, execution_guard_digest
 from .errors import AgentError, FailureCode
 from .executor import ExecutionContext, Executor
@@ -24,6 +24,7 @@ from .v2_task_profile import (
 
 
 V2_CONTROL_TOKEN = "A_ONLY"
+BIN_HANDOFF_TASK_ID = "BIN01_TO_FINISHED01"
 
 
 def _tuple3(value: Any, label: str) -> tuple[float, float, float]:
@@ -60,7 +61,7 @@ def v2_safety_policy_from_config(config: Mapping[str, Any]) -> SafetyPolicy:
 
 
 class V2TaskPlanner:
-    """Map one frozen V2 user choice to one π0.5 subtask without NLP routing."""
+    """Map one frozen V2 user choice to an ordered π0.5 execution plan."""
 
     def plan(self, task: TaskSchema, run_id: str) -> TaskPlan:
         task.validate()
@@ -69,7 +70,8 @@ class V2TaskPlanner:
             raise ValueError("task instruction does not match the frozen V2 catalog")
         if task.target_object != spec.target_object:
             raise ValueError("task target_object does not match the frozen V2 catalog")
-        if task.target_location != spec.target_slot:
+        expected_target = spec.target_slot or spec.target_zone
+        if task.target_location != expected_target:
             raise ValueError(
                 "task target_location does not match the frozen V2 catalog"
             )
@@ -77,31 +79,69 @@ class V2TaskPlanner:
             raise ValueError(f"task metadata.profile_id must be {V2_PROFILE_ID!r}")
         if task.constraints.get("scene_id") != V2_SCENE_ID:
             raise ValueError(f"task constraints.scene_id must be {V2_SCENE_ID!r}")
-        subtask = Subtask(
-            subtask_id=spec.task_id,
-            sequence=1,
-            instruction=spec.instruction,
-            task_type=task.task_type,
-            preconditions=(),
-            postconditions=task.postconditions,
-            assigned_executor="pi05",
-            arm_id=spec.active_arm,
-            repeat_until_postcondition=True,
-            max_iterations=100,
-            status=SubtaskStatus.READY,
-        )
+        if spec.task_id == BIN_HANDOFF_TASK_ID:
+            handoff_subtask = Subtask(
+                subtask_id="BIN01_TO_HANDOFF_CENTER",
+                sequence=1,
+                instruction="把Bin_01搬到HANDOFF_CENTER",
+                task_type=task.task_type,
+                preconditions=(),
+                postconditions=(
+                    Postcondition(
+                        kind="object_in_zone",
+                        object_id="Bin_01",
+                        zone_id="HANDOFF_CENTER",
+                    ),
+                ),
+                assigned_executor="pi05",
+                arm_id="Arm_A",
+                repeat_until_postcondition=True,
+                max_iterations=100,
+                status=SubtaskStatus.READY,
+            )
+            finish_subtask = Subtask(
+                subtask_id="BIN01_HANDOFF_TO_FINISHED01",
+                sequence=2,
+                instruction=spec.instruction,
+                task_type=task.task_type,
+                preconditions=handoff_subtask.postconditions,
+                postconditions=task.postconditions,
+                depends_on=(handoff_subtask.subtask_id,),
+                assigned_executor="pi05",
+                arm_id="Arm_B",
+                repeat_until_postcondition=True,
+                max_iterations=100,
+                status=SubtaskStatus.PENDING,
+            )
+            subtasks = [handoff_subtask, finish_subtask]
+        else:
+            subtasks = [
+                Subtask(
+                    subtask_id=spec.task_id,
+                    sequence=1,
+                    instruction=spec.instruction,
+                    task_type=task.task_type,
+                    preconditions=(),
+                    postconditions=task.postconditions,
+                    assigned_executor="pi05",
+                    arm_id=spec.active_arm,
+                    repeat_until_postcondition=True,
+                    max_iterations=100,
+                    status=SubtaskStatus.READY,
+                )
+            ]
         plan = TaskPlan(
             plan_id=f"v2-plan-{uuid4().hex}",
             episode_id=run_id,
             task_id=task.task_id,
-            subtasks=[subtask],
+            subtasks=subtasks,
         )
         plan.validate()
         return plan
 
 
 class V2Supervisor:
-    """Single-policy V2 Supervisor with bounded decisions and atomic execution."""
+    """Single-policy V2 Supervisor with bounded, ordered execution."""
 
     def __init__(
         self,
@@ -213,7 +253,7 @@ class V2Supervisor:
                 )
             fsm.transition(
                 AgentState.PLANNING,
-                f"V2 task mapped to pi05/{plan.subtasks[0].arm_id}",
+                f"V2 task mapped to {len(plan.subtasks)} ordered pi05 subtask(s)",
             )
             if not self.executor.health():
                 fsm.transition(AgentState.FAILED, "pi05 health check failed")
@@ -278,7 +318,8 @@ class V2Supervisor:
                         fsm.transition(
                             AgentState.SUCCEEDED, "V2 terminal evidence accepted"
                         )
-                        plan.subtasks[0].status = SubtaskStatus.VERIFIED
+                        for subtask in plan.subtasks:
+                            subtask.status = SubtaskStatus.VERIFIED
                         token_history.append("NONE")
                         return self._result(
                             run_id,
@@ -292,7 +333,9 @@ class V2Supervisor:
                             token_history,
                         )
 
-                    arm_id = plan.subtasks[0].arm_id or "Arm_A"
+                    active_subtask = self._active_subtask(task, plan, observation)
+                    active_subtask.status = SubtaskStatus.RUNNING
+                    arm_id = active_subtask.arm_id or "Arm_A"
                     control_token = "A_ONLY" if arm_id == "Arm_A" else "B_ONLY"
                     fsm.transition(
                         AgentState.ASSIGNING_ROLE,
@@ -376,7 +419,8 @@ class V2Supervisor:
                         fsm.transition(
                             AgentState.SUCCEEDED, "V2 terminal evidence accepted"
                         )
-                        plan.subtasks[0].status = SubtaskStatus.VERIFIED
+                        for subtask in plan.subtasks:
+                            subtask.status = SubtaskStatus.VERIFIED
                         return self._result(
                             run_id,
                             task.task_id,
@@ -448,6 +492,24 @@ class V2Supervisor:
                 )
         finally:
             self._run_lock.release()
+
+    @staticmethod
+    def _active_subtask(task: TaskSchema, plan: TaskPlan, observation: Any) -> Subtask:
+        """Select the current relay leg from the authoritative active-arm lease."""
+
+        if task.task_id != BIN_HANDOFF_TASK_ID:
+            return plan.subtasks[0]
+        robot = observation.data.get("robot")
+        active_arm = robot.get("active_arm") if isinstance(robot, Mapping) else None
+        if active_arm == "Arm_A":
+            return plan.subtasks[0]
+        if active_arm == "Arm_B":
+            plan.subtasks[0].status = SubtaskStatus.VERIFIED
+            return plan.subtasks[1]
+        raise ValueError(
+            "BIN01_TO_FINISHED01 requires an active Arm_A or Arm_B lease "
+            "before requesting an action"
+        )
 
     def _terminal_state(
         self, observation: Any, task: TaskSchema

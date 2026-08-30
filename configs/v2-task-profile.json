@@ -1,7 +1,7 @@
 {
   "profile_id": "single_bin_manual_industrial_v2",
   "scene_id": "single_bin_manual_industrial_v2",
-  "formal_task_ids": ["P01_TO_S11", "W01_TO_S14"],
+  "formal_task_ids": ["P01_TO_S11", "W01_TO_S14", "BIN01_TO_FINISHED01"],
   "tasks": [
     {
       "task_id": "P01_TO_S11",
@@ -29,11 +29,12 @@
     },
     {
       "task_id": "BIN01_TO_FINISHED01",
-      "instruction": "请将料箱 Bin_01 搬运到成品区 FINISHED_01。",
+      "instruction": "把Bin_01搬到FINISHED_01",
       "target_object": "Bin_01",
       "target_slot": null,
-      "active_arm": "Arm_B",
-      "formal_data": false
+      "active_arm": "Arm_A",
+      "formal_data": true,
+      "target_zone": "FINISHED_01"
     },
     {
       "task_id": "PACK_ALL_AND_FINISH",
