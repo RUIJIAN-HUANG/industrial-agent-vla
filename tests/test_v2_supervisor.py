@@ -4,7 +4,12 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
-from industrial_agent.contracts import ActionChunk, ActionStep, Postcondition, TaskSchema
+from industrial_agent.contracts import (
+    ActionChunk,
+    ActionStep,
+    Postcondition,
+    TaskSchema,
+)
 from industrial_agent.environment import SafeStopReceipt
 from industrial_agent.executor import ExecutionContext, ExecutorDescriptor
 from industrial_agent.fsm import AgentState

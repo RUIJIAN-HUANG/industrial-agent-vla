@@ -32,9 +32,7 @@ class V2TaskSpec:
         if self.active_arm not in {"Arm_A", "Arm_B"}:
             raise ValueError(f"unsupported V2 active arm: {self.active_arm!r}")
         if self.formal_data and self.target_slot is None and self.target_zone is None:
-            raise ValueError(
-                "formal V2 tasks require target_slot or target_zone"
-            )
+            raise ValueError("formal V2 tasks require target_slot or target_zone")
 
 
 V2_TASKS: tuple[V2TaskSpec, ...] = (
@@ -122,9 +120,7 @@ def v2_task_from_mapping(value: Mapping[str, Any]) -> V2TaskSpec:
         active_arm=str(value.get("active_arm", "")),
         formal_data=bool(value.get("formal_data", False)),
         target_zone=(
-            str(value["target_zone"])
-            if value.get("target_zone") is not None
-            else None
+            str(value["target_zone"]) if value.get("target_zone") is not None else None
         ),
     )
     expected = v2_task(task.task_id)

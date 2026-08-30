@@ -494,9 +494,7 @@ class V2Supervisor:
             self._run_lock.release()
 
     @staticmethod
-    def _active_subtask(
-        task: TaskSchema, plan: TaskPlan, observation: Any
-    ) -> Subtask:
+    def _active_subtask(task: TaskSchema, plan: TaskPlan, observation: Any) -> Subtask:
         """Select the current relay leg from the authoritative active-arm lease."""
 
         if task.task_id != BIN_HANDOFF_TASK_ID:

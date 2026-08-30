@@ -181,7 +181,10 @@ class V2ObservationGateway:
         arm_a = value["arm_a"]
         arm_b = value["arm_b"]
         if task_id != "BIN01_TO_FINISHED01":
-            if arm_b.get("retreated") is not True or arm_b.get("stationary") is not True:
+            if (
+                arm_b.get("retreated") is not True
+                or arm_b.get("stationary") is not True
+            ):
                 cls._invalid("Arm_B must remain retreated and stationary in formal V2")
             return
         if active_arm == "Arm_A" and (
@@ -196,7 +199,9 @@ class V2ObservationGateway:
             arm.get("retreated") is True and arm.get("stationary") is True
             for arm in (arm_a, arm_b)
         ):
-            cls._invalid("both arms must be retreated and stationary during handoff verification")
+            cls._invalid(
+                "both arms must be retreated and stationary during handoff verification"
+            )
 
     @classmethod
     def _validate_safety(cls, value: Any) -> None:
