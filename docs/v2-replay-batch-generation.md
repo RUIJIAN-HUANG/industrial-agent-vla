@@ -51,11 +51,13 @@ python simulation\generate_v2_replay_batch.py plan `
 python scripts\pi05\convert_openpi_v2.py `
   --data-dir $CanonicalRoot `
   --split-registry '<SHA_VERIFIED_SPLIT_REGISTRY_JSON>' `
+  --include-split train `
   --preflight-only
 
 python scripts\pi05\convert_openpi_v2.py `
   --data-dir $CanonicalRoot `
   --split-registry '<SHA_VERIFIED_SPLIT_REGISTRY_JSON>' `
+  --include-split train `
   --output-dir '<LEROBOT_DATASET_ROOT>' `
   --repo-id '<ORG/REPO_ID>'
 ```

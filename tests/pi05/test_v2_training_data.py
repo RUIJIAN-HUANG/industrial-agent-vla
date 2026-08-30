@@ -98,6 +98,60 @@ def _write_manifest(
     return path
 
 
+def _write_segment_manifest(root: Path, registry: SplitRegistry) -> Path:
+    episodes = []
+    for index, (arm_id, camera_id, source_executor) in enumerate(
+        (
+            ("Arm_A", "CAM_A_TOP", "pi05"),
+            ("Arm_B", "CAM_B_TOP", "openvla_oft"),
+        )
+    ):
+        episodes.append(
+            {
+                "lerobot_episode_index": index,
+                "canonical_episode_id": "episode-001",
+                "canonical_split": "train",
+                "active_arm": arm_id,
+                "camera_id": camera_id,
+                "source_executor": source_executor,
+                "target_executor": "pi05",
+                "source_hdf5_sha256": "sha256:" + "1" * 64,
+                "source_structure_sha256": "sha256:" + "2" * 64,
+                "canonical_action_count": 20,
+                "source_action_start_index": index * 10,
+                "source_action_stop_index": (index + 1) * 10,
+                "source_action_count": 10,
+                "window_count": 1,
+                "window_start_action_indices": [index * 10],
+            }
+        )
+    manifest = {
+        "manifest_version": "1.1",
+        "source_format": "canonical_hdf5_v2",
+        "repo_id": "industrial/pi05-test-segments",
+        "action_horizon": 10,
+        "action_shape": [10, 7],
+        "padding": "forbidden",
+        "window_rule": "per-arm-segment-N-9",
+        "included_splits": ["train"],
+        "source_split_registry_sha256": registry.registry_sha256,
+        "counts": {"episodes": 2, "canonical_episodes": 1, "windows": 2},
+        "roundtrip": {"episodes": 2, "windows": 2, "max_action_error": 0.0},
+        "episodes": episodes,
+    }
+    path = root / "pi05_v2_conversion.json"
+    path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    (root / MANIFEST_SHA256_FILENAME).write_text(
+        f"{digest}  {path.name}\n",
+        encoding="ascii",
+    )
+    return path
+
+
 def test_v2_source_loads_verified_train_windows(tmp_path: Path) -> None:
     registry = _registry()
     manifest_path = _write_manifest(tmp_path, registry)
@@ -120,6 +174,39 @@ def test_v2_source_loads_verified_train_windows(tmp_path: Path) -> None:
         "windows": 2,
         "action_vectors": 20,
     }
+
+
+def test_v2_source_accepts_two_arm_segments_from_one_canonical_episode(
+    tmp_path: Path,
+) -> None:
+    registry = _registry()
+    manifest_path = _write_segment_manifest(tmp_path, registry)
+    frames = [
+        {
+            "state": np.full(7, index, dtype=np.float32),
+            "actions": np.full((10, 7), index, dtype=np.float32),
+            "task": "把Bin_01搬到FINISHED_01",
+            "episode_index": np.asarray(index, dtype=np.int64),
+            "frame_index": np.asarray(0, dtype=np.int64),
+        }
+        for index in range(2)
+    ]
+
+    loaded = load_lerobot_v2_norm_source(
+        tmp_path,
+        repo_id="industrial/pi05-test-segments",
+        split_registry=registry,
+        dataset_opener=lambda _root, _repo_id: FakeDataset(frames),
+        manifest_path=manifest_path,
+    )
+
+    assert loaded.state.shape == (2, 7)
+    assert loaded.actions.shape == (2, 10, 7)
+    assert len(loaded.source_manifest["sources"]) == 2
+    assert [source["active_arm"] for source in loaded.source_manifest["sources"]] == [
+        "Arm_A",
+        "Arm_B",
+    ]
 
 
 def test_v2_source_rejects_manifest_checksum_tampering(tmp_path: Path) -> None:
