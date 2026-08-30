@@ -210,7 +210,9 @@ def validate_environment(
 
     # π0.5 may run one worker per GPU. Keep PI05_GPU_ID as a compatibility
     # fallback for older single-GPU environment files.
-    pi05_gpu_name = "PI05_GPU_IDS" if environment.get("PI05_GPU_IDS", "").strip() else "PI05_GPU_ID"
+    pi05_gpu_name = (
+        "PI05_GPU_IDS" if environment.get("PI05_GPU_IDS", "").strip() else "PI05_GPU_ID"
+    )
     for name in (pi05_gpu_name, "YOLO_GPU_ID"):
         _record_check(
             results,

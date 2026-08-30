@@ -44,7 +44,9 @@ except Exception as exc:  # pragma: no cover - exercised by image build, not uni
 logger = logging.getLogger("pi05_multi_gpu")
 if not logger.handlers:
     handler = logging.StreamHandler()
-    handler.setFormatter(logging.Formatter("[%(asctime)s][%(levelname)s][pi05_multi_gpu] %(message)s"))
+    handler.setFormatter(
+        logging.Formatter("[%(asctime)s][%(levelname)s][pi05_multi_gpu] %(message)s")
+    )
     logger.addHandler(handler)
 logger.setLevel(logging.INFO)
 
@@ -165,7 +167,9 @@ def _forward(
     except HTTPError as exc:
         return exc.code, exc.read(), exc.headers.get_content_type()
     except URLError as exc:
-        payload = json.dumps({"error": "worker_unavailable", "reason": str(exc)}).encode()
+        payload = json.dumps(
+            {"error": "worker_unavailable", "reason": str(exc)}
+        ).encode()
         return 503, payload, "application/json"
 
 
@@ -187,8 +191,7 @@ async def _proxy(request: Request, path: str) -> Response:
 async def lifespan(_app: FastAPI):
     global workers
     workers = [
-        Worker(gpu_id, WORKER_PORT_BASE + index)
-        for index, gpu_id in enumerate(GPU_IDS)
+        Worker(gpu_id, WORKER_PORT_BASE + index) for index, gpu_id in enumerate(GPU_IDS)
     ]
     logger.info("π0.5 multi-GPU workers started: gpu_ids=%s", GPU_IDS)
     try:
@@ -205,10 +208,7 @@ app = FastAPI(title="π0.5 multi-GPU gateway", lifespan=lifespan)
 @app.get("/health")
 async def health() -> dict[str, Any]:
     checks = await asyncio.gather(
-        *(
-            run_in_threadpool(_forward, worker, "GET", "/health")
-            for worker in workers
-        ),
+        *(run_in_threadpool(_forward, worker, "GET", "/health") for worker in workers),
         return_exceptions=True,
     )
     payloads: list[dict[str, Any]] = []
@@ -254,4 +254,6 @@ async def cancel(request: Request) -> Response:
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host=os.environ.get("PI05_SERVICE_HOST", "0.0.0.0"), port=PUBLIC_PORT)
+    uvicorn.run(
+        app, host=os.environ.get("PI05_SERVICE_HOST", "0.0.0.0"), port=PUBLIC_PORT
+    )
