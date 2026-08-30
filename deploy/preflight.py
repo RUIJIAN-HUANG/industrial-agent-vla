@@ -208,20 +208,23 @@ def validate_environment(
             ),
         )
 
-    for name in ("PI05_GPU_ID", "YOLO_GPU_ID"):
+    # π0.5 may run one worker per GPU. Keep PI05_GPU_ID as a compatibility
+    # fallback for older single-GPU environment files.
+    pi05_gpu_name = "PI05_GPU_IDS" if environment.get("PI05_GPU_IDS", "").strip() else "PI05_GPU_ID"
+    for name in (pi05_gpu_name, "YOLO_GPU_ID"):
         _record_check(
             results,
             f"gpu:{name}",
             lambda name=name: _require(environment, name),
         )
-    gpu_ids = [
-        environment.get(name, "").strip()
-        for name in (
-            "PI05_GPU_ID",
-            "YOLO_GPU_ID",
-        )
+    pi05_gpu_ids = [
+        item.strip()
+        for item in environment.get(pi05_gpu_name, "").split(",")
+        if item.strip()
     ]
-    if all(gpu_ids) and len(set(gpu_ids)) < len(gpu_ids):
+    yolo_gpu_ids = [environment.get("YOLO_GPU_ID", "").strip()]
+    all_gpu_ids = pi05_gpu_ids + [item for item in yolo_gpu_ids if item]
+    if all_gpu_ids and len(set(all_gpu_ids)) < len(all_gpu_ids):
         warnings.append(
             "multiple services share a GPU; validate peak memory and concurrent "
             "YOLO/VLA inference before production"

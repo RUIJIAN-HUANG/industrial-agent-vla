@@ -175,6 +175,16 @@ norm stats 和 release gate，详见 [`services/pi05/README.md`](services/pi05/R
 - [`configs/v2-task-profile.json`](configs/v2-task-profile.json)
 - 服务实现：[`services/pi05/`](services/pi05/)
 
+单机多卡训练使用 OpenPI/JAX FSDP 模型分片。`PI05_FSDP_DEVICES` 必须与
+`CUDA_VISIBLE_DEVICES` 中的 GPU 数一致，且全局 `PI05_BATCH_SIZE` 必须能被该数整除：
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 \
+PI05_FSDP_DEVICES=2 PI05_BATCH_SIZE=32 \
+python scripts/pi05/train.py --config-name pi05_industrial \
+  --exp-name pi05_2gpu --overwrite
+```
+
 ### 当前提交边界
 
 π0.5 的工业策略尚未完成训练和最终验收。因此当前仓库是“工程提交候选版”，

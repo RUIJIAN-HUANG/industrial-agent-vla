@@ -314,7 +314,7 @@ def load_openpi_train_module():
 def apply_overrides(config: Any, args: argparse.Namespace) -> Any:
     """将 CLI 参数与环境变量应用到 config，返回新 config（dataclasses.replace）。
 
-    透传参数：exp_name, overwrite, resume（官方 TrainConfig 字段）
+    透传参数：exp_name, overwrite, resume, fsdp_devices（官方 TrainConfig 字段）
     环境变量覆盖：checkpoint_base_dir, assets_base_dir
     """
     overrides: dict[str, Any] = {
@@ -330,6 +330,9 @@ def apply_overrides(config: Any, args: argparse.Namespace) -> Any:
     assets_dir = _os.environ.get("PI05_ASSETS_DIR")
     if assets_dir:
         overrides["assets_base_dir"] = assets_dir
+    fsdp_devices = getattr(args, "fsdp_devices", None)
+    if fsdp_devices is not None:
+        overrides["fsdp_devices"] = fsdp_devices
 
     # 仅保留 config 实际拥有的字段（占位 dataclass 可能缺 checkpoint_base_dir/assets_base_dir）
     if dataclasses.is_dataclass(config):
@@ -438,7 +441,13 @@ def print_summary(config: Any, config_name: str, args: argparse.Namespace) -> No
     print(f"  Grad Accum Steps:   {grad_accum}")
     print(f"  Mixed Precision:    {mixed_prec}  (JAX 路径推荐 bf16，方案书 §3.3)")
     print(f"  Eval Interval:      {eval_interval}")
-    print(f"  FSDP Devices:       {fsdp}  (单卡=1，方案书 §3.3 JAX 路径)")
+    print(
+        f"  FSDP Devices:       {fsdp}  "
+        "(JAX/OpenPI 单机模型分片卡数；需与可见 GPU 数一致)"
+    )
+    if isinstance(fsdp, int) and fsdp > 0:
+        effective = batch_size // fsdp if batch_size % fsdp == 0 else "INVALID"
+        print(f"  Effective Batch/GPU: {effective}")
     print("-" * 72)
     print(f"  Memory Fraction:    {mem_frac}  (XLA_PYTHON_CLIENT_MEM_FRACTION)")
     print(f"  Assets Dirs:        {assets_dirs}")
@@ -523,6 +532,15 @@ def parse_args() -> argparse.Namespace:
         default="skip",
         help="Mock 模式 norm_stats 处理策略：skip=跳过校验；generate=生成 Mock 统计文件。",
     )
+    parser.add_argument(
+        "--fsdp-devices",
+        type=int,
+        default=None,
+        help=(
+            "单机 FSDP 模型分片使用的 GPU 数；优先级高于 PI05_FSDP_DEVICES。"
+            "真实训练前需确保 CUDA_VISIBLE_DEVICES 包含相同数量的 GPU。"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -563,6 +581,22 @@ def main() -> int:
         args.overwrite,
         args.resume,
     )
+
+    # OpenPI 官方训练器要求全局 batch_size 能被设备数整除；在加载数据前
+    # 提前报出清晰错误，避免模型初始化后才失败。
+    fsdp_devices = getattr(config, "fsdp_devices", 1)
+    batch_size = getattr(config, "batch_size", 1)
+    if not isinstance(fsdp_devices, int) or fsdp_devices < 1:
+        logger.error("fsdp_devices 必须是正整数，当前值=%r。", fsdp_devices)
+        return 1
+    if isinstance(batch_size, int) and batch_size % fsdp_devices != 0:
+        logger.error(
+            "batch_size=%d 必须能被 fsdp_devices=%d 整除；请调整 PI05_BATCH_SIZE 或 "
+            "--fsdp-devices。",
+            batch_size,
+            fsdp_devices,
+        )
+        return 1
 
     # ---- 4. Mock 模式：替换 data 为 FakeDataConfig（红线 3）----
     if args.mock:
