@@ -29,6 +29,9 @@ EXPECTED_TASK_ACTION_IDENTITIES = {
     "W01_TO_S14": frozenset({("Arm_A", "pi05")}),
     "BIN01_TO_FINISHED01": frozenset({("Arm_A", "pi05"), ("Arm_B", "pi05")}),
 }
+LEGACY_BIN01_ACTION_IDENTITIES = frozenset(
+    {("Arm_A", "pi05"), ("Arm_B", "openvla_oft")}
+)
 EXPECTED_TASK_CAMERA_IDS = {
     "P01_TO_S11": "CAM_A_TOP",
     "W01_TO_S14": "CAM_A_TOP",
@@ -118,6 +121,7 @@ class CanonicalV2Reader:
         episode_dir: str | Path,
         *,
         schema_path: str | Path = SCHEMA_PATH,
+        allow_legacy_bin01_source: bool = False,
     ) -> None:
         root = Path(episode_dir)
         provisional_id = root.name or "<unknown>"
@@ -129,6 +133,7 @@ class CanonicalV2Reader:
             )
         self.episode_path = root.resolve()
         self._h5: h5py.File | None = None
+        self.allow_legacy_bin01_source = allow_legacy_bin01_source
 
         structure_path = self.episode_path / "structure.json"
         hdf5_path = self.episode_path / "episode.h5"
@@ -406,17 +411,21 @@ class CanonicalV2Reader:
         task_id = str(self.manifest["metadata"]["task_id"])
         arm_ids = _decoded_strings(group["arm_id"])
         executors = _decoded_strings(group["executor"])
-        allowed_identities = EXPECTED_TASK_ACTION_IDENTITIES[task_id]
-        allowed_arms = {arm_id for arm_id, _ in allowed_identities}
+        allowed_identity_sets = [EXPECTED_TASK_ACTION_IDENTITIES[task_id]]
+        if task_id == "BIN01_TO_FINISHED01" and self.allow_legacy_bin01_source:
+            allowed_identity_sets.append(LEGACY_BIN01_ACTION_IDENTITIES)
+        allowed_arms = {
+            arm_id for identities in allowed_identity_sets for arm_id, _ in identities
+        }
         if any(arm_id not in allowed_arms for arm_id in arm_ids):
             self._fail(
                 "action arm_id is not allowed for this task",
                 "actions.arm_id",
             )
-        executor_by_arm = dict(allowed_identities)
-        if any(
-            executor != executor_by_arm[arm_id]
-            for arm_id, executor in zip(arm_ids, executors, strict=True)
+        actual_identities = set(zip(arm_ids, executors, strict=True))
+        if not any(
+            actual_identities.issubset(allowed_identities)
+            for allowed_identities in allowed_identity_sets
         ):
             self._fail(
                 "action executor does not match its arm_id",
@@ -491,6 +500,7 @@ __all__ = [
     "EXPECTED_TASK_ACTION_IDENTITIES",
     "EXPECTED_TASK_CAMERA_IDS",
     "EXPECTED_TASK_INSTRUCTIONS",
+    "LEGACY_BIN01_ACTION_IDENTITIES",
     "STATE_DIM",
     "CanonicalV2Error",
     "CanonicalV2Reader",

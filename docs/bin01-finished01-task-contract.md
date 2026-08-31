@@ -4,8 +4,10 @@
 - Canonical instruction: `把Bin_01搬到FINISHED_01`
 - Active-arm sequence: `Arm_A -> HANDOFF_VERIFY -> Arm_B`
 - Executor identities: `Arm_A/pi05`, then `Arm_B/pi05`
-- Training cameras/state: all three frozen cameras and both arm states; each action
-  stores its actual `arm_id` and executor
+- Canonical source: all three frozen cameras and both arm states remain unchanged;
+  each action stores its actual `arm_id` and source executor
+- Training input: Arm_A windows use `CAM_A_TOP` + Arm_A state; Arm_B windows use
+  `CAM_B_TOP` + Arm_B state. Windows never cross the handoff boundary
 
 The Episode must start from the unmodified frozen scene configuration. The task
 must not relocate, reorient, add, or remove any part at reset. Its only object

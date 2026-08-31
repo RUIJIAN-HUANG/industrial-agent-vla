@@ -15,12 +15,7 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 
 from industrial_agent.data import SplitRegistry
-from scripts.pi05.canonical_v2 import (
-    EXPECTED_TASK_ACTION_IDENTITIES,
-    EXPECTED_TASK_CAMERA_IDS,
-    CanonicalV2Error,
-    CanonicalV2Reader,
-)
+from scripts.pi05.canonical_v2 import CanonicalV2Error, CanonicalV2Reader
 
 
 ACTION_HORIZON = 10
@@ -31,6 +26,12 @@ STEP_NS = 100_000_000
 ACTION_TICK_STRIDE = 12
 MANIFEST_FILENAME = "pi05_v2_conversion.json"
 MANIFEST_SHA256_FILENAME = "pi05_v2_conversion.sha256"
+SEGMENT_WINDOW_RULE = "per-arm-segment-N-9"
+TARGET_EXECUTOR = "pi05"
+ARM_CAMERA_IDS = {
+    "Arm_A": "CAM_A_TOP",
+    "Arm_B": "CAM_B_TOP",
+}
 
 LeRobotDataset: Any = None
 LEROBOT_IMPORT_ERROR: str | None = None
@@ -40,17 +41,85 @@ except Exception as exc:  # pragma: no cover - optional local dependency
     LEROBOT_IMPORT_ERROR = str(exc)
 
 
-def _task_streams(reader: CanonicalV2Reader) -> tuple[str, str]:
-    task_id = str(reader.manifest["metadata"]["task_id"])
-    identities = EXPECTED_TASK_ACTION_IDENTITIES[task_id]
-    if len(identities) != 1:
+@dataclass(frozen=True)
+class ActionSegment:
+    """One contiguous active-arm range from a validated Canonical Episode."""
+
+    arm_id: str
+    camera_id: str
+    source_executor: str
+    target_executor: str
+    action_start_index: int
+    action_stop_index: int
+
+    @property
+    def action_count(self) -> int:
+        return self.action_stop_index - self.action_start_index
+
+
+def _reader_for_training(episode_dir: Path) -> CanonicalV2Reader:
+    """Open a Reader that also accepts the approved historical Bin source."""
+
+    return CanonicalV2Reader(episode_dir, allow_legacy_bin01_source=True)
+
+
+def _action_segments(reader: CanonicalV2Reader) -> tuple[ActionSegment, ...]:
+    """Return contiguous arm-specific ranges without crossing a handoff."""
+
+    arm_ids = [str(value) for value in reader.h5["actions/arm_id"].asstr()[:]]
+    executors = [str(value) for value in reader.h5["actions/executor"].asstr()[:]]
+    if not arm_ids:
         raise CanonicalV2Error(
-            "dual-arm tasks require an arm-aware LeRobot converter",
+            "training conversion requires at least one action",
             episode_id=reader.episode_id,
             field="actions.arm_id",
         )
-    arm_id, _ = next(iter(identities))
-    return arm_id, EXPECTED_TASK_CAMERA_IDS[task_id]
+    boundaries = [
+        index
+        for index in range(1, len(arm_ids))
+        if arm_ids[index] != arm_ids[index - 1]
+    ]
+    starts = [0, *boundaries]
+    stops = [*boundaries, len(arm_ids)]
+    segments: list[ActionSegment] = []
+    for start, stop in zip(starts, stops, strict=True):
+        arm_id = arm_ids[start]
+        source_executors = set(executors[start:stop])
+        if len(source_executors) != 1:
+            raise CanonicalV2Error(
+                "source executor must remain constant within one arm segment",
+                episode_id=reader.episode_id,
+                field="actions.executor",
+            )
+        segments.append(
+            ActionSegment(
+                arm_id=arm_id,
+                camera_id=ARM_CAMERA_IDS[arm_id],
+                source_executor=next(iter(source_executors)),
+                target_executor=TARGET_EXECUTOR,
+                action_start_index=start,
+                action_stop_index=stop,
+            )
+        )
+    task_id = str(reader.manifest["metadata"]["task_id"])
+    expected_arms = (
+        ("Arm_A", "Arm_B") if task_id == "BIN01_TO_FINISHED01" else ("Arm_A",)
+    )
+    if tuple(segment.arm_id for segment in segments) != expected_arms:
+        raise CanonicalV2Error(
+            f"task requires contiguous active-arm segments {expected_arms}",
+            episode_id=reader.episode_id,
+            field="actions.arm_id",
+        )
+    for segment in segments:
+        if segment.action_count < ACTION_HORIZON:
+            raise CanonicalV2Error(
+                f"{segment.arm_id} segment has {segment.action_count} actions; "
+                f"at least {ACTION_HORIZON} are required",
+                episode_id=reader.episode_id,
+                field="actions.action_7d",
+            )
+    return tuple(segments)
 
 
 @dataclass(frozen=True)
@@ -142,79 +211,126 @@ def _require_succeeded_episode(reader: CanonicalV2Reader) -> None:
         )
 
 
+def _normalize_included_splits(
+    included_splits: Sequence[str] | None,
+) -> frozenset[str]:
+    splits = frozenset(included_splits or ("train", "val", "test"))
+    supported = frozenset({"train", "val", "test"})
+    if not splits or not splits.issubset(supported):
+        raise ValueError("included_splits must contain one or more of train, val, test")
+    return splits
+
+
 def preflight_canonical_v2_windows(
     *,
     data_dir: str | Path,
     split_registry: SplitRegistry,
+    included_splits: Sequence[str] | None = None,
 ) -> dict[str, Any]:
-    """Read-only validation and exact N-9 window count without LeRobot."""
+    """Validate arm-local complete windows without creating LeRobot output."""
 
     if not isinstance(split_registry, SplitRegistry):
         raise TypeError("split_registry must be a verified SplitRegistry")
+    selected_splits = _normalize_included_splits(included_splits)
     episodes: list[dict[str, Any]] = []
     split_counts = {"train": 0, "val": 0, "test": 0}
     total_actions = 0
     total_windows = 0
+    total_segments = 0
+    excluded_episodes = 0
     for episode_dir in _find_episode_dirs(data_dir):
-        with CanonicalV2Reader(episode_dir) as reader:
+        with _reader_for_training(episode_dir) as reader:
             _require_succeeded_episode(reader)
             assignment = split_registry.assert_episode_allowed(
                 reader.episode_id,
                 is_training=False,
             )
+            split = assignment.split.value
+            if split not in selected_splits:
+                excluded_episodes += 1
+                continue
             _validate_contiguous_action_timeline(reader)
-            actions = np.asarray(reader.h5["actions/action_7d"][:])
-            windows = build_complete_action_windows(actions)
+            actions = np.asarray(
+                reader.h5["actions/action_7d"][:],
+                dtype=np.float32,
+            )
             action_ticks = np.asarray(
                 reader.h5["actions/physics_tick"][:],
                 dtype=np.uint64,
             )
-            arm_id, camera_id = _task_streams(reader)
-            camera_indices = _unique_tick_index(
-                np.asarray(
-                    reader.h5[f"cameras/{camera_id}/physics_tick"][:],
-                    dtype=np.uint64,
-                ),
-                field=camera_id,
-            )
-            state_indices = _unique_tick_index(
-                np.asarray(
-                    reader.h5[f"robot_state/{arm_id}/physics_tick"][:],
-                    dtype=np.uint64,
-                ),
-                field=f"{arm_id} state",
-            )
-            for start in range(len(windows)):
-                tick = int(action_ticks[start])
-                if tick not in camera_indices or tick not in state_indices:
-                    raise CanonicalV2Error(
-                        f"window start lacks exact-tick {camera_id} or {arm_id} state",
-                        episode_id=reader.episode_id,
-                        field="window_alignment",
-                    )
+            segment_reports: list[dict[str, Any]] = []
+            for segment in _action_segments(reader):
+                segment_actions = actions[
+                    segment.action_start_index : segment.action_stop_index
+                ]
+                windows = build_complete_action_windows(segment_actions)
+                camera_indices = _unique_tick_index(
+                    np.asarray(
+                        reader.h5[f"cameras/{segment.camera_id}/physics_tick"][:],
+                        dtype=np.uint64,
+                    ),
+                    field=segment.camera_id,
+                )
+                state_indices = _unique_tick_index(
+                    np.asarray(
+                        reader.h5[f"robot_state/{segment.arm_id}/physics_tick"][:],
+                        dtype=np.uint64,
+                    ),
+                    field=f"{segment.arm_id} state",
+                )
+                for local_start in range(len(windows)):
+                    global_start = segment.action_start_index + local_start
+                    tick = int(action_ticks[global_start])
+                    if tick not in camera_indices or tick not in state_indices:
+                        raise CanonicalV2Error(
+                            "window start lacks exact-tick "
+                            f"{segment.camera_id} or {segment.arm_id} state",
+                            episode_id=reader.episode_id,
+                            field="window_alignment",
+                        )
+                segment_reports.append(
+                    {
+                        "active_arm": segment.arm_id,
+                        "camera_id": segment.camera_id,
+                        "source_executor": segment.source_executor,
+                        "target_executor": segment.target_executor,
+                        "source_action_start_index": segment.action_start_index,
+                        "source_action_stop_index": segment.action_stop_index,
+                        "action_count": segment.action_count,
+                        "window_count": len(windows),
+                    }
+                )
+                total_segments += 1
+                total_windows += len(windows)
             action_count = int(actions.shape[0])
-            window_count = len(windows)
-            split = assignment.split.value
             split_counts[split] += 1
             total_actions += action_count
-            total_windows += window_count
             episodes.append(
                 {
                     "episode_id": reader.episode_id,
                     "split": split,
                     "action_count": action_count,
-                    "window_count": window_count,
+                    "window_count": sum(
+                        int(segment["window_count"]) for segment in segment_reports
+                    ),
+                    "segments": segment_reports,
                 }
             )
+    if not episodes:
+        raise ValueError("no Canonical V2 Episodes matched included_splits")
     return {
         "status": "ok",
         "source_format": "canonical_hdf5_v2",
         "action_horizon": ACTION_HORIZON,
-        "window_rule": "N-9",
+        "window_rule": SEGMENT_WINDOW_RULE,
         "padding": "forbidden",
+        "included_splits": sorted(selected_splits),
         "source_split_registry_sha256": split_registry.registry_sha256,
         "counts": {
             "episodes": len(episodes),
+            "canonical_episodes": len(episodes),
+            "lerobot_episodes": total_segments,
+            "excluded_episodes": excluded_episodes,
             "actions": total_actions,
             "windows": total_windows,
             "splits": split_counts,
@@ -341,12 +457,15 @@ def verify_conversion_manifest(path: str | Path) -> dict[str, Any]:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if not isinstance(manifest, dict):
         raise ValueError("conversion manifest must be an object")
+    manifest_version = manifest.get("manifest_version")
+    window_rule = manifest.get("window_rule")
     if (
         manifest.get("source_format") != "canonical_hdf5_v2"
         or manifest.get("action_horizon") != ACTION_HORIZON
         or manifest.get("action_shape") != [ACTION_HORIZON, ACTION_DIM]
         or manifest.get("padding") != "forbidden"
-        or manifest.get("window_rule") != "N-9"
+        or (manifest_version, window_rule)
+        not in (("1.0", "N-9"), ("1.1", SEGMENT_WINDOW_RULE))
     ):
         raise ValueError("conversion manifest contract is invalid")
     counts = manifest.get("counts")
@@ -360,6 +479,9 @@ def verify_conversion_manifest(path: str | Path) -> dict[str, Any]:
     ):
         raise ValueError("conversion manifest counts are invalid")
     expected_windows = 0
+    canonical_episode_ids: set[str] = set()
+    output_segment_keys: set[tuple[str, str]] = set()
+    canonical_segments: dict[str, list[tuple[int, int, int]]] = {}
     for episode in episodes:
         if not isinstance(episode, dict):
             raise ValueError("conversion manifest Episode entry is invalid")
@@ -372,9 +494,68 @@ def verify_conversion_manifest(path: str | Path) -> dict[str, Any]:
             or window_count != action_count - 9
         ):
             raise ValueError("conversion manifest violates the N-9 rule")
+        canonical_episode_id = episode.get("canonical_episode_id")
+        if not isinstance(canonical_episode_id, str) or not canonical_episode_id:
+            raise ValueError("conversion manifest Canonical Episode ID is invalid")
+        canonical_episode_ids.add(canonical_episode_id)
+        if manifest_version == "1.1":
+            arm_id = episode.get("active_arm")
+            camera_id = episode.get("camera_id")
+            start = episode.get("source_action_start_index")
+            stop = episode.get("source_action_stop_index")
+            canonical_count = episode.get("canonical_action_count")
+            if (
+                arm_id not in ARM_CAMERA_IDS
+                or camera_id != ARM_CAMERA_IDS[arm_id]
+                or episode.get("target_executor") != TARGET_EXECUTOR
+                or isinstance(start, bool)
+                or not isinstance(start, int)
+                or isinstance(stop, bool)
+                or not isinstance(stop, int)
+                or isinstance(canonical_count, bool)
+                or not isinstance(canonical_count, int)
+                or start < 0
+                or stop <= start
+                or stop > canonical_count
+                or stop - start != action_count
+            ):
+                raise ValueError(
+                    "conversion manifest arm-segment provenance is invalid"
+                )
+            segment_key = (canonical_episode_id, arm_id)
+            if segment_key in output_segment_keys:
+                raise ValueError("conversion manifest repeats an arm segment")
+            output_segment_keys.add(segment_key)
+            canonical_segments.setdefault(canonical_episode_id, []).append(
+                (start, stop, canonical_count)
+            )
         expected_windows += window_count
     if counts["windows"] != expected_windows:
         raise ValueError("conversion manifest total window count is inconsistent")
+    if manifest_version == "1.1" and counts.get("canonical_episodes") != len(
+        canonical_episode_ids
+    ):
+        raise ValueError("conversion manifest Canonical Episode count is inconsistent")
+    if manifest_version == "1.1":
+        for canonical_episode_id, segments in canonical_segments.items():
+            canonical_counts = {canonical_count for _, _, canonical_count in segments}
+            if len(canonical_counts) != 1:
+                raise ValueError(
+                    "conversion manifest uses inconsistent Canonical action counts"
+                )
+            canonical_count = next(iter(canonical_counts))
+            expected_start = 0
+            for start, stop, _ in segments:
+                if start != expected_start:
+                    raise ValueError(
+                        "conversion manifest Canonical arm segments are not contiguous"
+                    )
+                expected_start = stop
+            if expected_start != canonical_count:
+                raise ValueError(
+                    "conversion manifest Canonical arm segments do not cover the "
+                    f"full action stream for {canonical_episode_id!r}"
+                )
     roundtrip = manifest.get("roundtrip")
     if not isinstance(roundtrip, dict) or roundtrip.get("max_action_error") != 0.0:
         raise ValueError("conversion manifest lossless roundtrip proof is invalid")
@@ -390,6 +571,7 @@ def convert_canonical_v2_to_lerobot(
     robot_type: str = "franka",
     dataset_factory: Any | None = None,
     dataset_opener: Any | None = None,
+    included_splits: Sequence[str] | None = None,
 ) -> ConversionResult:
     """Convert every V2 Episode atomically and verify offline roundtrip."""
 
@@ -397,10 +579,12 @@ def convert_canonical_v2_to_lerobot(
         raise TypeError("split_registry must be a verified SplitRegistry")
     if not isinstance(repo_id, str) or not repo_id.strip():
         raise ValueError("repo_id must be a non-empty string")
+    selected_splits = _normalize_included_splits(included_splits)
     episode_dirs = _find_episode_dirs(data_dir)
     preflight_canonical_v2_windows(
         data_dir=data_dir,
         split_registry=split_registry,
+        included_splits=selected_splits,
     )
     final_dir = Path(output_dir).resolve()
     if final_dir.exists():
@@ -411,6 +595,7 @@ def convert_canonical_v2_to_lerobot(
     expected_actions: list[np.ndarray] = []
     expected_tasks: list[str] = []
     episode_manifest: list[dict[str, Any]] = []
+    canonical_episode_count = 0
     dataset: Any = None
 
     try:
@@ -419,84 +604,103 @@ def convert_canonical_v2_to_lerobot(
             output_dir=staging_dir,
             robot_type=robot_type,
         )
-        for output_episode_index, episode_dir in enumerate(episode_dirs):
-            with CanonicalV2Reader(episode_dir) as reader:
+        for episode_dir in episode_dirs:
+            with _reader_for_training(episode_dir) as reader:
                 _require_succeeded_episode(reader)
                 assignment = split_registry.assert_episode_allowed(
                     reader.episode_id,
                     is_training=False,
                 )
+                if assignment.split.value not in selected_splits:
+                    continue
+                canonical_episode_count += 1
                 _validate_contiguous_action_timeline(reader)
                 action_values = np.asarray(
                     reader.h5["actions/action_7d"][:],
                     dtype=np.float32,
                 )
-                windows = build_complete_action_windows(action_values)
                 action_ticks = np.asarray(
                     reader.h5["actions/physics_tick"][:],
                     dtype=np.uint64,
                 )
-                arm_id, camera_id = _task_streams(reader)
-                camera_indices = _unique_tick_index(
-                    np.asarray(
-                        reader.h5[f"cameras/{camera_id}/physics_tick"][:],
-                        dtype=np.uint64,
-                    ),
-                    field=camera_id,
-                )
-                state_indices = _unique_tick_index(
-                    np.asarray(
-                        reader.h5[f"robot_state/{arm_id}/physics_tick"][:],
-                        dtype=np.uint64,
-                    ),
-                    field=f"{arm_id} state",
-                )
-                starts: list[int] = []
-                for start, window in enumerate(windows):
-                    tick = int(action_ticks[start])
-                    camera_index = camera_indices.get(tick)
-                    state_index = state_indices.get(tick)
-                    if camera_index is None or state_index is None:
-                        raise CanonicalV2Error(
-                            "window start lacks exact-tick "
-                            f"{camera_id} or {arm_id} state",
-                            episode_id=reader.episode_id,
-                            field="window_alignment",
+                for segment in _action_segments(reader):
+                    segment_actions = action_values[
+                        segment.action_start_index : segment.action_stop_index
+                    ]
+                    windows = build_complete_action_windows(segment_actions)
+                    camera_indices = _unique_tick_index(
+                        np.asarray(
+                            reader.h5[f"cameras/{segment.camera_id}/physics_tick"][:],
+                            dtype=np.uint64,
+                        ),
+                        field=segment.camera_id,
+                    )
+                    state_indices = _unique_tick_index(
+                        np.asarray(
+                            reader.h5[f"robot_state/{segment.arm_id}/physics_tick"][:],
+                            dtype=np.uint64,
+                        ),
+                        field=f"{segment.arm_id} state",
+                    )
+                    starts: list[int] = []
+                    for local_start, window in enumerate(windows):
+                        global_start = segment.action_start_index + local_start
+                        tick = int(action_ticks[global_start])
+                        camera_index = camera_indices.get(tick)
+                        state_index = state_indices.get(tick)
+                        if camera_index is None or state_index is None:
+                            raise CanonicalV2Error(
+                                "window start lacks exact-tick "
+                                f"{segment.camera_id} or {segment.arm_id} state",
+                                episode_id=reader.episode_id,
+                                field="window_alignment",
+                            )
+                        image = np.asarray(
+                            reader.h5[f"cameras/{segment.camera_id}/rgb"][camera_index],
+                            dtype=np.uint8,
+                        ).copy()
+                        state = np.asarray(
+                            reader.h5[f"robot_state/{segment.arm_id}/state_7d"][
+                                state_index
+                            ],
+                            dtype=np.float32,
+                        ).copy()
+                        dataset.add_frame(
+                            {
+                                "image": image,
+                                "state": state,
+                                "actions": window.copy(),
+                                "task": reader.manifest["metadata"]["instruction"],
+                            }
                         )
-                    image = np.asarray(
-                        reader.h5[f"cameras/{camera_id}/rgb"][camera_index],
-                        dtype=np.uint8,
-                    ).copy()
-                    state = np.asarray(
-                        reader.h5[f"robot_state/{arm_id}/state_7d"][state_index],
-                        dtype=np.float32,
-                    ).copy()
-                    dataset.add_frame(
+                        expected_actions.append(window.copy())
+                        expected_tasks.append(
+                            reader.manifest["metadata"]["instruction"]
+                        )
+                        starts.append(global_start)
+                    dataset.save_episode()
+                    output_episode_index = len(episode_manifest)
+                    episode_manifest.append(
                         {
-                            "image": image,
-                            "state": state,
-                            "actions": window.copy(),
-                            "task": reader.manifest["metadata"]["instruction"],
+                            "lerobot_episode_index": output_episode_index,
+                            "canonical_episode_id": reader.episode_id,
+                            "canonical_split": assignment.split.value,
+                            "active_arm": segment.arm_id,
+                            "camera_id": segment.camera_id,
+                            "source_executor": segment.source_executor,
+                            "target_executor": segment.target_executor,
+                            "source_hdf5_sha256": reader.manifest["storage"]["sha256"],
+                            "source_structure_sha256": _sha256_file(
+                                episode_dir / "structure.json"
+                            ),
+                            "canonical_action_count": int(action_values.shape[0]),
+                            "source_action_start_index": segment.action_start_index,
+                            "source_action_stop_index": segment.action_stop_index,
+                            "source_action_count": segment.action_count,
+                            "window_count": len(windows),
+                            "window_start_action_indices": starts,
                         }
                     )
-                    expected_actions.append(window.copy())
-                    expected_tasks.append(reader.manifest["metadata"]["instruction"])
-                    starts.append(start)
-                dataset.save_episode()
-                episode_manifest.append(
-                    {
-                        "lerobot_episode_index": output_episode_index,
-                        "canonical_episode_id": reader.episode_id,
-                        "canonical_split": assignment.split.value,
-                        "source_hdf5_sha256": reader.manifest["storage"]["sha256"],
-                        "source_structure_sha256": _sha256_file(
-                            episode_dir / "structure.json"
-                        ),
-                        "source_action_count": int(action_values.shape[0]),
-                        "window_count": len(windows),
-                        "window_start_action_indices": starts,
-                    }
-                )
         stop_writer = getattr(dataset, "stop_image_writer", None)
         if not callable(stop_writer):
             raise TypeError("LeRobot dataset lacks stop_image_writer")
@@ -517,7 +721,7 @@ def convert_canonical_v2_to_lerobot(
             expected_episodes=len(episode_manifest),
         )
         manifest = {
-            "manifest_version": "1.0",
+            "manifest_version": "1.1",
             "source_format": "canonical_hdf5_v2",
             "repo_id": repo_id,
             "robot_type": robot_type,
@@ -525,10 +729,12 @@ def convert_canonical_v2_to_lerobot(
             "action_horizon": ACTION_HORIZON,
             "action_shape": [ACTION_HORIZON, ACTION_DIM],
             "padding": "forbidden",
-            "window_rule": "N-9",
+            "window_rule": SEGMENT_WINDOW_RULE,
+            "included_splits": sorted(selected_splits),
             "source_split_registry_sha256": split_registry.registry_sha256,
             "counts": {
                 "episodes": len(episode_manifest),
+                "canonical_episodes": canonical_episode_count,
                 "windows": len(expected_actions),
             },
             "roundtrip": smoke,
@@ -576,6 +782,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output-dir")
     parser.add_argument("--repo-id", default="industrial/pi05-v2")
     parser.add_argument("--robot-type", default="franka")
+    parser.add_argument(
+        "--include-split",
+        action="append",
+        choices=("train", "val", "test"),
+        help="Convert only the selected authoritative split; repeat as needed",
+    )
     return parser.parse_args(argv)
 
 
@@ -587,6 +799,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             report = preflight_canonical_v2_windows(
                 data_dir=args.data_dir,
                 split_registry=registry,
+                included_splits=args.include_split,
             )
             print(json.dumps(report, ensure_ascii=False, sort_keys=True))
             return 0
@@ -598,6 +811,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             repo_id=args.repo_id,
             split_registry=registry,
             robot_type=args.robot_type,
+            included_splits=args.include_split,
         )
         print(
             json.dumps(
@@ -619,7 +833,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 __all__ = [
     "ACTION_HORIZON",
+    "ActionSegment",
     "ConversionResult",
+    "SEGMENT_WINDOW_RULE",
     "build_complete_action_windows",
     "convert_canonical_v2_to_lerobot",
     "main",

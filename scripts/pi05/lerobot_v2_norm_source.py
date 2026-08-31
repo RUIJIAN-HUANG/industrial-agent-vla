@@ -154,7 +154,7 @@ def load_lerobot_v2_norm_source(
         if not isinstance(episodes, list) or not episodes:
             raise V2NormSourceError("LeRobot V2 manifest contains no episodes")
 
-        seen_episode_ids: set[str] = set()
+        seen_source_segments: set[tuple[str, str | None]] = set()
         sources: list[dict[str, Any]] = []
         train_ranges: list[tuple[int, int, int, dict[str, Any]]] = []
         offset = 0
@@ -167,11 +167,18 @@ def load_lerobot_v2_norm_source(
                 raise V2NormSourceError(
                     "LeRobot V2 episode is missing canonical_episode_id"
                 )
-            if episode_id in seen_episode_ids:
+            active_arm = item.get("active_arm")
+            if active_arm is not None and active_arm not in ("Arm_A", "Arm_B"):
                 raise V2NormSourceError(
-                    f"LeRobot V2 manifest repeats Canonical Episode {episode_id!r}"
+                    f"LeRobot V2 active_arm is invalid for {episode_id!r}"
                 )
-            seen_episode_ids.add(episode_id)
+            source_segment = (episode_id, active_arm)
+            if source_segment in seen_source_segments:
+                raise V2NormSourceError(
+                    "LeRobot V2 manifest repeats Canonical arm segment "
+                    f"{source_segment!r}"
+                )
+            seen_source_segments.add(source_segment)
             if item.get("lerobot_episode_index") != expected_episode_index:
                 raise V2NormSourceError(
                     f"LeRobot V2 episode index is not contiguous for {episode_id!r}"
