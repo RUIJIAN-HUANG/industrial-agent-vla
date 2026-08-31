@@ -11,7 +11,10 @@ import pytest
 from configs.pi05.train_config import action_sequence_keys_for_input
 from industrial_agent.data import DatasetSplit, SplitAssignment, SplitRegistry
 from scripts.pi05.compute_norm_stats import compute_stats, validate_dimensions
-from scripts.pi05.convert_openpi_v2 import MANIFEST_SHA256_FILENAME
+from scripts.pi05.convert_openpi_v2 import (
+    MANIFEST_SHA256_FILENAME,
+    verify_conversion_manifest,
+)
 from scripts.pi05.lerobot_v2_norm_source import (
     V2NormSourceError,
     load_lerobot_v2_norm_source,
@@ -207,6 +210,40 @@ def test_v2_source_accepts_two_arm_segments_from_one_canonical_episode(
         "Arm_A",
         "Arm_B",
     ]
+
+
+@pytest.mark.parametrize(
+    ("ranges", "canonical_count", "message"),
+    [
+        ([(0, 10), (20, 30)], 30, "not contiguous"),
+        ([(0, 10), (9, 19)], 19, "not contiguous"),
+    ],
+)
+def test_v2_manifest_rejects_non_contiguous_arm_segments(
+    tmp_path: Path,
+    ranges: list[tuple[int, int]],
+    canonical_count: int,
+    message: str,
+) -> None:
+    registry = _registry()
+    manifest_path = _write_segment_manifest(tmp_path, registry)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    for item, (start, stop) in zip(manifest["episodes"], ranges, strict=True):
+        item["canonical_action_count"] = canonical_count
+        item["source_action_start_index"] = start
+        item["source_action_stop_index"] = stop
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    digest = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    manifest_path.with_name(MANIFEST_SHA256_FILENAME).write_text(
+        f"{digest}  {manifest_path.name}\n",
+        encoding="ascii",
+    )
+
+    with pytest.raises(ValueError, match=message):
+        verify_conversion_manifest(manifest_path)
 
 
 def test_v2_source_rejects_manifest_checksum_tampering(tmp_path: Path) -> None:

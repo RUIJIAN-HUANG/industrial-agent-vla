@@ -481,6 +481,7 @@ def verify_conversion_manifest(path: str | Path) -> dict[str, Any]:
     expected_windows = 0
     canonical_episode_ids: set[str] = set()
     output_segment_keys: set[tuple[str, str]] = set()
+    canonical_segments: dict[str, list[tuple[int, int, int]]] = {}
     for episode in episodes:
         if not isinstance(episode, dict):
             raise ValueError("conversion manifest Episode entry is invalid")
@@ -525,6 +526,9 @@ def verify_conversion_manifest(path: str | Path) -> dict[str, Any]:
             if segment_key in output_segment_keys:
                 raise ValueError("conversion manifest repeats an arm segment")
             output_segment_keys.add(segment_key)
+            canonical_segments.setdefault(canonical_episode_id, []).append(
+                (start, stop, canonical_count)
+            )
         expected_windows += window_count
     if counts["windows"] != expected_windows:
         raise ValueError("conversion manifest total window count is inconsistent")
@@ -532,6 +536,26 @@ def verify_conversion_manifest(path: str | Path) -> dict[str, Any]:
         canonical_episode_ids
     ):
         raise ValueError("conversion manifest Canonical Episode count is inconsistent")
+    if manifest_version == "1.1":
+        for canonical_episode_id, segments in canonical_segments.items():
+            canonical_counts = {canonical_count for _, _, canonical_count in segments}
+            if len(canonical_counts) != 1:
+                raise ValueError(
+                    "conversion manifest uses inconsistent Canonical action counts"
+                )
+            canonical_count = next(iter(canonical_counts))
+            expected_start = 0
+            for start, stop, _ in segments:
+                if start != expected_start:
+                    raise ValueError(
+                        "conversion manifest Canonical arm segments are not contiguous"
+                    )
+                expected_start = stop
+            if expected_start != canonical_count:
+                raise ValueError(
+                    "conversion manifest Canonical arm segments do not cover the "
+                    f"full action stream for {canonical_episode_id!r}"
+                )
     roundtrip = manifest.get("roundtrip")
     if not isinstance(roundtrip, dict) or roundtrip.get("max_action_error") != 0.0:
         raise ValueError("conversion manifest lossless roundtrip proof is invalid")
