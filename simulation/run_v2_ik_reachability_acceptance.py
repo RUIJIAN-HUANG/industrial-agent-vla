@@ -115,7 +115,11 @@ def _ik_targets(config: Mapping[str, Any]) -> list[dict[str, Any]]:
             }
         )
 
-    for station_id in ("PACK_STATION", "HANDOFF_CENTER", "FINISHED_01"):
+    # Arm_B only enters the approved relay after Arm_A has placed Bin_01 at
+    # HANDOFF_CENTER and retreated.  Probing Arm_B at PACK_STATION contradicts
+    # the frozen BIN01_TO_FINISHED01 task contract and asks it to reach into
+    # Arm_A's workspace.
+    for station_id in ("HANDOFF_CENTER", "FINISHED_01"):
         station = stations[station_id]
         position = [float(value) for value in station["pose"]["position_m"]]
         position = [
@@ -131,8 +135,8 @@ def _ik_targets(config: Mapping[str, Any]) -> list[dict[str, Any]]:
             }
         )
 
-    if len(targets) != 9 or len({item["target_id"] for item in targets}) != 9:
-        raise RuntimeError("V2 IK target construction must produce nine unique targets")
+    if len(targets) != 8 or len({item["target_id"] for item in targets}) != 8:
+        raise RuntimeError("V2 IK target construction must produce eight unique targets")
     for item in targets:
         if item["arm_id"] not in ARM_IDS:
             raise RuntimeError(f"invalid IK arm: {item['arm_id']}")
@@ -186,12 +190,12 @@ def main() -> int:
         targets = _ik_targets(config)
         if args.arm_b_bin_transport_only:
             critical_ids = {
-                "ARM_B_PACK_STATION_HANDLE_APPROACH",
+                "ARM_B_HANDOFF_CENTER_HANDLE_APPROACH",
                 "ARM_B_FINISHED_01_HANDLE_APPROACH",
             }
             targets = [item for item in targets if item["target_id"] in critical_ids]
             if [item["target_id"] for item in targets] != [
-                "ARM_B_PACK_STATION_HANDLE_APPROACH",
+                "ARM_B_HANDOFF_CENTER_HANDLE_APPROACH",
                 "ARM_B_FINISHED_01_HANDLE_APPROACH",
             ]:
                 raise RuntimeError("Arm_B bin-transport target selection drifted")
