@@ -84,7 +84,14 @@ def _service_ready(base_url: str, expected_service: str) -> bool:
             if response.status != 200:
                 return False
             payload = json.loads(response.read().decode("utf-8"))
-    except (HTTPError, URLError, OSError, TimeoutError, ValueError, json.JSONDecodeError):
+    except (
+        HTTPError,
+        URLError,
+        OSError,
+        TimeoutError,
+        ValueError,
+        json.JSONDecodeError,
+    ):
         return False
     if not isinstance(payload, Mapping):
         return False
@@ -397,7 +404,9 @@ def _run_competition(args: argparse.Namespace) -> int:
                 )
                 run_result = report.run_result
                 result = {
-                    "status": "TASK_SUCCEEDED" if run_result.success else "SAFE_STOPPED",
+                    "status": "TASK_SUCCEEDED"
+                    if run_result.success
+                    else "SAFE_STOPPED",
                     "episode_id": episode_id,
                     "task_id": task.task_id,
                     "instruction": task.instruction,

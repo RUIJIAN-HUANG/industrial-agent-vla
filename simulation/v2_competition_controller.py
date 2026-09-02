@@ -33,17 +33,13 @@ FORMAL_COMPETITION_TASKS = (
         task_id="P01_TO_S11",
         display_instruction="把P01放到S11中",
         canonical_instruction="把P01放到S11中",
-        task_file=REPOSITORY_ROOT
-        / "configs"
-        / "task.v2.p01-to-s11.example.json",
+        task_file=REPOSITORY_ROOT / "configs" / "task.v2.p01-to-s11.example.json",
     ),
     CompetitionTaskOption(
         task_id="W01_TO_S14",
         display_instruction="把W01放到S14中",
         canonical_instruction="把W01放到S14中",
-        task_file=REPOSITORY_ROOT
-        / "configs"
-        / "task.v2.w01-to-s14.example.json",
+        task_file=REPOSITORY_ROOT / "configs" / "task.v2.w01-to-s14.example.json",
     ),
     CompetitionTaskOption(
         task_id="BIN01_TO_FINISHED01",
@@ -126,7 +122,9 @@ def load_competition_task(task_id: str) -> TaskSchema:
     task = TaskSchema.from_dict(payload)
     spec = require_formal_v2_task(task.task_id)
     if task.task_id != option.task_id or task.instruction != spec.instruction:
-        raise ValueError(f"task JSON disagrees with frozen V2 profile: {option.task_file}")
+        raise ValueError(
+            f"task JSON disagrees with frozen V2 profile: {option.task_file}"
+        )
     return task
 
 
@@ -310,12 +308,12 @@ class CompetitionController:
 
 
 __all__ = [
+    "FORMAL_COMPETITION_TASKS",
     "CompetitionCommand",
     "CompetitionCommandType",
     "CompetitionController",
     "CompetitionSnapshot",
     "CompetitionTaskOption",
-    "FORMAL_COMPETITION_TASKS",
     "UiRunState",
     "load_competition_task",
     "task_option_for_instruction",

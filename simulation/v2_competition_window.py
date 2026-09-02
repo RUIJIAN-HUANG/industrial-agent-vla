@@ -18,7 +18,7 @@ class V2CompetitionWindow:
 
     def __init__(self, controller: CompetitionController) -> None:
         # Import only after SimulationApp has started.
-        import omni.ui as ui  # type: ignore[import-not-found]
+        from omni import ui  # type: ignore[import-not-found]
 
         self._ui = ui
         self._controller = controller
@@ -55,9 +55,7 @@ class V2CompetitionWindow:
                         )
                         self._preset_buttons.append(button)
                 with ui.HStack(height=38, spacing=8):
-                    self._start_button = ui.Button(
-                        "执行任务", clicked_fn=self._start
-                    )
+                    self._start_button = ui.Button("执行任务", clicked_fn=self._start)
                     self._stop_button = ui.Button(
                         "安全停止", clicked_fn=self._controller.request_safe_stop
                     )

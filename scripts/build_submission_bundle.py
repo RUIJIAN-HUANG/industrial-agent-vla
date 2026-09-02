@@ -341,7 +341,7 @@ set -euo pipefail
 BUNDLE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 python3 "$BUNDLE_ROOT/code/scripts/build_submission_bundle.py" verify --bundle-dir "$BUNDLE_ROOT"
 """
-    demo_ps = r'''$ErrorActionPreference = "Stop"
+    demo_ps = r"""$ErrorActionPreference = "Stop"
 $BundleRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 python "$BundleRoot\code\scripts\build_submission_bundle.py" prepare-env --bundle-dir "$BundleRoot"
 if ($env:ISAAC_PYTHON) {
@@ -365,8 +365,8 @@ if ($env:TASK_STATE_FACTORY) {
 }
 & $IsaacPython @DemoArgs
 exit $LASTEXITCODE
-'''
-    demo_sh = r'''#!/usr/bin/env bash
+"""
+    demo_sh = r"""#!/usr/bin/env bash
 set -euo pipefail
 BUNDLE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 python3 "$BUNDLE_ROOT/code/scripts/build_submission_bundle.py" prepare-env --bundle-dir "$BUNDLE_ROOT"
@@ -392,16 +392,16 @@ if [[ -n "${TASK_STATE_FACTORY:-}" ]]; then
   DEMO_ARGS+=(--task-state-factory "$TASK_STATE_FACTORY" --require-terminal)
 fi
 exec "$ISAAC_PYTHON_BIN" "${DEMO_ARGS[@]}"
-'''
-    stop_ps = r'''$ErrorActionPreference = "Stop"
+"""
+    stop_ps = r"""$ErrorActionPreference = "Stop"
 $BundleRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 docker compose --env-file "$BundleRoot\runtime\.env.runtime" -f "$BundleRoot\code\deploy\compose.models.submission.yaml" down
-'''
-    stop_sh = r'''#!/usr/bin/env bash
+"""
+    stop_sh = r"""#!/usr/bin/env bash
 set -euo pipefail
 BUNDLE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 docker compose --env-file "$BUNDLE_ROOT/runtime/.env.runtime" -f "$BUNDLE_ROOT/code/deploy/compose.models.submission.yaml" down
-'''
+"""
     (bundle_root / "start-models.ps1").write_text(powershell, encoding="utf-8")
     (bundle_root / "start-models.sh").write_text(shell, encoding="utf-8", newline="\n")
     (bundle_root / "verify.ps1").write_text(verify_ps, encoding="utf-8")
