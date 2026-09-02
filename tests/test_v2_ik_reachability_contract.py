@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import unittest
 
-from simulation.run_v2_ik_reachability_acceptance import _ik_targets
+import numpy as np
+
+from simulation.run_v2_ik_reachability_acceptance import (
+    _ik_targets,
+    _pink_top_down_orientation_candidates,
+)
 from simulation.v2_scene_contract import load_config
 
 
@@ -54,6 +59,18 @@ class V2IkReachabilityContractTests(unittest.TestCase):
         expected[2] += config["bin"]["carry_handle"]["position_local_m"][2]
         expected[2] += config["bin"]["carry_handle"]["approach_offset_m"][2]
         self.assertEqual(target["position_world_m"], expected)
+
+    def test_pink_orientation_search_is_top_down_and_yaw_free(self) -> None:
+        candidates = _pink_top_down_orientation_candidates(np.eye(3))
+        self.assertEqual(
+            [item["yaw_offset_deg"] for item in candidates],
+            [0, 90, 180, -90],
+        )
+        for item in candidates:
+            rotation = item["rotation_world"]
+            np.testing.assert_allclose(rotation.T @ rotation, np.eye(3), atol=1e-12)
+            np.testing.assert_allclose(rotation[:, 2], [0.0, 0.0, -1.0], atol=1e-12)
+            self.assertAlmostEqual(float(np.linalg.det(rotation)), 1.0)
 
 
 if __name__ == "__main__":
