@@ -1,8 +1,8 @@
-name: industrial-agent-vla
+name: industrial-agent-vla-submission
 
 x-service-defaults: &service-defaults
   init: true
-  pull_policy: missing
+  pull_policy: never
   read_only: true
   restart: unless-stopped
   security_opt:
@@ -20,7 +20,7 @@ x-service-defaults: &service-defaults
 services:
   pi05:
     <<: *service-defaults
-    image: "${PI05_IMAGE_REPOSITORY:?set PI05_IMAGE_REPOSITORY}@${PI05_IMAGE_DIGEST:?set PI05_IMAGE_DIGEST}"
+    image: "${PI05_IMAGE_REPOSITORY:?set PI05_IMAGE_REPOSITORY}"
     environment:
       PI05_SERVICE_MODE: real
       PI05_TASK_PROFILE_VERSION: v2
@@ -57,8 +57,6 @@ services:
         target: /var/cache
     tmpfs:
       - /tmp:size=2g,mode=1777
-    # The gateway starts one process per id in PI05_GPU_IDS.  Compose exposes
-    # all requested GPUs; each worker narrows CUDA_VISIBLE_DEVICES to one id.
     gpus: all
     deploy:
       resources:
@@ -81,7 +79,7 @@ services:
 
   yolo:
     <<: *service-defaults
-    image: "${YOLO_IMAGE_REPOSITORY:?set YOLO_IMAGE_REPOSITORY}@${YOLO_IMAGE_DIGEST:?set YOLO_IMAGE_DIGEST}"
+    image: "${YOLO_IMAGE_REPOSITORY:?set YOLO_IMAGE_REPOSITORY}"
     environment:
       YOLO_USE_MOCK: "0"
       YOLO_CHECKPOINT_PATH: /models/yolo/model.pt

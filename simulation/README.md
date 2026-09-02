@@ -249,3 +249,20 @@ python simulation/run_pi05_isaac_closed_loop.py `
 `--task-state-factory module:callable --require-terminal`；未注入时静态入口保持
 `terminal=false`，不会伪造任务完成。旧版 DROID 8D Runner
 不属于当前入口，禁止接入此 7D 合同。
+
+## V2 比赛操作窗口
+
+可见比赛入口为 `run_v2_competition_ui.py`。它在 Isaac Sim 内创建自然语言任务窗口，
+仅开放 `P01_TO_S11`、`W01_TO_S14` 和 `BIN01_TO_FINISHED01` 三项正式任务，并复用
+同一个 V2 Supervisor、Isaac owner-thread Gate、CAS 相机和安全停止边界：
+
+```powershell
+<ISAAC_PYTHON> simulation/run_v2_competition_ui.py `
+  --agent-config configs/agent.default.json `
+  --task-state-factory module.path:factory `
+  --require-terminal
+```
+
+UI 回调不直接调用 Isaac API。执行、重置和停止命令都由 Isaac 主线程消费；任务运行
+期间点击“安全停止”会撤销后续 observation/action，并通过控制器确认停机。若没有
+传感器完成判定器，可以省略后两个参数用于链路联调，但该模式不会宣称任务成功。

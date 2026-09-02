@@ -4,6 +4,66 @@
 Supervisor 必须在安装了 Isaac Sim 5.1 的目标机进程中运行，不进入这份普通模型
 Compose。
 
+## 自包含比赛提交包
+
+最终比赛包不是普通 Git checkout。它需要完整包含代码、π0.5 checkpoint、
+`norm_stats.json`、YOLO `best.pt` 和两个已经构建好的离线 Docker 镜像。
+在有足够空间的独立磁盘上执行：
+
+```powershell
+python scripts\build_submission_bundle.py build `
+  --output-dir D:\submission\XH-202607-final `
+  --pi05-checkpoint-dir D:\models\pi05\checkpoint `
+  --pi05-norm-stats D:\models\pi05\norm_stats.json `
+  --yolo-checkpoint D:\models\yolo\best.pt `
+  --pi05-image-tar D:\images\pi05-service.tar `
+  --yolo-image-tar D:\images\yolo-service.tar `
+  --pi05-image industrial-agent/pi05:submission `
+  --pi05-image-digest sha256:<docker-image-id> `
+  --yolo-image industrial-agent/yolo:submission `
+  --yolo-image-digest sha256:<docker-image-id> `
+  --pi05-gpu-ids 0 `
+  --yolo-gpu-id 1
+```
+
+镜像必须在 Linux GPU/Docker 主机按仓库 Dockerfile 构建并导出；摘要取对应
+不可变 image ID：
+
+```bash
+docker build -f services/pi05/Dockerfile -t industrial-agent/pi05:submission .
+docker build -f services/yolo/Dockerfile -t industrial-agent/yolo:submission .
+docker image inspect --format '{{.Id}}' industrial-agent/pi05:submission
+docker image inspect --format '{{.Id}}' industrial-agent/yolo:submission
+docker save -o /delivery/pi05-service.tar industrial-agent/pi05:submission
+docker save -o /delivery/yolo-service.tar industrial-agent/yolo:submission
+```
+
+构建器会预估空间、只复制 Git 跟踪的代码、复制全部模型字节、生成模型目录摘要、
+逐文件 SHA、可迁移运行配置和 Windows/Linux 启动脚本。输出目录必须不存在且必须
+位于源码仓库之外。移动、解压或拷贝到提交介质后先执行：
+
+```powershell
+.\verify.ps1
+```
+
+在具备 NVIDIA 驱动、Docker Compose v2 和 NVIDIA Container Toolkit 的目标机上，
+执行 `.\start-models.ps1` 或 `bash ./start-models.sh`。脚本会离线加载镜像、重新生成
+当前目录的绝对挂载路径、校验全部模型 SHA、启动 real 模式服务并验证 `/health`。
+Isaac Sim 5.1 因许可证和体量作为目标机前置软件，不进入提交包。
+
+模型服务通过后，设置 Isaac Sim 路径并打开比赛操作窗口：
+
+```powershell
+$env:ISAAC_SIM_ROOT = "C:\isaacsim"
+.\start-demo.ps1
+```
+
+Linux 使用 `export ISAAC_SIM_ROOT=/opt/isaacsim` 后执行
+`bash ./start-demo.sh`。窗口提供三项正式任务的自然语言输入、快捷选择、执行、重置和
+安全停止。正式成功判定还需要设置部署侧的
+`TASK_STATE_FACTORY=module.path:factory`；未配置时窗口会明确显示“只能执行，不能判
+成功”，不会用 Isaac 坐标伪造成功。
+
 ## 拓扑
 
 ```text
