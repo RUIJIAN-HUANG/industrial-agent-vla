@@ -301,7 +301,9 @@ def _run_competition(args: argparse.Namespace) -> int:
                     scene_config=scene_config,
                 )
             else:
-                task_state_provider = lambda: build_task_state(task_spec)
+
+                def task_state_provider() -> Mapping[str, Any]:
+                    return build_task_state(task_spec)
 
             observation_counter = 0
 
