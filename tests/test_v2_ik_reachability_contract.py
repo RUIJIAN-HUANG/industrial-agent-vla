@@ -6,7 +6,9 @@ import numpy as np
 
 from simulation.run_v2_ik_reachability_acceptance import (
     _ik_targets,
+    _orientation_errors_rad,
     _pink_top_down_orientation_candidates,
+    _wxyz_rotation_matrix,
 )
 from simulation.v2_scene_contract import load_config
 
@@ -71,6 +73,24 @@ class V2IkReachabilityContractTests(unittest.TestCase):
             np.testing.assert_allclose(rotation.T @ rotation, np.eye(3), atol=1e-12)
             np.testing.assert_allclose(rotation[:, 2], [0.0, 0.0, -1.0], atol=1e-12)
             self.assertAlmostEqual(float(np.linalg.det(rotation)), 1.0)
+
+    def test_orientation_gate_detects_tool_tilt_after_position_converges(self) -> None:
+        target = _pink_top_down_orientation_candidates(np.eye(3))[0]["rotation_world"]
+        tilt = _wxyz_rotation_matrix(
+            [np.cos(np.deg2rad(12.0) / 2.0), np.sin(np.deg2rad(12.0) / 2.0), 0.0, 0.0]
+        )
+        tool_z_error, rotation_error = _orientation_errors_rad(target @ tilt, target)
+        self.assertAlmostEqual(np.rad2deg(tool_z_error), 12.0)
+        self.assertAlmostEqual(np.rad2deg(rotation_error), 12.0)
+
+    def test_orientation_gate_allows_yaw_while_preserving_top_down_tool_z(self) -> None:
+        target = _pink_top_down_orientation_candidates(np.eye(3))[0]["rotation_world"]
+        yaw = _wxyz_rotation_matrix(
+            [np.cos(np.deg2rad(45.0) / 2.0), 0.0, 0.0, np.sin(np.deg2rad(45.0) / 2.0)]
+        )
+        tool_z_error, rotation_error = _orientation_errors_rad(yaw @ target, target)
+        self.assertAlmostEqual(tool_z_error, 0.0)
+        self.assertAlmostEqual(np.rad2deg(rotation_error), 45.0)
 
 
 if __name__ == "__main__":

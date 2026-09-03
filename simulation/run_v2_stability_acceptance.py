@@ -19,10 +19,16 @@ from typing import Any
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_CONFIG = SCRIPT_DIR / "configs" / "single_bin_scene_v2.json"
+MAX_POSITION_DRIFT_M = 0.10
+MAX_ORIENTATION_DRIFT_DEG = 10.0
+MAX_LINEAR_SPEED_M_S = 0.02
+MAX_ANGULAR_SPEED_RAD_S = 0.20
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run headless V2 stability acceptance.")
+    parser = argparse.ArgumentParser(
+        description="Run headless V2 stability acceptance."
+    )
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--output-scene", type=Path, required=True)
     parser.add_argument("--evidence-dir", type=Path, required=True)
@@ -44,35 +50,162 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def _expected_positions(config: dict[str, Any]) -> dict[str, list[float]]:
-    positions = {
-        f"/World/Parts/{part['id']}": [
-            float(value) for value in part["pose"]["position_m"]
-        ]
-        for part in config["parts"]
+    return {
+        path: state["position_m"] for path, state in _expected_states(config).items()
     }
-    positions["/World/Bins/Bin_01"] = [
-        float(value) for value in config["bin"]["pose"]["position_m"]
+
+
+def _rpy_deg_to_quaternion_wxyz(rpy_deg: list[float]) -> list[float]:
+    if len(rpy_deg) != 3 or not all(math.isfinite(value) for value in rpy_deg):
+        raise ValueError("rpy_deg must contain three finite values")
+    roll, pitch, yaw = (math.radians(float(value)) / 2.0 for value in rpy_deg)
+    cr, sr = math.cos(roll), math.sin(roll)
+    cp, sp = math.cos(pitch), math.sin(pitch)
+    cy, sy = math.cos(yaw), math.sin(yaw)
+    return [
+        cr * cp * cy + sr * sp * sy,
+        sr * cp * cy - cr * sp * sy,
+        cr * sp * cy + sr * cp * sy,
+        cr * cp * sy - sr * sp * cy,
     ]
-    return positions
 
 
-def _snapshot(stage: Any, paths: list[str]) -> dict[str, list[float]]:
-    from run_g0_acceptance import _world_position
+def _expected_states(config: dict[str, Any]) -> dict[str, dict[str, list[float]]]:
+    bodies = [(f"/World/Parts/{part['id']}", part["pose"]) for part in config["parts"]]
+    bodies.append(("/World/Bins/Bin_01", config["bin"]["pose"]))
+    return {
+        path: {
+            "position_m": [float(value) for value in pose["position_m"]],
+            "orientation_wxyz": _rpy_deg_to_quaternion_wxyz(
+                [float(value) for value in pose.get("rpy_deg", [0.0, 0.0, 0.0])]
+            ),
+        }
+        for path, pose in bodies
+    }
 
-    return {path: _world_position(stage, path) for path in paths}
+
+def _quaternion_error_rad(left: list[float], right: list[float]) -> float:
+    if len(left) != 4 or len(right) != 4:
+        raise ValueError("quaternions must contain four values")
+    if not all(math.isfinite(value) for value in (*left, *right)):
+        raise ValueError("quaternions must be finite")
+    left_norm = math.sqrt(sum(value * value for value in left))
+    right_norm = math.sqrt(sum(value * value for value in right))
+    if left_norm <= 0.0 or right_norm <= 0.0:
+        raise ValueError("quaternions cannot have zero norm")
+    cosine = abs(
+        sum(a * b for a, b in zip(left, right, strict=True)) / (left_norm * right_norm)
+    )
+    return 2.0 * math.acos(max(-1.0, min(1.0, cosine)))
+
+
+def _snapshot(stage: Any, paths: list[str]) -> dict[str, dict[str, list[float]]]:
+    from pxr import Usd, UsdGeom
+
+    snapshot: dict[str, dict[str, list[float]]] = {}
+    for path in paths:
+        prim = stage.GetPrimAtPath(path)
+        if not prim or not prim.IsValid():
+            raise RuntimeError(f"Required prim is missing: {path}")
+        matrix = UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(
+            Usd.TimeCode.Default()
+        )
+        translation = matrix.ExtractTranslation()
+        rotation = matrix.ExtractRotationQuat()
+        imaginary = rotation.GetImaginary()
+        snapshot[path] = {
+            "position_m": [
+                float(translation[0]),
+                float(translation[1]),
+                float(translation[2]),
+            ],
+            "orientation_wxyz": [
+                float(rotation.GetReal()),
+                float(imaginary[0]),
+                float(imaginary[1]),
+                float(imaginary[2]),
+            ],
+        }
+    return snapshot
+
+
+def _motion_between(
+    previous: dict[str, dict[str, list[float]]],
+    current: dict[str, dict[str, list[float]]],
+    dt_s: float,
+) -> dict[str, dict[str, float]]:
+    if not math.isfinite(dt_s) or dt_s <= 0.0:
+        raise ValueError("dt_s must be positive and finite")
+    return {
+        path: {
+            "linear_speed_m_s": math.dist(
+                previous[path]["position_m"], state["position_m"]
+            )
+            / dt_s,
+            "angular_speed_rad_s": _quaternion_error_rad(
+                previous[path]["orientation_wxyz"], state["orientation_wxyz"]
+            )
+            / dt_s,
+        }
+        for path, state in current.items()
+    }
+
+
+def _peak_motion(
+    peak: dict[str, dict[str, float]],
+    current: dict[str, dict[str, float]],
+) -> dict[str, dict[str, float]]:
+    return {
+        path: {
+            key: max(peak.get(path, {}).get(key, 0.0), value)
+            for key, value in metrics.items()
+        }
+        for path, metrics in current.items()
+    }
 
 
 def _snapshot_errors(
-    snapshot: dict[str, list[float]], expected: dict[str, list[float]]
+    snapshot: dict[str, dict[str, list[float]]],
+    expected: dict[str, dict[str, list[float]]],
+    motion: dict[str, dict[str, float]],
 ) -> list[str]:
     errors: list[str] = []
-    for path, position in snapshot.items():
+    for path, state in snapshot.items():
+        position = state["position_m"]
+        orientation = state["orientation_wxyz"]
         if len(position) != 3 or not all(math.isfinite(value) for value in position):
             errors.append(f"{path} contains invalid coordinates: {position}")
             continue
-        drift = math.dist(position, expected[path])
-        if drift > 0.10:
+        if len(orientation) != 4 or not all(
+            math.isfinite(value) for value in orientation
+        ):
+            errors.append(f"{path} contains an invalid orientation: {orientation}")
+            continue
+        drift = math.dist(position, expected[path]["position_m"])
+        if drift > MAX_POSITION_DRIFT_M:
             errors.append(f"{path} drifted {drift:.4f} m from its reset pose")
+        orientation_error_deg = math.degrees(
+            _quaternion_error_rad(
+                orientation,
+                expected[path]["orientation_wxyz"],
+            )
+        )
+        if orientation_error_deg > MAX_ORIENTATION_DRIFT_DEG:
+            errors.append(
+                f"{path} rotated {orientation_error_deg:.3f} deg from its reset pose"
+            )
+        linear_speed = motion[path]["linear_speed_m_s"]
+        angular_speed = motion[path]["angular_speed_rad_s"]
+        if not math.isfinite(linear_speed) or linear_speed > MAX_LINEAR_SPEED_M_S:
+            errors.append(
+                f"{path} linear speed {linear_speed:.6f} m/s exceeds "
+                f"{MAX_LINEAR_SPEED_M_S:.6f} m/s"
+            )
+        if not math.isfinite(angular_speed) or angular_speed > MAX_ANGULAR_SPEED_RAD_S:
+            errors.append(
+                f"{path} angular speed {angular_speed:.6f} rad/s exceeds "
+                f"{MAX_ANGULAR_SPEED_RAD_S:.6f} rad/s"
+            )
         x, y, z = position
         if not (-1.20 <= x <= 1.20 and -0.70 <= y <= 0.70 and 0.65 <= z <= 1.40):
             errors.append(f"{path} left the V2 workcell bounds: {position}")
@@ -120,7 +253,7 @@ def _run(args: argparse.Namespace, result: dict[str, Any]) -> None:
         )
         isaac_compat.wait_for_stage_loading(simulation_app, timeout_seconds=180.0)
 
-        expected = _expected_positions(config)
+        expected = _expected_states(config)
         required_paths = [
             "/World/Robots/Arm_A",
             "/World/Robots/Arm_B",
@@ -130,7 +263,9 @@ def _run(args: argparse.Namespace, result: dict[str, Any]) -> None:
             "/World/Stations/FINISHED_01",
             *[f"/World/Cameras/{camera['id']}" for camera in config["cameras"]],
         ]
-        missing = [path for path in required_paths if not stage.GetPrimAtPath(path).IsValid()]
+        missing = [
+            path for path in required_paths if not stage.GetPrimAtPath(path).IsValid()
+        ]
         if missing:
             raise RuntimeError(f"required V2 prims are missing: {missing}")
 
@@ -165,10 +300,19 @@ def _run(args: argparse.Namespace, result: dict[str, Any]) -> None:
                 arm_id: _write_explicit_home(config, arms[arm_id], arm_id)
                 for arm_id in ("Arm_A", "Arm_B")
             }
-            for _ in range(args.reset_settle_steps):
+            for _ in range(args.reset_settle_steps - 1):
                 world.step(render=False)
+            before_final_settle = _snapshot(
+                isaac_compat.get_current_stage(), list(expected)
+            )
+            world.step(render=False)
             current = _snapshot(isaac_compat.get_current_stage(), list(expected))
-            errors = _snapshot_errors(current, expected)
+            final_motion = _motion_between(
+                before_final_settle,
+                current,
+                float(physics["physics_dt_s"]),
+            )
+            errors = _snapshot_errors(current, expected, final_motion)
             for arm_id in ("Arm_A", "Arm_B"):
                 errors.extend(
                     _home_readback_errors(arms[arm_id], arm_id, targets[arm_id])
@@ -176,7 +320,11 @@ def _run(args: argparse.Namespace, result: dict[str, Any]) -> None:
             reset_records.append(
                 {
                     "reset_index": reset_index,
-                    "dynamic_positions_m": current,
+                    "dynamic_positions_m": {
+                        path: state["position_m"] for path, state in current.items()
+                    },
+                    "dynamic_pose_states": current,
+                    "final_motion": final_motion,
                     "robot_states": [
                         _robot_state(arms[arm_id], arm_id)
                         for arm_id in ("Arm_A", "Arm_B")
@@ -185,25 +333,41 @@ def _run(args: argparse.Namespace, result: dict[str, Any]) -> None:
                     "errors": errors,
                 }
             )
-            reset_errors.extend(
-                f"reset {reset_index}: {message}" for message in errors
-            )
+            reset_errors.extend(f"reset {reset_index}: {message}" for message in errors)
         _write_json(args.evidence_dir / "reset_report.json", {"resets": reset_records})
         if reset_errors:
             raise RuntimeError("; ".join(reset_errors))
 
         started = time.monotonic()
         step_checks: list[dict[str, Any]] = []
+        previous = _snapshot(isaac_compat.get_current_stage(), list(expected))
+        interval_peak_motion: dict[str, dict[str, float]] = {}
         for step_index in range(1, args.steps + 1):
             world.step(render=(step_index % 30 == 0))
+            current = _snapshot(isaac_compat.get_current_stage(), list(expected))
+            step_motion = _motion_between(
+                previous,
+                current,
+                float(physics["physics_dt_s"]),
+            )
+            interval_peak_motion = _peak_motion(interval_peak_motion, step_motion)
+            previous = current
             if step_index % 100 == 0 or step_index == args.steps:
-                current = _snapshot(isaac_compat.get_current_stage(), list(expected))
-                errors = _snapshot_errors(current, expected)
+                errors = _snapshot_errors(current, expected, interval_peak_motion)
                 step_checks.append(
-                    {"step": step_index, "dynamic_positions_m": current, "errors": errors}
+                    {
+                        "step": step_index,
+                        "dynamic_positions_m": {
+                            path: state["position_m"] for path, state in current.items()
+                        },
+                        "dynamic_pose_states": current,
+                        "peak_motion_since_previous_check": interval_peak_motion,
+                        "errors": errors,
+                    }
                 )
                 if errors:
                     raise RuntimeError(f"step {step_index}: " + "; ".join(errors))
+                interval_peak_motion = {}
         elapsed = time.monotonic() - started
         _write_json(args.evidence_dir / "step_checks.json", {"checks": step_checks})
 
@@ -229,6 +393,12 @@ def _run(args: argparse.Namespace, result: dict[str, Any]) -> None:
                 "reset_settle_steps": args.reset_settle_steps,
                 "headless_elapsed_seconds": elapsed,
                 "camera_capture_count": len(cameras),
+                "stability_thresholds": {
+                    "max_position_drift_m": MAX_POSITION_DRIFT_M,
+                    "max_orientation_drift_deg": MAX_ORIENTATION_DRIFT_DEG,
+                    "max_linear_speed_m_s": MAX_LINEAR_SPEED_M_S,
+                    "max_angular_speed_rad_s": MAX_ANGULAR_SPEED_RAD_S,
+                },
                 "collision_acceptance_performed": False,
                 "grasp_acceptance_performed": False,
                 "loaded_transport_acceptance_performed": False,
