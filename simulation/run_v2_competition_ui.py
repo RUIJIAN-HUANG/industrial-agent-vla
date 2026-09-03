@@ -337,7 +337,9 @@ def _run_competition(args: argparse.Namespace) -> int:
                 return (
                     "A_ONLY"
                     if active_arm == "Arm_A"
-                    else "B_ONLY" if active_arm == "Arm_B" else "NONE"
+                    else "B_ONLY"
+                    if active_arm == "Arm_B"
+                    else "NONE"
                 )
 
             def guarded_state() -> dict[str, Any]:
