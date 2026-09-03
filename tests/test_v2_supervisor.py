@@ -70,6 +70,11 @@ def _config() -> dict[str, Any]:
 
 
 class _Executor:
+    def __init__(self) -> None:
+        self.arm_calls: list[str] = []
+        self.instructions: list[str] = []
+        self.subtask_ids: list[str] = []
+
     descriptor = ExecutorDescriptor(
         name="pi05",
         task_types=frozenset({"pick_place"}),
@@ -84,6 +89,9 @@ class _Executor:
     def plan(
         self, task: TaskSchema, observation: Any, context: ExecutionContext
     ) -> ActionChunk:
+        self.arm_calls.append(context.arm_id)
+        self.instructions.append(context.original_instruction or task.instruction)
+        self.subtask_ids.append(str(task.metadata.get("subtask_id")))
         return ActionChunk(
             contract_version="1.0",
             chunk_id=f"chunk-{context.step_id}",
@@ -129,6 +137,60 @@ class _Transport:
         raise AssertionError(f"unexpected call during composition: {route}")
 
 
+def _bin_observation(observation_id: str, *, token: str, terminal: bool = False):
+    raw = v2_observation(observation_id=observation_id, terminal=terminal)
+    raw["task"] = {
+        "task_id": "BIN01_TO_FINISHED01",
+        "target_object_id": "Bin_01",
+        "target_slot_id": None,
+        "status": "SUCCEEDED" if terminal else "ACTIVE",
+        "terminal": terminal,
+        "terminal_confidence": 0.9 if terminal else 0.0,
+        "verification_votes": 2 if terminal else 0,
+    }
+    raw["robot"]["active_arm"] = {
+        "A_ONLY": "Arm_A",
+        "HANDOFF_VERIFY": "NONE",
+        "B_ONLY": "Arm_B",
+        "NONE": "NONE",
+    }[token]
+    raw["robot"]["arm_a"]["retreated"] = token != "A_ONLY"
+    raw["robot"]["arm_b"]["retreated"] = True
+    return raw
+
+
+class _BinHandoffEnvironment:
+    def __init__(self) -> None:
+        self.initial_observed = False
+        self.verification_reads = 0
+        self.steps: list[tuple[str, str]] = []
+        self.final_reads = 0
+
+    def observe(self) -> Mapping[str, Any]:
+        if not self.initial_observed:
+            self.initial_observed = True
+            return _bin_observation("bin-initial", token="A_ONLY")
+        if len(self.steps) == 1:
+            self.verification_reads += 1
+            token = "B_ONLY" if self.verification_reads >= 2 else "HANDOFF_VERIFY"
+            return _bin_observation(
+                f"bin-handoff-verify-{self.verification_reads}", token=token
+            )
+        self.final_reads += 1
+        return _bin_observation(
+            f"bin-final-verify-{self.final_reads}", token="NONE", terminal=True
+        )
+
+    def step(self, action: ActionStep, **kwargs: Any) -> Mapping[str, Any]:
+        self.steps.append((kwargs["arm_id"], kwargs["control_token"]))
+        if len(self.steps) == 1:
+            return _bin_observation("bin-at-handoff", token="HANDOFF_VERIFY")
+        return _bin_observation("bin-at-finished", token="NONE", terminal=True)
+
+    def safe_stop(self, reason: str) -> SafeStopReceipt:
+        return SafeStopReceipt(True, True, True, True, "bin-stop")
+
+
 def test_v2_supervisor_completes_sensor_closed_loop() -> None:
     supervisor = V2Supervisor.from_config(_Executor(), _config())
     environment = _Environment()
@@ -136,8 +198,35 @@ def test_v2_supervisor_completes_sensor_closed_loop() -> None:
     assert result.success is True
     assert result.state is AgentState.SUCCEEDED
     assert result.executor_history == ("pi05",)
-    assert result.control_token_history == ("NONE", "A_ONLY", "NONE")
+    assert result.control_token_history == ("A_ONLY", "NONE")
     assert environment.steps == 1
+
+
+def test_v2_supervisor_polls_without_motion_during_verified_dual_arm_handoff() -> None:
+    executor = _Executor()
+    supervisor = V2Supervisor.from_config(executor, _config())
+    environment = _BinHandoffEnvironment()
+
+    result = supervisor.run(_bin_task(), environment)
+
+    assert result.success is True
+    assert result.control_token_history == (
+        "A_ONLY",
+        "HANDOFF_VERIFY",
+        "B_ONLY",
+        "NONE",
+    )
+    assert environment.steps == [("Arm_A", "A_ONLY"), ("Arm_B", "B_ONLY")]
+    assert environment.verification_reads == 2
+    assert executor.arm_calls == ["Arm_A", "Arm_B"]
+    assert executor.instructions == [
+        "把Bin_01搬到HANDOFF_CENTER",
+        "把Bin_01搬到FINISHED_01",
+    ]
+    assert executor.subtask_ids == [
+        "BIN01_TO_HANDOFF_CENTER",
+        "BIN01_HANDOFF_TO_FINISHED01",
+    ]
 
 
 def test_v2_supervisor_stops_when_decision_budget_is_exhausted() -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from threading import Lock
 from typing import Any
 from uuid import uuid4
@@ -227,7 +228,7 @@ class V2Supervisor:
         gateway = V2ObservationGateway()
         plan: TaskPlan | None = None
         executor_history: list[str] = []
-        token_history = ["NONE"]
+        token_history: list[str] = []
         motion_started = False
         try:
             fsm.transition(AgentState.VALIDATING_TASK, "validate frozen V2 task")
@@ -271,7 +272,9 @@ class V2Supervisor:
             fsm.transition(AgentState.OBSERVING, "read initial V2 observation")
             try:
                 observation = gateway.ingest_online(environment.observe())
-                for step_id in range(self.max_decisions):
+                action_count = 0
+                handoff_verification_reads = 0
+                while action_count < self.max_decisions:
                     safety_failure = safety_state_failure(observation)
                     if safety_failure:
                         code, reason = safety_failure
@@ -320,7 +323,7 @@ class V2Supervisor:
                         )
                         for subtask in plan.subtasks:
                             subtask.status = SubtaskStatus.VERIFIED
-                        token_history.append("NONE")
+                        self._append_control_token(token_history, "NONE")
                         return self._result(
                             run_id,
                             task.task_id,
@@ -333,28 +336,69 @@ class V2Supervisor:
                             token_history,
                         )
 
+                    control_token = self._observation_control_token(task, observation)
+                    self._append_control_token(token_history, control_token)
+                    if control_token == "HANDOFF_VERIFY":
+                        handoff_verification_reads += 1
+                        if handoff_verification_reads > self.verification_frames * 2:
+                            return self._stop_result(
+                                environment,
+                                run_id,
+                                task.task_id,
+                                fsm,
+                                FailureCode.VERIFICATION_UNCERTAIN,
+                                "handoff verification did not reach B_ONLY within the fresh-frame budget",
+                                plan,
+                                executor_history,
+                                token_history,
+                            )
+                        observation = gateway.ingest_online(environment.observe())
+                        continue
+
                     active_subtask = self._active_subtask(task, plan, observation)
                     active_subtask.status = SubtaskStatus.RUNNING
                     arm_id = active_subtask.arm_id or "Arm_A"
-                    control_token = "A_ONLY" if arm_id == "Arm_A" else "B_ONLY"
+                    expected_token = "A_ONLY" if arm_id == "Arm_A" else "B_ONLY"
+                    if control_token != expected_token:
+                        raise ValueError(
+                            f"online control token {control_token!r} does not match {arm_id}"
+                        )
                     fsm.transition(
                         AgentState.ASSIGNING_ROLE,
                         f"grant {control_token} to pi05",
                     )
-                    token_history.append(control_token)
                     fsm.transition(
                         AgentState.EXECUTING, "request and execute one 7D action"
                     )
                     context = ExecutionContext(
                         run_id=run_id,
                         strategy_attempt=0,
-                        replan_index=step_id,
-                        step_id=step_id,
+                        replan_index=action_count,
+                        step_id=action_count,
                         timeout_ms=self.executor_timeout_ms,
-                        original_instruction=task.instruction,
+                        original_instruction=active_subtask.instruction,
                         arm_id=arm_id,
                     )
-                    chunk = self.executor.plan(task, observation, context)
+                    target_location = next(
+                        (
+                            condition.zone_id
+                            for condition in active_subtask.postconditions
+                            if condition.zone_id is not None
+                        ),
+                        task.target_location,
+                    )
+                    execution_task = replace(
+                        task,
+                        instruction=active_subtask.instruction,
+                        target_location=target_location,
+                        postconditions=active_subtask.postconditions,
+                        metadata={
+                            **dict(task.metadata),
+                            "subtask_id": active_subtask.subtask_id,
+                            "arm_id": arm_id,
+                        },
+                    )
+                    chunk = self.executor.plan(execution_task, observation, context)
                     executor_history.append("pi05")
                     decision = self.safety.validate_and_limit(
                         chunk,
@@ -380,13 +424,13 @@ class V2Supervisor:
                         action,
                         arm_id=arm_id,
                         control_token=control_token,
-                        command_id=f"{run_id}-command-{step_id:06d}",
+                        command_id=f"{run_id}-command-{action_count:06d}",
                         expected_observation_id=observation.observation_id,
                         expected_state_digest=execution_guard_digest(observation.data),
                     )
+                    action_count += 1
                     fsm.transition(AgentState.VERIFYING, "ingest next sensor frame")
                     observation = gateway.ingest_online(next_raw)
-                    token_history.append("NONE")
                     terminal, terminal_failure = self._terminal_state(observation, task)
                     if terminal_failure:
                         return self._stop_result(
@@ -421,6 +465,7 @@ class V2Supervisor:
                         )
                         for subtask in plan.subtasks:
                             subtask.status = SubtaskStatus.VERIFIED
+                        self._append_control_token(token_history, "NONE")
                         return self._result(
                             run_id,
                             task.task_id,
@@ -432,7 +477,7 @@ class V2Supervisor:
                             executor_history,
                             token_history,
                         )
-                    if step_id + 1 < self.max_decisions:
+                    if action_count < self.max_decisions:
                         fsm.transition(AgentState.REPLANNING, "terminal not reached")
                         fsm.transition(AgentState.OBSERVING, "continue V2 closed loop")
 
@@ -511,6 +556,30 @@ class V2Supervisor:
             "before requesting an action"
         )
 
+    @staticmethod
+    def _observation_control_token(task: TaskSchema, observation: Any) -> str:
+        robot = observation.data.get("robot")
+        active_arm = robot.get("active_arm") if isinstance(robot, Mapping) else None
+        if active_arm == "Arm_A":
+            return "A_ONLY"
+        if active_arm == "Arm_B":
+            return "B_ONLY"
+        if active_arm == "NONE" and task.task_id == BIN_HANDOFF_TASK_ID:
+            raw_task = observation.data.get("task")
+            if isinstance(raw_task, Mapping) and raw_task.get("terminal") is True:
+                return "NONE"
+            return "HANDOFF_VERIFY"
+        if active_arm == "NONE":
+            return "NONE"
+        raise ValueError("online observation has no valid active-arm lease")
+
+    @staticmethod
+    def _append_control_token(history: list[str], token: str) -> None:
+        if token not in {"A_ONLY", "HANDOFF_VERIFY", "B_ONLY", "NONE"}:
+            raise ValueError(f"invalid V2 control token: {token!r}")
+        if not history or history[-1] != token:
+            history.append(token)
+
     def _terminal_state(
         self, observation: Any, task: TaskSchema
     ) -> tuple[bool, str | None]:
@@ -581,7 +650,7 @@ class V2Supervisor:
             confirmed = False
         target = AgentState.SAFE_STOPPED if confirmed else AgentState.SAFE_STOP_FAILED
         fsm.force_safety_terminal(target, message)
-        token_history.append("NONE")
+        self._append_control_token(token_history, "NONE")
         return self._result(
             run_id,
             task_id,

@@ -259,10 +259,13 @@ python simulation/run_pi05_isaac_closed_loop.py `
 ```powershell
 <ISAAC_PYTHON> simulation/run_v2_competition_ui.py `
   --agent-config configs/agent.default.json `
-  --task-state-factory module.path:factory `
+  --yolo-url http://127.0.0.1:8103 `
   --require-terminal
 ```
 
 UI 回调不直接调用 Isaac API。执行、重置和停止命令都由 Isaac 主线程消费；任务运行
-期间点击“安全停止”会撤销后续 observation/action，并通过控制器确认停机。若没有
-传感器完成判定器，可以省略后两个参数用于链路联调，但该模式不会宣称任务成功。
+期间点击“安全停止”会撤销后续 observation/action，并通过控制器确认停机。比赛入口
+默认启用在线任务状态 Provider：它在共享 CAS 的新鲜相机帧上调用 YOLO，并结合夹爪、
+静止和退避状态，以 3 帧 2 票、最低置信度 0.6 判定完成。`--task-state-factory`
+仅用于替换内置 Provider。任务三的自动令牌顺序固定为
+`A_ONLY → HANDOFF_VERIFY → B_ONLY → NONE`；验证阶段只采集新观测，不发送动作。
