@@ -22,7 +22,7 @@ from .contracts import (
 )
 from .errors import ContractError, ExecutorError, FailureCode
 from .observation import FROZEN_IMAGE_HEIGHT, FROZEN_IMAGE_WIDTH
-from .sync_contract import canonical_state_7d
+from .sync_contract import canonical_observed_state_7d
 
 ARTIFACT_DIGEST_PATTERN = re.compile(r"sha256:[0-9a-fA-F]{64}")
 CAS_IMAGE_URI_PATTERN = re.compile(r"cas://sha256/([0-9a-fA-F]{64})")
@@ -196,7 +196,11 @@ def _phase_vla_inputs(
         )
     tcp_pose = arm_state.get("tcp_pose_m_rad")
     try:
-        state = canonical_state_7d(tcp_pose, arm_state.get("gripper_open"))
+        state = canonical_observed_state_7d(
+            tcp_pose,
+            arm_state.get("state"),
+            arm_state.get("gripper_open"),
+        )
     except (TypeError, ValueError) as exc:
         raise ExecutorError(
             FailureCode.EXECUTOR_BAD_RESPONSE,

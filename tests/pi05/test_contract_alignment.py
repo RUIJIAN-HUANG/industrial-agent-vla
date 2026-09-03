@@ -107,7 +107,7 @@ def _make_observation(
         "active_arm": "Arm_A",
         "arm_a": {
             "tcp_pose_m_rad": [0.5, 0.0, 0.5, 0.0, 0.0, 0.0],
-            "state": [0.5, 0.0, 0.5, 0.0, 0.0, 0.0, 0.0],
+            "state": [0.5, 0.0, 0.5, 0.0, 0.0, 0.0, 0.375],
             "retreated": False,
             "gripper_open": False,
             "stationary": True,
@@ -176,6 +176,7 @@ def test_e2e_adapter_plan_returns_valid_action_chunk(resolved_camera):
 
     def capture_infer(obs: ObsPacket):
         captured["rgb"] = obs.rgb_front.copy()
+        captured["state"] = obs.robot_state.copy()
         return _make_mock_canonical()
 
     with patch.object(Pi05Executor, "infer", side_effect=capture_infer):
@@ -207,6 +208,7 @@ def test_e2e_adapter_plan_returns_valid_action_chunk(resolved_camera):
     # ── validate_contract 显式调用不抛异常 ──
     chunk.validate_contract()
     np.testing.assert_array_equal(captured["rgb"], expected_pixels)
+    assert captured["state"][6] == pytest.approx(0.375)
 
 
 # ── 用例 2：ImageReference 管道连通性 ───────────────────────────────────────────

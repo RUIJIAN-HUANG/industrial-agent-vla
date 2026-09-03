@@ -111,9 +111,9 @@ def _observation() -> Any:
     assert isinstance(robot, dict)
     robot["arm_a"] = {
         "tcp_pose_m_rad": [0.5, 0.0, 0.5, 0.0, 0.0, 0.0],
-        "state": [0.5, 0.0, 0.5, 0.0, 0.0, 0.0, 1.0],
+        "state": [0.5, 0.0, 0.5, 0.0, 0.0, 0.0, 0.375],
         "retreated": False,
-        "gripper_open": True,
+        "gripper_open": False,
         "stationary": True,
     }
     robot["arm_b"] = {
@@ -150,9 +150,9 @@ def _context(arm_id: str | None = None) -> ExecutionContext:
 
 def test_pi05_routes_each_arm_to_its_camera_and_state() -> None:
     observation = _observation()
-    for arm_id, camera_id, state_x in (
-        ("Arm_A", "CAM_A_TOP", 0.5),
-        ("Arm_B", "CAM_B_TOP", 0.4),
+    for arm_id, camera_id, state_x, gripper_opening in (
+        ("Arm_A", "CAM_A_TOP", 0.5, 0.375),
+        ("Arm_B", "CAM_B_TOP", 0.4, 0.0),
     ):
         transport = EchoTransport()
         adapter = Pi05Adapter(
@@ -174,6 +174,7 @@ def test_pi05_routes_each_arm_to_its_camera_and_state() -> None:
         assert isinstance(camera, Mapping) and isinstance(robot, Mapping)
         assert camera["full_image"]["camera_id"] == camera_id
         assert robot["state"][0] == state_x
+        assert robot["state"][6] == gripper_opening
 
 
 def test_pi05_context_arm_overrides_task_metadata() -> None:

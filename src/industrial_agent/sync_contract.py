@@ -128,6 +128,70 @@ def canonical_state_7d_from_opening(
     return pose
 
 
+def canonical_observed_state_7d(
+    tcp_pose_m_rad: Any,
+    state_7d: Any,
+    gripper_open: Any,
+    *,
+    pose_abs_tolerance: float = 1e-6,
+) -> list[float]:
+    """Validate and preserve one measured V2 7-D robot state.
+
+    ``state_7d`` is the authoritative proprioceptive input because its final
+    component contains the continuous measured gripper opening.  The duplicate
+    TCP and boolean fields are checked as integrity witnesses so an adapter can
+    never silently replace partial gripper motion with a reconstructed 0/1
+    value or combine fields sampled from different frames.
+    """
+
+    if not isinstance(state_7d, Sequence) or isinstance(
+        state_7d, (str, bytes, bytearray)
+    ):
+        raise TypeError("state_7d must be a seven-number sequence")
+    if len(state_7d) != 7:
+        raise ValueError("state_7d must contain exactly 7 values")
+    if not isinstance(gripper_open, bool):
+        raise TypeError("gripper_open must be a controller-confirmed boolean")
+    if (
+        isinstance(pose_abs_tolerance, bool)
+        or not isinstance(pose_abs_tolerance, Real)
+        or not isfinite(float(pose_abs_tolerance))
+        or float(pose_abs_tolerance) < 0.0
+    ):
+        raise ValueError("pose_abs_tolerance must be finite and non-negative")
+
+    observed: list[float] = []
+    for index, item in enumerate(state_7d):
+        if isinstance(item, bool) or not isinstance(item, Real):
+            raise TypeError(f"state_7d[{index}] must be numeric")
+        value = float(item)
+        if not isfinite(value):
+            raise ValueError(f"state_7d[{index}] must be finite")
+        observed.append(value)
+
+    canonical = canonical_state_7d_from_opening(tcp_pose_m_rad, observed[6])
+    tolerance = float(pose_abs_tolerance)
+    for index, (pose_value, observed_value) in enumerate(
+        zip(canonical[:6], observed[:6])
+    ):
+        if not isclose(
+            pose_value,
+            observed_value,
+            rel_tol=0.0,
+            abs_tol=tolerance,
+        ):
+            raise ValueError(
+                f"state_7d[{index}] does not match tcp_pose_m_rad[{index}]"
+            )
+
+    observed_open = observed[6] >= 0.5
+    if observed_open != gripper_open:
+        raise ValueError(
+            "state_7d gripper opening does not match gripper_open at threshold 0.5"
+        )
+    return observed
+
+
 @dataclass(frozen=True)
 class MultiRateContract:
     """Integer-ratio schedule shared by Agent, controller, renderer, and Isaac."""
