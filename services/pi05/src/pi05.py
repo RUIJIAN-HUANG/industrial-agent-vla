@@ -13,7 +13,7 @@
   适配器不再二次反归一化。
 - §3.3.1 Para186：失败切换时清空动作队列与客户端缓存，重新传当前图像。
 - Table 21 Row3（§3.3）：需要 LoRA 时必须走 JAX 路径。
-- Table 69 Row7 / 附录B：单步平移 ≤2cm、旋转 ≤5°，超限截断并报警（D5 实测前用候选值）。
+- 方案书参数指南 safety.axis_abs_limits：单步平移 ≤5cm；本地服务与 Safety Gateway 使用同一正式平移限幅。
 - §7.5：image_pipeline 像素审计、contract 动作越界拒绝。
 
 本文件只含业务逻辑：预处理委托 openpi transform、动作裁维/限幅/包装、失败切换、健康检查。
@@ -86,9 +86,9 @@ from industrial_agent.executor import (  # type: ignore
 from industrial_agent.sync_contract import MODEL_INFERENCE_HZ
 
 # ---------------------------------------------------------------------------
-# 安全限幅常量（方案书 Table 69 Row7 / 附录B；D5 实测前用候选值）
+# 安全限幅常量（与正式 V2 SafetyPolicy 的前三个平移轴一致）
 # ---------------------------------------------------------------------------
-MAX_TRANSLATION_M = 0.02  # 单步平移 ≤ 2cm
+MAX_TRANSLATION_M = 0.05  # 单步平移 ≤ 5cm
 MAX_ROTATION_RAD = 0.0873  # 单步旋转 ≤ 5° ≈ 0.0873 rad
 GRIPPER_OPEN = 1.0
 GRIPPER_CLOSE = 0.0
@@ -401,9 +401,9 @@ class Pi05Executor(BaseExecutor):
 
     # ===================== 安全限幅 =====================
     def _clip_actions(self, actions: np.ndarray) -> np.ndarray:
-        """安全限幅（方案书 Table 69 Row7 / 附录B）。
+        """安全限幅（与正式 V2 SafetyPolicy 对齐）。
 
-        - 平移前3维 |·|≤0.02m，旋转3维 |·|≤0.0873rad，超限截断并 WARNING。
+        - 平移前3维 |·|≤0.05m，旋转3维 |·|≤0.0873rad，超限截断并 WARNING。
         - 夹爪第7维仅允许 0.0/1.0，四舍五入。
         - NaN/Inf 直接 raise ValueError，不下发（方案书 §3.4 协议不变量）。
         - 记录被截断的步骤数。

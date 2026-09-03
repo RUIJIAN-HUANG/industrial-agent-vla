@@ -4,7 +4,7 @@
 方案书出处：
   - §3.3.1 Para185/186：norm stats / 反归一化由 openpi 在 policy.infer 内部完成，
     适配器不再二次反归一化；失败切换清空动作队列与客户端缓存。
-  - Table 69 Row7 / 附录B：单步平移 ≤2cm、旋转 ≤5°（≈0.0873rad），超限截断并报警。
+  - 正式 V2 SafetyPolicy：单步平移 ≤5cm、旋转 ≤5°（≈0.0873rad），超限截断并报警。
   - §7.5 image_pipeline：固定像素校验图 RGB/尺寸/裁剪/方向 checksum 正确。
   - §3.4：ObsPacket / CanonicalActionChunk 协议不变量，越界动作拒绝下发。
 
@@ -495,21 +495,23 @@ def test_norm_stats_no_double_denormalization(clean_pi05_env, monkeypatch, tmp_p
 # 用例 5：安全限幅
 # ---------------------------------------------------------------------------
 def test_safety_clamping(mock_executor, caplog):
-    """用例5：平移>2cm、旋转>5° 被截断到安全阈值并触发报警（方案书 Table 69 Row7 / 附录B）。"""
-    # 构造超限动作：平移 0.05m(>0.02)、旋转 0.2rad(>0.0873)、夹爪 0.3(非 0/1)
+    """用例5：平移>5cm、旋转>5° 被截断到安全阈值并触发报警。"""
+    # 构造超限动作：平移 0.08m(>0.05)、旋转 0.2rad(>0.0873)、夹爪 0.3(非 0/1)
     actions = np.array(
         [
-            [0.05, -0.05, 0.001, 0.20, -0.20, 0.000, 0.30],
-            [-0.03, 0.04, -0.001, -0.10, 0.15, 0.050, 0.70],
+            [0.08, -0.08, 0.001, 0.20, -0.20, 0.000, 0.30],
+            [-0.06, 0.07, -0.001, -0.10, 0.15, 0.050, 0.70],
         ],
         dtype=np.float32,
     )
     with caplog.at_level("WARNING", logger="pi05_executor"):
         clipped = mock_executor._clip_actions(actions)
 
-    # 平移截断到 [-0.02, 0.02]（米）
+    # 平移截断到 [-0.05, 0.05]（米）
     assert np.all(clipped[:, 0:3] >= -MAX_TRANSLATION_M)
     assert np.all(clipped[:, 0:3] <= MAX_TRANSLATION_M)
+    np.testing.assert_allclose(clipped[0, 0:2], [0.05, -0.05])
+    np.testing.assert_allclose(clipped[1, 0:2], [-0.05, 0.05])
     # 旋转截断到 [-0.0873, 0.0873]（弧度 ≈ 5°）
     assert np.all(clipped[:, 3:6] >= -MAX_ROTATION_RAD)
     assert np.all(clipped[:, 3:6] <= MAX_ROTATION_RAD)
