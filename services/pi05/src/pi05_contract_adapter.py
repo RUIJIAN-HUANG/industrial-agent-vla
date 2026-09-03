@@ -17,7 +17,7 @@ from industrial_agent.contracts import ActionChunk, Observation, TaskSchema
 from industrial_agent.errors import ExecutorError, FailureCode, ImageCasError
 from industrial_agent.executor import ExecutionContext, ExecutorDescriptor
 from industrial_agent.service_images import CasRequestImageResolver
-from industrial_agent.sync_contract import canonical_state_7d
+from industrial_agent.sync_contract import canonical_observed_state_7d
 from services.pi05.src.observation import ObsPacket, is_image_reference
 from services.pi05.src.pi05 import Pi05Executor
 
@@ -113,8 +113,9 @@ class Pi05ContractAdapter:
         if not isinstance(arm_state, Mapping):
             arm_state = {}
         try:
-            state_7d = canonical_state_7d(
+            state_7d = canonical_observed_state_7d(
                 arm_state.get("tcp_pose_m_rad"),
+                arm_state.get("state"),
                 arm_state.get("gripper_open"),
             )
         except (TypeError, ValueError) as exc:
