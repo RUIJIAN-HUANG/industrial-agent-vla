@@ -32,6 +32,34 @@ MODEL_INFERENCE_HZ = 10
 # calibrated fully-open width is 40 mm per finger (80 mm total); V2 State
 # stores the measured opening as a continuous normalized value.
 GRIPPER_FULLY_OPEN_WIDTH_M = 0.08
+GRIPPER_CLOSE_COMMAND_MAX = 0.35
+GRIPPER_OPEN_COMMAND_MIN = 0.65
+
+
+def resolve_gripper_command(
+    command: Any,
+    previous_open: bool | None,
+) -> bool:
+    """Resolve a normalized gripper command with a 0.35/0.65 hysteresis band.
+
+    Values at or below the close threshold command closure; values at or above
+    the open threshold command opening.  A value inside the deadband retains
+    the last hardware command, so an uninitialized deadband is rejected rather
+    than guessed at the old 0.5 boundary.
+    """
+
+    if isinstance(command, bool) or not isinstance(command, Real):
+        raise TypeError("gripper command must be numeric")
+    value = float(command)
+    if not isfinite(value) or not -1.0 <= value <= 1.0:
+        raise ValueError("gripper command must be finite and within [-1,1]")
+    if value <= GRIPPER_CLOSE_COMMAND_MAX:
+        return False
+    if value >= GRIPPER_OPEN_COMMAND_MIN:
+        return True
+    if not isinstance(previous_open, bool):
+        raise ValueError("deadband gripper command requires a previous command")
+    return previous_open
 
 
 def canonical_state_7d(
