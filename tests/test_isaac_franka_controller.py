@@ -14,6 +14,7 @@ from industrial_agent.contracts import ActionStep
 from industrial_agent.sync_contract import FROZEN_MULTI_RATE
 from simulation.isaac_franka_controller import (
     CartesianTrackingRejected,
+    GripperCloseNotSettled,
     IsaacSimFrankaController,
     _control_world_position_for_tcp,
     _gripper_opening_m,
@@ -362,11 +363,19 @@ class AppliedHoldTargetTests(unittest.TestCase):
 
 
 class GripperMappingTests(unittest.TestCase):
-    def test_both_vla_endpoint_conventions_map_to_binary_hardware_positions(self):
-        for closed in (-1.0, 0.0, 0.499):
-            self.assertEqual(_gripper_opening_m(closed), 0.0)
-        for opened in (0.5, 1.0):
-            self.assertEqual(_gripper_opening_m(opened), 0.04)
+    def test_resolved_commands_map_to_binary_hardware_positions(self):
+        self.assertEqual(_gripper_opening_m(False), 0.0)
+        self.assertEqual(_gripper_opening_m(True), 0.04)
+
+    def test_controller_latches_commands_inside_hysteresis_deadband(self):
+        controller = object.__new__(IsaacSimFrankaController)
+        controller._gripper_command_open_by_arm = {"Arm_A": False}
+        controller._gripper_close_verified_by_arm = {"Arm_A": True}
+
+        self.assertFalse(controller._resolve_gripper_command("Arm_A", 0.5))
+        self.assertTrue(controller._resolve_gripper_command("Arm_A", 0.7))
+        self.assertTrue(controller._resolve_gripper_command("Arm_A", 0.5))
+        self.assertFalse(controller._resolve_gripper_command("Arm_A", 0.3))
 
     def test_live_finger_positions_are_read_by_joint_name(self):
         class Arm:
@@ -471,6 +480,150 @@ def _isaac_type_modules():
         "isaacsim.core.utils": utils,
         "isaacsim.core.utils.types": types,
     }
+
+
+class _GateArm:
+    dof_names: ClassVar[list[str]] = [
+        "panda_joint1",
+        "panda_joint2",
+        "panda_finger_joint1",
+        "panda_finger_joint2",
+    ]
+
+    def __init__(self, *, closing_progress: bool):
+        self.positions = np.asarray([0.0, 0.0, 0.04, 0.04], dtype=float)
+        self.velocities = np.zeros(4, dtype=float)
+        self.closing_progress = closing_progress
+        self.closing_commanded = False
+
+    @staticmethod
+    def get_world_pose():
+        return np.zeros(3), np.asarray([1.0, 0.0, 0.0, 0.0])
+
+    def get_joint_positions(self):
+        return self.positions.copy()
+
+    def get_joint_velocities(self):
+        return self.velocities.copy()
+
+    def apply_action(self, action):
+        indices = getattr(action, "joint_indices", None)
+        targets = getattr(action, "joint_positions", None)
+        if indices is not None and np.array_equal(indices, [2, 3]):
+            self.closing_commanded = bool(np.allclose(targets, 0.0))
+
+    def advance_physics(self, physics_step: int) -> None:
+        if not self.closing_commanded or not self.closing_progress:
+            return
+        if physics_step < 4:
+            self.positions[2:4] = max(0.015, 0.04 - 0.008 * physics_step)
+            self.velocities[2:4] = -0.01
+        else:
+            self.positions[2:4] = 0.015
+            self.velocities[2:4] = 0.0
+
+
+class _GateWorld:
+    def __init__(self, arm: _GateArm):
+        self.arm = arm
+        self.physics_steps = 0
+
+    @staticmethod
+    def play():
+        return None
+
+    def step(self, *, render):
+        del render
+        self.physics_steps += 1
+        self.arm.advance_physics(self.physics_steps)
+
+
+class _GateSolver:
+    def __init__(self, world: _GateWorld):
+        self.world = world
+        self.inverse_kinematics_at_steps: list[int] = []
+
+    @staticmethod
+    def compute_end_effector_pose():
+        return np.zeros(3), np.eye(3)
+
+    def compute_inverse_kinematics(self, position, orientation):
+        del position, orientation
+        self.inverse_kinematics_at_steps.append(self.world.physics_steps)
+        return object(), True
+
+
+class _GateLula:
+    @staticmethod
+    def set_robot_base_pose(position, orientation):
+        del position, orientation
+
+
+def _controller_for_gripper_gate(
+    *,
+    closing_progress: bool,
+) -> tuple[IsaacSimFrankaController, _GateWorld, _GateSolver]:
+    arm = _GateArm(closing_progress=closing_progress)
+    world = _GateWorld(arm)
+    solver = _GateSolver(world)
+    controller = object.__new__(IsaacSimFrankaController)
+    controller._world = world
+    controller._arms = {"Arm_A": arm}
+    controller._solvers = {"Arm_A": solver}
+    controller._lula_solvers = {"Arm_A": _GateLula()}
+    controller._owner_thread_id = __import__("threading").get_ident()
+    controller._action_lock = Lock()
+    controller._action_idle = Event()
+    controller._action_idle.set()
+    controller._stop_requested = Event()
+    controller._multi_rate = FROZEN_MULTI_RATE
+    controller._physics_tick_index = 0
+    controller._tick_observer = None
+    controller._ik_backend = "lula"
+    controller._tcp_offsets_local_m = {}
+    controller._gripper_settle_velocity_m_s = 1e-3
+    controller._gripper_settle_control_ticks = 2
+    controller._gripper_close_timeout_s = 0.1
+    controller._gripper_closed_tolerance_m = 5e-4
+    controller._gripper_contact_min_travel_m = 1e-3
+    controller._gripper_contact_symmetry_tolerance_m = 3e-3
+    controller._gripper_contact_source = None
+    controller._gripper_command_open_by_arm = {"Arm_A": True}
+    controller._gripper_close_verified_by_arm = {"Arm_A": False}
+    controller._last_gripper_diagnostics = {}
+    return controller, world, solver
+
+
+class GripperCompletionGateTests(unittest.TestCase):
+    def test_close_and_lift_waits_for_two_stable_contact_samples(self):
+        controller, world, solver = _controller_for_gripper_gate(closing_progress=True)
+        action = ActionStep.from_sequence(
+            [0.0, 0.0, 0.02, 0.0, 0.0, 0.0, 0.31],
+            duration_ms=100,
+        )
+
+        with patch.dict(sys.modules, _isaac_type_modules()):
+            controller.execute_action(action, arm_id="Arm_A")
+
+        self.assertGreaterEqual(solver.inverse_kinematics_at_steps[0], 6)
+        self.assertEqual(world.physics_steps, 18)
+        self.assertTrue(controller._gripper_close_verified_by_arm["Arm_A"])
+        diagnostic = controller._last_gripper_diagnostics["Arm_A"]
+        self.assertTrue(diagnostic["contact_confirmed"])
+        self.assertEqual(diagnostic["stable_control_ticks"], 2)
+
+    def test_unsettled_close_times_out_before_any_lift_ik(self):
+        controller, _, solver = _controller_for_gripper_gate(closing_progress=False)
+        action = ActionStep.from_sequence(
+            [0.0, 0.0, 0.02, 0.0, 0.0, 0.0, 0.31],
+            duration_ms=100,
+        )
+
+        with patch.dict(sys.modules, _isaac_type_modules()):
+            with self.assertRaises(GripperCloseNotSettled):
+                controller.execute_action(action, arm_id="Arm_A")
+
+        self.assertEqual(solver.inverse_kinematics_at_steps, [])
 
 
 class SafeStopTests(unittest.TestCase):

@@ -90,9 +90,6 @@ from industrial_agent.sync_contract import MODEL_INFERENCE_HZ
 # ---------------------------------------------------------------------------
 MAX_TRANSLATION_M = 0.05  # 单步平移 ≤ 5cm
 MAX_ROTATION_RAD = 0.0873  # 单步旋转 ≤ 5° ≈ 0.0873 rad
-GRIPPER_OPEN = 1.0
-GRIPPER_CLOSE = 0.0
-
 ACTION_DIM = 7  # [dx,dy,dz,dax,day,daz,gripper]
 
 
@@ -404,7 +401,7 @@ class Pi05Executor(BaseExecutor):
         """安全限幅（与正式 V2 SafetyPolicy 对齐）。
 
         - 平移前3维 |·|≤0.05m，旋转3维 |·|≤0.0873rad，超限截断并 WARNING。
-        - 夹爪第7维仅允许 0.0/1.0，四舍五入。
+        - 夹爪第7维保留 [-1,1] 连续输出，由 Isaac 在 0.35/0.65 滞环后离散化。
         - NaN/Inf 直接 raise ValueError，不下发（方案书 §3.4 协议不变量）。
         - 记录被截断的步骤数。
         """
@@ -454,24 +451,23 @@ class Pi05Executor(BaseExecutor):
         clipped[:, 0:3] = trans_clipped
         clipped[:, 3:6] = rot_clipped
 
-        # 夹爪：四舍五入到 0/1（>=0.5 为开）
+        # 夹爪：只做契约范围限幅。必须保留连续值，让有状态 Isaac 边界
+        # 使用 0.35/0.65 滞环，避免模型输出在 0.5 附近造成开关抖动。
         gripper = clipped[:, 6]
-        rounded = np.where(gripper >= 0.5, GRIPPER_OPEN, GRIPPER_CLOSE).astype(
-            np.float32
-        )
-        diff_grip = np.abs(gripper - rounded)
+        gripper_clipped = np.clip(gripper, -1.0, 1.0)
+        diff_grip = np.abs(gripper - gripper_clipped)
         grip_exceeded = diff_grip > 1e-9
         trunc_count += int(grip_exceeded.sum())
 
         if grip_exceeded.any() and logger.isEnabledFor(logging.WARNING):
             for i in np.argwhere(grip_exceeded).flat:
                 logger.warning(
-                    "夹爪[step=%d,gripper] %.3f -> %.1f (仅允许 0/1)",
+                    "截断[step=%d,gripper] %.3f -> %.3f (限幅[-1,1])",
                     int(i),
                     float(gripper[i]),
-                    float(rounded[i]),
+                    float(gripper_clipped[i]),
                 )
-        clipped[:, 6] = rounded
+        clipped[:, 6] = gripper_clipped
 
         self._last_truncation_count = trunc_count
         return clipped
@@ -807,7 +803,7 @@ if __name__ == "__main__":
     print("out:", clipped[0])
     assert abs(clipped[0, 0]) <= np.float32(MAX_TRANSLATION_M)
     assert abs(clipped[0, 3]) <= np.float32(MAX_ROTATION_RAD)
-    assert clipped[0, 6] in (0.0, 1.0)
+    assert clipped[0, 6] == np.float32(0.5)
 
     print("\n=== NaN rejection test ===")
     try:

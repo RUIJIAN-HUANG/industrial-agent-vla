@@ -92,7 +92,7 @@
                 "type": "number",
                 "minimum": -1,
                 "maximum": 1,
-                "description": "normalized gripper command; hardware boundary maps values >= 0.5 to open and values < 0.5 to closed"
+                "description": "normalized gripper command; hardware boundary closes at values <= 0.35, opens at values >= 0.65, and retains the previous command inside the deadband"
               }
             ],
             "items": false
