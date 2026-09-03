@@ -44,10 +44,12 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--ik-backend", choices=("lula", "pink"), default="lula")
     parser.add_argument("--pi05-url")
     parser.add_argument("--yolo-url", default="http://127.0.0.1:8103")
+    parser.add_argument("--yolo-deadline-ms", type=int, default=5_000)
     parser.add_argument(
         "--task-state-factory",
         help=(
-            "Optional module:callable sensor verifier. The callable receives "
+            "Optional module:callable override for the built-in sensor verifier. "
+            "The callable receives "
             "task_spec, controller, arms and scene_config and returns a "
             "zero-argument task-state provider. For BIN01 it may also expose "
             "active_arm() returning Arm_A, Arm_B or NONE."
@@ -119,11 +121,14 @@ def _resolve_task_state_provider(
 
 
 def _active_arm_from_provider(provider: Any, task_id: str) -> str:
-    if task_id != "BIN01_TO_FINISHED01":
-        return "Arm_A"
     accessor = getattr(provider, "active_arm", None)
     value = accessor() if callable(accessor) else "Arm_A"
-    if value not in {"Arm_A", "Arm_B", "NONE"}:
+    allowed = (
+        {"Arm_A", "Arm_B", "NONE"}
+        if task_id == "BIN01_TO_FINISHED01"
+        else {"Arm_A", "NONE"}
+    )
+    if value not in allowed:
         raise ValueError("task-state provider active_arm() returned an invalid arm")
     return str(value)
 
@@ -135,16 +140,16 @@ def _run_competition(args: argparse.Namespace) -> int:
 
     import isaac_compat
     import scene_layout
-    from industrial_agent.image_cas import ImageCas, ImageCasConfig
+    from industrial_agent.image_cas import ImageCas
     from industrial_agent.isaac_environment import IsaacExecutionEnvironment
     from industrial_agent.isaac_runtime import IsaacMainThreadGate
+    from industrial_agent.online_task_state import OnlineTaskStateProvider
     from industrial_agent.v2_task_profile import require_formal_v2_task
     from simulation.pi05_isaac_supervisor_runtime import run_supervisor_runtime
     from simulation.run_pi05_isaac_closed_loop import (
         _capture_stable_observation_inputs,
         _update_ui_without_advancing_physics,
         build_observation,
-        build_task_state,
     )
     from simulation.v2_competition_controller import (
         CompetitionCommandType,
@@ -152,6 +157,7 @@ def _run_competition(args: argparse.Namespace) -> int:
         load_competition_task,
     )
     from simulation.v2_scene_contract import require_valid_config
+    from simulation.yolo_camera_probe import discover_yolo_http_agent
 
     if args.max_steps < 1:
         raise ValueError("--max-steps must be positive")
@@ -159,11 +165,8 @@ def _run_competition(args: argparse.Namespace) -> int:
         raise ValueError("--deadline-ms must be positive")
     if args.health_interval_s <= 0:
         raise ValueError("--health-interval-s must be positive")
-    if args.require_terminal and not args.task_state_factory:
-        raise ValueError(
-            "--require-terminal requires --task-state-factory; the static provider "
-            "cannot claim task success"
-        )
+    if args.yolo_deadline_ms < 1:
+        raise ValueError("--yolo-deadline-ms must be positive")
 
     scene_config = scene_layout.load_config(args.scene_config.expanduser().resolve())
     require_valid_config(scene_config)
@@ -186,7 +189,6 @@ def _run_competition(args: argparse.Namespace) -> int:
         if args.output_scene is not None
         else artifact_root / "single_bin_scene_v2.usda"
     )
-    cas_root = artifact_root / "cas"
     simulation_app = isaac_compat.launch_simulation_app(headless=False)
     rgb_pipeline = None
     window = None
@@ -194,7 +196,7 @@ def _run_competition(args: argparse.Namespace) -> int:
     active_gate = None
     controller_state = CompetitionController(
         max_steps=args.max_steps,
-        verifier_configured=bool(args.task_state_factory),
+        verifier_configured=True,
     )
     try:
         from isaacsim.core.api import World
@@ -239,7 +241,7 @@ def _run_competition(args: argparse.Namespace) -> int:
         world.reset()
         _apply_home(world, arms, scene_config)
 
-        image_cas = ImageCas(ImageCasConfig(root=cas_root))
+        image_cas = ImageCas.from_agent_config(agent_config)
         image_cas.assert_ready(writable=True)
         publisher = IsaacRgbCasPublisher.from_scene_config(image_cas, scene_config)
         rgb_pipeline = IsaacRgbObservationPipeline(
@@ -301,14 +303,42 @@ def _run_competition(args: argparse.Namespace) -> int:
                     scene_config=scene_config,
                 )
             else:
-
-                def task_state_provider() -> Mapping[str, Any]:
-                    return build_task_state(task_spec)
+                perception, _ = discover_yolo_http_agent(
+                    yolo_url,
+                    timeout_ms=args.yolo_deadline_ms,
+                )
+                verification = agent_config["verification"]
+                task_state_provider = OnlineTaskStateProvider(
+                    task_spec=task_spec,
+                    perception=perception,
+                    scene_config=scene_config,
+                    run_id=episode_id,
+                    verification_frames=int(verification["frames"]),
+                    required_votes=int(verification["required_votes"]),
+                    min_confidence=float(verification["min_confidence"]),
+                    timeout_ms=args.yolo_deadline_ms,
+                )
 
             observation_counter = 0
 
             def current_active_arm() -> str:
                 return _active_arm_from_provider(task_state_provider, task.task_id)
+
+            def current_control_token() -> str:
+                accessor = getattr(task_state_provider, "control_token", None)
+                if callable(accessor):
+                    token = str(accessor())
+                    if token not in {"A_ONLY", "HANDOFF_VERIFY", "B_ONLY", "NONE"}:
+                        raise ValueError(
+                            "task-state provider returned an invalid control token"
+                        )
+                    return token
+                active_arm = current_active_arm()
+                return (
+                    "A_ONLY"
+                    if active_arm == "Arm_A"
+                    else "B_ONLY" if active_arm == "Arm_B" else "NONE"
+                )
 
             def guarded_state() -> dict[str, Any]:
                 active_arm = current_active_arm()
@@ -342,12 +372,25 @@ def _run_competition(args: argparse.Namespace) -> int:
 
             def observation_source() -> dict[str, Any]:
                 nonlocal observation_counter
+                observation_counter += 1
+                observation_id = f"{episode_id}-obs-{observation_counter:06d}"
+                timestamp_ms = int(time.time() * 1000)
                 camera, state = _capture_stable_observation_inputs(
                     world=world,
                     capture_camera=lambda: rgb_pipeline.capture(current_active_arm()),
                     capture_state=guarded_state,
                 )
-                observation_counter += 1
+                updater = getattr(task_state_provider, "update", None)
+                if callable(updater):
+                    state["task"] = dict(
+                        updater(
+                            observation_id=observation_id,
+                            timestamp_ms=timestamp_ms,
+                            camera=camera,
+                            robot=state["robot"],
+                        )
+                    )
+                    state["robot"]["active_arm"] = current_active_arm()
                 controller_state.update_progress(
                     max(0, observation_counter - 1),
                     f"正在执行 {task.task_id}",
@@ -356,24 +399,18 @@ def _run_competition(args: argparse.Namespace) -> int:
                     camera=camera,
                     robot=state["robot"],
                     task=state["task"],
-                    observation_id=f"{episode_id}-obs-{observation_counter:06d}",
-                    timestamp_ms=int(time.time() * 1000),
+                    observation_id=observation_id,
+                    timestamp_ms=timestamp_ms,
                 )
 
             environment = IsaacExecutionEnvironment(
                 observation_source=observation_source,
                 state_guard_source=guarded_state,
-                control_lease_source=lambda: (
-                    "A_ONLY"
-                    if current_active_arm() == "Arm_A"
-                    else "B_ONLY"
-                    if current_active_arm() == "Arm_B"
-                    else "NONE"
-                ),
+                control_lease_source=current_control_token,
                 controller=robot_controller,
                 runtime_gate=gate,
                 command_ledger_path=run_dir / "command-ids.jsonl",
-                runtime_observe_timeout_s=2.0,
+                runtime_observe_timeout_s=max(2.0, args.yolo_deadline_ms / 1000 + 2.0),
                 runtime_action_timeout_s=max(10.0, args.deadline_ms / 1000 + 5.0),
                 runtime_stop_timeout_s=2.0,
             )
@@ -406,9 +443,9 @@ def _run_competition(args: argparse.Namespace) -> int:
                 )
                 run_result = report.run_result
                 result = {
-                    "status": "TASK_SUCCEEDED"
-                    if run_result.success
-                    else "SAFE_STOPPED",
+                    "status": (
+                        "TASK_SUCCEEDED" if run_result.success else "SAFE_STOPPED"
+                    ),
                     "episode_id": episode_id,
                     "task_id": task.task_id,
                     "instruction": task.instruction,

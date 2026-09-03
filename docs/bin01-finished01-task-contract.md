@@ -45,6 +45,18 @@ Detailed GT is written only to
 `offline_gt/bin01_terminal_success.json`; Canonical observations remain free of
 ground truth.
 
+## Online Supervisor workflow
+
+The competition inference entry uses the sensor-only online task-state Provider,
+not the keyboard collection confirmations above. Arm_A and Arm_B call the same
+π0.5 service instance. After Arm_A releases Bin_01 in `HANDOFF_CENTER` and both
+arms are measured stationary and retreated, control changes to
+`HANDOFF_VERIFY`. The Supervisor sends no action in that state; it only requests
+fresh camera observations. Three fresh observations are collected, at least two
+YOLO/robot-state votes must pass, and the accepted confidence must be at least
+0.6 before `B_ONLY` is issued. Final placement at `FINISHED_01` uses the same
+3-frame/2-vote/0.6 rule and then revokes control with `NONE`.
+
 ## Formal mother trajectory command
 
 Run this only on the approved Linux Isaac Sim host after the branch commit,
