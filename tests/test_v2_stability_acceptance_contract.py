@@ -1,9 +1,35 @@
 from simulation.run_v2_stability_acceptance import (
+    _effective_reset_count,
     _expected_positions,
     _motion_between,
+    _reset_metadata,
     _rpy_deg_to_quaternion_wxyz,
     _snapshot_errors,
 )
+
+
+def test_effective_reset_count_records_implicit_initial_reset() -> None:
+    assert _effective_reset_count(0) == 1
+    assert _effective_reset_count(3) == 3
+    assert _reset_metadata(0, 1) == {
+        "resets_requested": 0,
+        "resets_completed": 1,
+        "implicit_initial_reset": True,
+    }
+    assert _reset_metadata(3, 3) == {
+        "resets_requested": 3,
+        "resets_completed": 3,
+        "implicit_initial_reset": False,
+    }
+
+
+def test_effective_reset_count_rejects_negative_values() -> None:
+    try:
+        _effective_reset_count(-1)
+    except ValueError as exc:
+        assert str(exc) == "--resets cannot be negative"
+    else:
+        raise AssertionError("negative reset count was accepted")
 
 
 def _state(

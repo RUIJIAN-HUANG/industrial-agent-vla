@@ -25,6 +25,27 @@ MAX_LINEAR_SPEED_M_S = 0.02
 MAX_ANGULAR_SPEED_RAD_S = 0.20
 
 
+def _effective_reset_count(requested_resets: int) -> int:
+    """Return resets actually executed, including the required initial reset."""
+
+    if requested_resets < 0:
+        raise ValueError("--resets cannot be negative")
+    return max(1, requested_resets)
+
+
+def _reset_metadata(
+    requested_resets: int,
+    completed_resets: int,
+) -> dict[str, int | bool]:
+    """Build the shared reset accounting written to every evidence file."""
+
+    return {
+        "resets_requested": requested_resets,
+        "resets_completed": completed_resets,
+        "implicit_initial_reset": requested_resets == 0 and completed_resets > 0,
+    }
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run headless V2 stability acceptance."
@@ -215,8 +236,7 @@ def _snapshot_errors(
 def _run(args: argparse.Namespace, result: dict[str, Any]) -> None:
     if args.steps < 1:
         raise ValueError("--steps must be at least 1")
-    if args.resets < 0:
-        raise ValueError("--resets cannot be negative")
+    reset_iterations = _effective_reset_count(args.resets)
     if args.reset_settle_steps < 1:
         raise ValueError("--reset-settle-steps must be at least 1")
 
@@ -293,10 +313,10 @@ def _run(args: argparse.Namespace, result: dict[str, Any]) -> None:
 
         reset_records: list[dict[str, Any]] = []
         reset_errors: list[str] = []
-        reset_iterations = args.resets if args.resets else 1
+        home_targets: dict[str, list[float]] = {}
         for reset_index in range(1, reset_iterations + 1):
             world.reset()
-            targets = {
+            home_targets = {
                 arm_id: _write_explicit_home(config, arms[arm_id], arm_id)
                 for arm_id in ("Arm_A", "Arm_B")
             }
@@ -315,7 +335,7 @@ def _run(args: argparse.Namespace, result: dict[str, Any]) -> None:
             errors = _snapshot_errors(current, expected, final_motion)
             for arm_id in ("Arm_A", "Arm_B"):
                 errors.extend(
-                    _home_readback_errors(arms[arm_id], arm_id, targets[arm_id])
+                    _home_readback_errors(arms[arm_id], arm_id, home_targets[arm_id])
                 )
             reset_records.append(
                 {
@@ -334,7 +354,15 @@ def _run(args: argparse.Namespace, result: dict[str, Any]) -> None:
                 }
             )
             reset_errors.extend(f"reset {reset_index}: {message}" for message in errors)
-        _write_json(args.evidence_dir / "reset_report.json", {"resets": reset_records})
+        reset_metadata = _reset_metadata(args.resets, len(reset_records))
+        result.update(reset_metadata)
+        _write_json(
+            args.evidence_dir / "reset_report.json",
+            {
+                **reset_metadata,
+                "resets": reset_records,
+            },
+        )
         if reset_errors:
             raise RuntimeError("; ".join(reset_errors))
 
@@ -352,8 +380,18 @@ def _run(args: argparse.Namespace, result: dict[str, Any]) -> None:
             )
             interval_peak_motion = _peak_motion(interval_peak_motion, step_motion)
             previous = current
-            if step_index % 100 == 0 or step_index == args.steps:
-                errors = _snapshot_errors(current, expected, interval_peak_motion)
+            robot_errors: list[str] = []
+            for arm_id in ("Arm_A", "Arm_B"):
+                robot_errors.extend(
+                    _home_readback_errors(arms[arm_id], arm_id, home_targets[arm_id])
+                )
+            checkpoint = step_index % 100 == 0 or step_index == args.steps
+            if robot_errors or checkpoint:
+                errors = robot_errors
+                if checkpoint:
+                    errors.extend(
+                        _snapshot_errors(current, expected, interval_peak_motion)
+                    )
                 step_checks.append(
                     {
                         "step": step_index,
@@ -362,10 +400,18 @@ def _run(args: argparse.Namespace, result: dict[str, Any]) -> None:
                         },
                         "dynamic_pose_states": current,
                         "peak_motion_since_previous_check": interval_peak_motion,
+                        "robot_states": [
+                            _robot_state(arms[arm_id], arm_id)
+                            for arm_id in ("Arm_A", "Arm_B")
+                        ],
                         "errors": errors,
                     }
                 )
                 if errors:
+                    _write_json(
+                        args.evidence_dir / "step_checks.json",
+                        {"checks": step_checks},
+                    )
                     raise RuntimeError(f"step {step_index}: " + "; ".join(errors))
                 interval_peak_motion = {}
         elapsed = time.monotonic() - started
@@ -388,8 +434,6 @@ def _run(args: argparse.Namespace, result: dict[str, Any]) -> None:
                 "scene_id": config["scene_id"],
                 "headless_steps_requested": args.steps,
                 "headless_steps_completed": args.steps,
-                "resets_requested": args.resets,
-                "resets_completed": args.resets,
                 "reset_settle_steps": args.reset_settle_steps,
                 "headless_elapsed_seconds": elapsed,
                 "camera_capture_count": len(cameras),
