@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import math
 import sys
@@ -32,6 +33,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--output-scene", type=Path, required=True)
     parser.add_argument("--evidence-dir", type=Path, required=True)
     parser.add_argument("--review-seconds", type=int, default=15)
+    parser.add_argument(
+        "--ik-backend",
+        choices=("lula", "pink"),
+        default="lula",
+        help="Controller IK backend; pass pink for formal V2 runtime evidence.",
+    )
     return parser.parse_args()
 
 
@@ -90,6 +97,9 @@ def main() -> int:
     for path in (SCRIPT_DIR, SCRIPT_DIR.parent, SCRIPT_DIR.parent / "src"):
         if str(path) not in sys.path:
             sys.path.insert(0, str(path))
+    if args.ik_backend == "pink":
+        importlib.import_module("eigenpy")
+        importlib.import_module("pinocchio")
 
     evidence_dir = args.evidence_dir.expanduser().resolve()
     evidence_dir.mkdir(parents=True, exist_ok=True)
@@ -178,6 +188,7 @@ def main() -> int:
                 "panda_leftfingertip",
                 "panda_rightfingertip",
             ),
+            ik_backend=args.ik_backend,
         )
         errors: list[str] = []
         motion_records: list[dict[str, Any]] = []
@@ -310,6 +321,7 @@ def main() -> int:
                 "scene_file": scene_file,
                 "franka_asset": franka_asset,
                 "arm_sequence": list(ARM_IDS),
+                "ik_backend": args.ik_backend,
                 "completed_motion_cycles": len(motion_records),
                 "motion_records": motion_records,
                 "safe_stop": asdict(stop_receipt),

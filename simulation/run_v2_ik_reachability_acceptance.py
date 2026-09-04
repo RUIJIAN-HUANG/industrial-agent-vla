@@ -16,6 +16,7 @@ from typing import Any, Mapping
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_CONFIG = SCRIPT_DIR / "configs" / "single_bin_scene_v2.json"
 ARM_IDS = ("Arm_A", "Arm_B")
+PINK_TOOL_Z_TOLERANCE_DEG = 5.0
 
 
 def _preload_pink_runtime(ik_backend: str) -> None:
@@ -95,7 +96,7 @@ def _ik_targets(config: Mapping[str, Any]) -> list[dict[str, Any]]:
                 "target_id": f"ARM_A_ZONE_{zone_id}_SAFE_APPROACH",
                 "arm_id": "Arm_A",
                 "position_world_m": position,
-                "purpose": f"position-only IK above zone {zone_id}",
+                "purpose": f"IK safe approach above zone {zone_id}",
             }
         )
 
@@ -111,11 +112,15 @@ def _ik_targets(config: Mapping[str, Any]) -> list[dict[str, Any]]:
                 "target_id": f"ARM_A_{station_id}_HANDLE_APPROACH",
                 "arm_id": "Arm_A",
                 "position_world_m": position,
-                "purpose": f"position-only IK above BIN_CARRY_TCP at {station_id}",
+                "purpose": f"IK safe approach above BIN_CARRY_TCP at {station_id}",
             }
         )
 
-    for station_id in ("PACK_STATION", "HANDOFF_CENTER", "FINISHED_01"):
+    # Arm_B only enters the approved relay after Arm_A has placed Bin_01 at
+    # HANDOFF_CENTER and retreated.  Probing Arm_B at PACK_STATION contradicts
+    # the frozen BIN01_TO_FINISHED01 task contract and asks it to reach into
+    # Arm_A's workspace.
+    for station_id in ("HANDOFF_CENTER", "FINISHED_01"):
         station = stations[station_id]
         position = [float(value) for value in station["pose"]["position_m"]]
         position = [
@@ -127,12 +132,14 @@ def _ik_targets(config: Mapping[str, Any]) -> list[dict[str, Any]]:
                 "target_id": f"ARM_B_{station_id}_HANDLE_APPROACH",
                 "arm_id": "Arm_B",
                 "position_world_m": position,
-                "purpose": f"position-only IK above BIN_CARRY_TCP at {station_id}",
+                "purpose": f"IK safe approach above BIN_CARRY_TCP at {station_id}",
             }
         )
 
-    if len(targets) != 9 or len({item["target_id"] for item in targets}) != 9:
-        raise RuntimeError("V2 IK target construction must produce nine unique targets")
+    if len(targets) != 8 or len({item["target_id"] for item in targets}) != 8:
+        raise RuntimeError(
+            "V2 IK target construction must produce eight unique targets"
+        )
     for item in targets:
         if item["arm_id"] not in ARM_IDS:
             raise RuntimeError(f"invalid IK arm: {item['arm_id']}")
@@ -141,6 +148,96 @@ def _ik_targets(config: Mapping[str, Any]) -> list[dict[str, Any]]:
         ):
             raise RuntimeError(f"invalid IK target: {item}")
     return targets
+
+
+def _pink_top_down_orientation_candidates(
+    current_world_rotation: Any,
+) -> list[dict[str, Any]]:
+    """Return four yaw-equivalent, task-valid top-down tool orientations.
+
+    The safe-approach targets constrain tool Z to world -Z, while wrist yaw is
+    deliberately left free.  Searching the four quarter-turn equivalents
+    avoids rejecting a reachable target solely because HOME has an unsuitable
+    redundant-wrist yaw.
+    """
+
+    import numpy as np
+    from simulation.scripted_expert_plan import yaw_preserving_top_down_rotation
+
+    base = yaw_preserving_top_down_rotation(current_world_rotation)
+    candidates: list[dict[str, Any]] = []
+    for yaw_offset_deg in (0, 90, 180, -90):
+        angle = math.radians(yaw_offset_deg)
+        world_yaw = np.asarray(
+            [
+                [math.cos(angle), -math.sin(angle), 0.0],
+                [math.sin(angle), math.cos(angle), 0.0],
+                [0.0, 0.0, 1.0],
+            ],
+            dtype=float,
+        )
+        candidates.append(
+            {
+                "yaw_offset_deg": yaw_offset_deg,
+                "rotation_world": world_yaw @ base,
+            }
+        )
+    return candidates
+
+
+def _wxyz_rotation_matrix(quaternion: Any) -> Any:
+    """Return a rotation matrix for a finite normalized wxyz quaternion."""
+
+    import numpy as np
+
+    value = np.asarray(quaternion, dtype=float)
+    if value.shape != (4,) or not np.all(np.isfinite(value)):
+        raise ValueError("quaternion must contain four finite values")
+    norm = float(np.linalg.norm(value))
+    if norm <= 0.0:
+        raise ValueError("quaternion cannot have zero norm")
+    w, x, y, z = value / norm
+    return np.asarray(
+        [
+            [1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y - z * w), 2.0 * (x * z + y * w)],
+            [2.0 * (x * y + z * w), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z - x * w)],
+            [2.0 * (x * z - y * w), 2.0 * (y * z + x * w), 1.0 - 2.0 * (x * x + y * y)],
+        ],
+        dtype=float,
+    )
+
+
+def _orientation_errors_rad(
+    predicted_world_rotation: Any,
+    target_world_rotation: Any,
+) -> tuple[float, float]:
+    """Return tool-Z inclination and complete rotation error in radians."""
+
+    import numpy as np
+
+    predicted = np.asarray(predicted_world_rotation, dtype=float)
+    target = np.asarray(target_world_rotation, dtype=float)
+    if predicted.shape != (3, 3) or target.shape != (3, 3):
+        raise ValueError("orientation matrices must be 3-by-3")
+    if not np.all(np.isfinite(predicted)) or not np.all(np.isfinite(target)):
+        raise ValueError("orientation matrices must be finite")
+
+    predicted_tool_z = predicted[:, 2]
+    target_tool_z = target[:, 2]
+    predicted_tool_z_norm = float(np.linalg.norm(predicted_tool_z))
+    target_tool_z_norm = float(np.linalg.norm(target_tool_z))
+    if predicted_tool_z_norm <= 0.0 or target_tool_z_norm <= 0.0:
+        raise ValueError("orientation matrices must have a non-zero tool-Z axis")
+    tool_z_cosine = float(
+        np.dot(predicted_tool_z, target_tool_z)
+        / (predicted_tool_z_norm * target_tool_z_norm)
+    )
+    tool_z_error = math.acos(max(-1.0, min(1.0, tool_z_cosine)))
+
+    relative = target.T @ predicted
+    rotation_cosine = (float(np.trace(relative)) - 1.0) / 2.0
+    rotation_error = math.acos(max(-1.0, min(1.0, rotation_cosine)))
+    return tool_z_error, rotation_error
 
 
 def main() -> int:
@@ -164,7 +261,7 @@ def main() -> int:
         "headless": False,
         "position_only_ik": args.ik_backend == "lula",
         "pink_orientation_constraint": (
-            "hold_initial_tcp_orientation" if args.ik_backend == "pink" else None
+            "tool_z_world_down_yaw_free" if args.ik_backend == "pink" else None
         ),
         "ik_solution_applied": False,
         "cartesian_motion_performed": False,
@@ -186,12 +283,12 @@ def main() -> int:
         targets = _ik_targets(config)
         if args.arm_b_bin_transport_only:
             critical_ids = {
-                "ARM_B_PACK_STATION_HANDLE_APPROACH",
+                "ARM_B_HANDOFF_CENTER_HANDLE_APPROACH",
                 "ARM_B_FINISHED_01_HANDLE_APPROACH",
             }
             targets = [item for item in targets if item["target_id"] in critical_ids]
             if [item["target_id"] for item in targets] != [
-                "ARM_B_PACK_STATION_HANDLE_APPROACH",
+                "ARM_B_HANDOFF_CENTER_HANDLE_APPROACH",
                 "ARM_B_FINISHED_01_HANDLE_APPROACH",
             ]:
                 raise RuntimeError("Arm_B bin-transport target selection drifted")
@@ -319,60 +416,150 @@ def main() -> int:
             )
             for target in targets:
                 arm_id = target["arm_id"]
-                virtual_joints = joint_positions_before[arm_id].copy()
                 _, initial_rotation_world = controller.end_effector_pose(arm_id)
-                target_orientation_world = _rotation_matrix_to_quaternion(
-                    initial_rotation_world
-                )
+                _, base_orientation_world = arms[arm_id].get_world_pose()
+                base_rotation_world = _wxyz_rotation_matrix(base_orientation_world)
                 target_position_world = np.asarray(
                     target["position_world_m"], dtype=float
                 )
-                predicted_tcp_world = np.full(3, np.nan, dtype=float)
-                position_error_m = float("inf")
-                virtual_action_count = 0
-                for virtual_action_count in range(1, args.pink_max_virtual_actions + 1):
-                    virtual_joints, predicted_tcp_world, _ = (
-                        controller.predict_pink_tcp_pose_read_only(
+                tool_z_tolerance_rad = math.radians(PINK_TOOL_Z_TOLERANCE_DEG)
+                candidate_records: list[dict[str, Any]] = []
+                selected: dict[str, Any] | None = None
+                for orientation in _pink_top_down_orientation_candidates(
+                    initial_rotation_world
+                ):
+                    virtual_joints = joint_positions_before[arm_id].copy()
+                    predicted_tcp_world = np.full(3, np.nan, dtype=float)
+                    predicted_rotation_world = np.full((3, 3), np.nan, dtype=float)
+                    position_error_m = float("inf")
+                    tool_z_error_rad = float("inf")
+                    rotation_error_rad = float("inf")
+                    virtual_action_count = 0
+                    target_orientation_world = _rotation_matrix_to_quaternion(
+                        orientation["rotation_world"]
+                    )
+                    for virtual_action_count in range(
+                        1, args.pink_max_virtual_actions + 1
+                    ):
+                        (
+                            virtual_joints,
+                            predicted_tcp_world,
+                            predicted_rotation_base,
+                        ) = controller.predict_pink_tcp_pose_read_only(
                             arm_id=arm_id,
                             current_joint_positions=virtual_joints,
                             target_tcp_position_world_m=target_position_world,
-                            target_tcp_orientation_world_wxyz=(
-                                target_orientation_world
-                            ),
+                            target_tcp_orientation_world_wxyz=target_orientation_world,
                             dt_s=0.1,
                         )
+                        predicted_rotation_world = base_rotation_world @ np.asarray(
+                            predicted_rotation_base, dtype=float
+                        )
+                        position_error_m = float(
+                            np.linalg.norm(predicted_tcp_world - target_position_world)
+                        )
+                        tool_z_error_rad, rotation_error_rad = _orientation_errors_rad(
+                            predicted_rotation_world,
+                            orientation["rotation_world"],
+                        )
+                        if (
+                            position_error_m <= args.pink_position_tolerance_m
+                            and tool_z_error_rad <= tool_z_tolerance_rad
+                        ):
+                            break
+                    finite_candidate = bool(
+                        np.all(np.isfinite(virtual_joints))
+                        and np.all(np.isfinite(predicted_tcp_world))
+                        and np.all(np.isfinite(predicted_rotation_world))
+                        and math.isfinite(position_error_m)
+                        and math.isfinite(tool_z_error_rad)
+                        and math.isfinite(rotation_error_rad)
                     )
-                    position_error_m = float(
-                        np.linalg.norm(predicted_tcp_world - target_position_world)
-                    )
-                    if position_error_m <= args.pink_position_tolerance_m:
+                    candidate_record = {
+                        "yaw_offset_deg": orientation["yaw_offset_deg"],
+                        "target_orientation_world_wxyz": target_orientation_world,
+                        "finite_solution": finite_candidate,
+                        "virtual_action_count": virtual_action_count,
+                        "final_position_error_m": position_error_m,
+                        "tool_z_error_deg": math.degrees(tool_z_error_rad),
+                        "full_rotation_error_deg": math.degrees(rotation_error_rad),
+                        "predicted_tcp_position_world_m": predicted_tcp_world,
+                        "predicted_tcp_rotation_world": predicted_rotation_world,
+                        "solution_joint_positions_rad": virtual_joints,
+                    }
+                    candidate_records.append(candidate_record)
+                    if (
+                        finite_candidate
+                        and position_error_m <= args.pink_position_tolerance_m
+                        and tool_z_error_rad <= tool_z_tolerance_rad
+                    ):
+                        selected = candidate_record
                         break
+                if selected is None:
+                    finite_candidates = [
+                        item for item in candidate_records if item["finite_solution"]
+                    ]
+                    selected = min(
+                        finite_candidates or candidate_records,
+                        key=lambda item: max(
+                            item["final_position_error_m"]
+                            / args.pink_position_tolerance_m,
+                            item["tool_z_error_deg"] / PINK_TOOL_Z_TOLERANCE_DEG,
+                        ),
+                    )
+                virtual_joints = selected["solution_joint_positions_rad"]
+                predicted_tcp_world = selected["predicted_tcp_position_world_m"]
+                position_error_m = float(selected["final_position_error_m"])
+                tool_z_error_deg = float(selected["tool_z_error_deg"])
+                rotation_error_deg = float(selected["full_rotation_error_deg"])
+                virtual_action_count = int(selected["virtual_action_count"])
                 finite_solution = bool(
                     np.all(np.isfinite(virtual_joints))
                     and np.all(np.isfinite(predicted_tcp_world))
                     and math.isfinite(position_error_m)
+                    and math.isfinite(tool_z_error_deg)
+                    and math.isfinite(rotation_error_deg)
                 )
                 success = bool(
                     finite_solution
                     and position_error_m <= args.pink_position_tolerance_m
+                    and tool_z_error_deg <= PINK_TOOL_Z_TOLERANCE_DEG
                 )
-                if not success:
+                if position_error_m > args.pink_position_tolerance_m:
                     errors.append(
                         f"{target['target_id']}: Pink virtual TCP error "
                         f"{position_error_m:.6f} m exceeds "
                         f"{args.pink_position_tolerance_m:.6f} m"
                     )
+                if tool_z_error_deg > PINK_TOOL_Z_TOLERANCE_DEG:
+                    errors.append(
+                        f"{target['target_id']}: Pink tool-Z inclination error "
+                        f"{tool_z_error_deg:.3f} deg exceeds "
+                        f"{PINK_TOOL_Z_TOLERANCE_DEG:.3f} deg"
+                    )
+                if not finite_solution:
+                    errors.append(
+                        f"{target['target_id']}: Pink returned a non-finite pose"
+                    )
                 ik_records.append(
                     {
                         **target,
                         "backend": "pink",
-                        "orientation_constraint": "hold_initial_tcp_orientation",
+                        "orientation_constraint": "tool_z_world_down_yaw_free",
+                        "selected_yaw_offset_deg": selected["yaw_offset_deg"],
+                        "orientation_candidates": candidate_records,
                         "success": success,
                         "finite_solution": finite_solution,
                         "virtual_action_count": virtual_action_count,
                         "position_tolerance_m": args.pink_position_tolerance_m,
+                        "tool_z_tolerance_deg": PINK_TOOL_Z_TOLERANCE_DEG,
                         "final_position_error_m": position_error_m,
+                        "tool_z_error_deg": tool_z_error_deg,
+                        "full_rotation_error_deg": rotation_error_deg,
                         "predicted_tcp_position_world_m": predicted_tcp_world,
+                        "predicted_tcp_rotation_world": selected[
+                            "predicted_tcp_rotation_world"
+                        ],
                         "solution_joint_positions_rad": virtual_joints,
                         "solution_applied": False,
                         "pink_diagnostics": controller.diagnostics(arm_id),

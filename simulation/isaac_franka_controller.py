@@ -27,8 +27,12 @@ from industrial_agent.sync_contract import (
 
 _ARMS = ("Arm_A", "Arm_B")
 _FINGER_JOINTS = ("panda_finger_joint1", "panda_finger_joint2")
+_MIN_TRANSLATION_COMMAND_M = 0.001
 _MIN_TRANSLATION_PROGRESS_M = 0.00025
+_MIN_TRANSLATION_PROGRESS_RATIO = 0.10
 _MIN_TRANSLATION_DIRECTION_COSINE = 0.25
+_ROTATION_DOMINANT_MIN_ROTATION_RAD = 0.05
+_ROTATION_DOMINANT_MAX_TRANSLATION_M = 0.001
 
 
 class CartesianTrackingRejected(RuntimeError):
@@ -220,31 +224,54 @@ def _virtual_tcp_world_position(
 def _translation_tracking_diagnostic(
     requested_world_m: np.ndarray,
     observed_world_m: np.ndarray,
+    requested_rotation_rad: np.ndarray | None = None,
 ) -> dict[str, Any]:
     """Check that a translated TCP actually moved in the requested direction."""
 
     requested = np.asarray(requested_world_m, dtype=float)
     observed = np.asarray(observed_world_m, dtype=float)
+    rotation = (
+        np.zeros(3, dtype=float)
+        if requested_rotation_rad is None
+        else np.asarray(requested_rotation_rad, dtype=float)
+    )
     if requested.shape != (3,) or observed.shape != (3,):
         raise ValueError("translation tracking vectors must be 3-D")
-    if not np.all(np.isfinite(requested)) or not np.all(np.isfinite(observed)):
-        raise ValueError("translation tracking vectors must be finite")
+    if rotation.shape != (3,):
+        raise ValueError("requested rotation vector must be 3-D")
+    if not all(np.all(np.isfinite(value)) for value in (requested, observed, rotation)):
+        raise ValueError("tracking vectors must be finite")
 
     requested_norm = float(np.linalg.norm(requested))
     observed_norm = float(np.linalg.norm(observed))
-    if requested_norm == 0.0:
+    rotation_norm = float(np.linalg.norm(rotation))
+    rotation_dominant = bool(
+        rotation_norm >= _ROTATION_DOMINANT_MIN_ROTATION_RAD
+        and requested_norm <= _ROTATION_DOMINANT_MAX_TRANSLATION_M
+    )
+    if requested_norm < _MIN_TRANSLATION_COMMAND_M or rotation_dominant:
         return {
             "checked": False,
             "pass": True,
+            "skip_reason": (
+                "rotation_dominant" if rotation_dominant else "translation_deadband"
+            ),
             "requested_world_m": requested.tolist(),
             "observed_world_m": observed.tolist(),
+            "requested_norm_m": requested_norm,
+            "requested_rotation_norm_rad": rotation_norm,
+            "minimum_checked_translation_m": _MIN_TRANSLATION_COMMAND_M,
         }
 
     requested_unit = requested / requested_norm
     forward_progress = float(np.dot(observed, requested_unit))
     direction_cosine = forward_progress / observed_norm if observed_norm > 0.0 else 0.0
+    minimum_forward_progress = min(
+        _MIN_TRANSLATION_PROGRESS_M,
+        requested_norm * _MIN_TRANSLATION_PROGRESS_RATIO,
+    )
     passed = bool(
-        forward_progress >= _MIN_TRANSLATION_PROGRESS_M
+        forward_progress >= minimum_forward_progress
         and direction_cosine >= _MIN_TRANSLATION_DIRECTION_COSINE
     )
     return {
@@ -253,10 +280,12 @@ def _translation_tracking_diagnostic(
         "requested_world_m": requested.tolist(),
         "observed_world_m": observed.tolist(),
         "requested_norm_m": requested_norm,
+        "requested_rotation_norm_rad": rotation_norm,
         "observed_norm_m": observed_norm,
         "forward_progress_m": forward_progress,
         "direction_cosine": direction_cosine,
-        "minimum_forward_progress_m": _MIN_TRANSLATION_PROGRESS_M,
+        "minimum_forward_progress_m": minimum_forward_progress,
+        "minimum_forward_progress_ratio": _MIN_TRANSLATION_PROGRESS_RATIO,
         "minimum_direction_cosine": _MIN_TRANSLATION_DIRECTION_COSINE,
     }
 
@@ -323,6 +352,7 @@ class IsaacSimFrankaController:
         gripper_closed_tolerance_m: float = 5e-4,
         gripper_contact_min_travel_m: float = 1e-3,
         gripper_contact_symmetry_tolerance_m: float = 3e-3,
+        gripper_contact_position_delta_m: float = 1e-4,
         gripper_contact_source: Callable[[str], bool] | None = None,
         safe_stop_action_grace_s: float = 0.25,
         ik_backend: str = "lula",
@@ -368,6 +398,8 @@ class IsaacSimFrankaController:
             raise ValueError(
                 "gripper_contact_symmetry_tolerance_m must be in [0, 0.01]"
             )
+        if not 0.0 < gripper_contact_position_delta_m <= 0.005:
+            raise ValueError("gripper_contact_position_delta_m must be in (0, 0.005]")
         if gripper_contact_source is not None and not callable(gripper_contact_source):
             raise TypeError("gripper_contact_source must be callable or None")
         if ik_backend not in {"lula", "pink"}:
@@ -388,6 +420,7 @@ class IsaacSimFrankaController:
         self._gripper_contact_symmetry_tolerance_m = float(
             gripper_contact_symmetry_tolerance_m
         )
+        self._gripper_contact_position_delta_m = float(gripper_contact_position_delta_m)
         self._gripper_contact_source = gripper_contact_source
         self._gripper_command_open_by_arm: dict[str, bool] = {}
         self._gripper_close_verified_by_arm = {arm_id: False for arm_id in _ARMS}
@@ -929,9 +962,12 @@ class IsaacSimFrankaController:
             int(round(self._gripper_close_timeout_s * self._multi_rate.control_hz)),
         )
         stable_ticks = 0
+        previous_positions = np.asarray(initial_positions, dtype=float)
         diagnostic: dict[str, Any] = {
             "opening_norm": normalize_gripper_opening(initial_positions),
             "max_velocity_m_s": float("inf"),
+            "max_position_delta_m": float("inf"),
+            "position_plateau": False,
             "stable_control_ticks": 0,
             "closed_endpoint": False,
             "contact_confirmed": False,
@@ -948,6 +984,11 @@ class IsaacSimFrankaController:
             positions, velocities = self._gripper_joint_state(arm_id)
             opening_norm = normalize_gripper_opening(positions)
             max_velocity = float(np.max(np.abs(velocities)))
+            max_position_delta = float(np.max(np.abs(positions - previous_positions)))
+            position_plateau = bool(
+                max_position_delta <= self._gripper_contact_position_delta_m
+            )
+            previous_positions = positions.copy()
             closed_endpoint = bool(
                 np.max(np.abs(positions)) <= self._gripper_closed_tolerance_m
             )
@@ -963,7 +1004,8 @@ class IsaacSimFrankaController:
                 if not isinstance(external_contact, bool):
                     raise RuntimeError("gripper_contact_source must return a boolean")
                 contact_confirmed = contact_confirmed or external_contact
-            settled = max_velocity <= self._gripper_settle_velocity_m_s
+            velocity_settled = max_velocity <= self._gripper_settle_velocity_m_s
+            settled = velocity_settled or (contact_confirmed and position_plateau)
             if settled and (closed_endpoint or contact_confirmed):
                 stable_ticks += 1
             else:
@@ -971,6 +1013,8 @@ class IsaacSimFrankaController:
             diagnostic = {
                 "opening_norm": opening_norm,
                 "max_velocity_m_s": max_velocity,
+                "max_position_delta_m": max_position_delta,
+                "position_plateau": position_plateau,
                 "stable_control_ticks": stable_ticks,
                 "closed_endpoint": closed_endpoint,
                 "contact_confirmed": contact_confirmed,
@@ -1229,6 +1273,7 @@ class IsaacSimFrankaController:
                 motion_diagnostic = _translation_tracking_diagnostic(
                     world_translation,
                     np.asarray(final_position, dtype=float) - current_position,
+                    rotation,
                 )
                 self._last_motion_diagnostics[arm_id] = motion_diagnostic
                 if not motion_diagnostic["pass"]:
