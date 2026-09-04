@@ -62,6 +62,14 @@ class IsaacFrankaControllerMathTests(unittest.TestCase):
         )
         self.assertFalse(diagnostic["pass"])
 
+    def test_translation_tracking_ignores_submillimetre_rotation_noise(self):
+        diagnostic = _translation_tracking_diagnostic(
+            np.asarray([-0.000020, 0.000017, 0.000030]),
+            np.asarray([-0.000313, 0.0, 0.0]),
+        )
+        self.assertFalse(diagnostic["checked"])
+        self.assertTrue(diagnostic["pass"])
+
     def test_identity_rotation_matrix_becomes_identity_quaternion(self):
         quaternion = _rotation_matrix_to_quaternion(np.eye(3))
         np.testing.assert_allclose(quaternion, [1.0, 0.0, 0.0, 0.0])
@@ -490,10 +498,16 @@ class _GateArm:
         "panda_finger_joint2",
     ]
 
-    def __init__(self, *, closing_progress: bool):
+    def __init__(
+        self,
+        *,
+        closing_progress: bool,
+        contact_velocity_noise: bool = False,
+    ):
         self.positions = np.asarray([0.0, 0.0, 0.04, 0.04], dtype=float)
         self.velocities = np.zeros(4, dtype=float)
         self.closing_progress = closing_progress
+        self.contact_velocity_noise = contact_velocity_noise
         self.closing_commanded = False
 
     @staticmethod
@@ -520,7 +534,7 @@ class _GateArm:
             self.velocities[2:4] = -0.01
         else:
             self.positions[2:4] = 0.015
-            self.velocities[2:4] = 0.0
+            self.velocities[2:4] = -0.02 if self.contact_velocity_noise else 0.0
 
 
 class _GateWorld:
@@ -562,8 +576,12 @@ class _GateLula:
 def _controller_for_gripper_gate(
     *,
     closing_progress: bool,
+    contact_velocity_noise: bool = False,
 ) -> tuple[IsaacSimFrankaController, _GateWorld, _GateSolver]:
-    arm = _GateArm(closing_progress=closing_progress)
+    arm = _GateArm(
+        closing_progress=closing_progress,
+        contact_velocity_noise=contact_velocity_noise,
+    )
     world = _GateWorld(arm)
     solver = _GateSolver(world)
     controller = object.__new__(IsaacSimFrankaController)
@@ -587,6 +605,7 @@ def _controller_for_gripper_gate(
     controller._gripper_closed_tolerance_m = 5e-4
     controller._gripper_contact_min_travel_m = 1e-3
     controller._gripper_contact_symmetry_tolerance_m = 3e-3
+    controller._gripper_contact_position_delta_m = 1e-4
     controller._gripper_contact_source = None
     controller._gripper_command_open_by_arm = {"Arm_A": True}
     controller._gripper_close_verified_by_arm = {"Arm_A": False}
@@ -611,6 +630,25 @@ class GripperCompletionGateTests(unittest.TestCase):
         diagnostic = controller._last_gripper_diagnostics["Arm_A"]
         self.assertTrue(diagnostic["contact_confirmed"])
         self.assertEqual(diagnostic["stable_control_ticks"], 2)
+
+    def test_contact_position_plateau_accepts_noisy_velocity_readback(self):
+        controller, _, solver = _controller_for_gripper_gate(
+            closing_progress=True,
+            contact_velocity_noise=True,
+        )
+        action = ActionStep.from_sequence(
+            [0.0, 0.0, 0.02, 0.0, 0.0, 0.0, 0.31],
+            duration_ms=100,
+        )
+
+        with patch.dict(sys.modules, _isaac_type_modules()):
+            controller.execute_action(action, arm_id="Arm_A")
+
+        self.assertTrue(controller._gripper_close_verified_by_arm["Arm_A"])
+        self.assertTrue(
+            controller._last_gripper_diagnostics["Arm_A"]["position_plateau"]
+        )
+        self.assertTrue(solver.inverse_kinematics_at_steps)
 
     def test_unsettled_close_times_out_before_any_lift_ik(self):
         controller, _, solver = _controller_for_gripper_gate(closing_progress=False)
