@@ -70,6 +70,33 @@ class IsaacFrankaControllerMathTests(unittest.TestCase):
         self.assertFalse(diagnostic["checked"])
         self.assertTrue(diagnostic["pass"])
 
+    def test_translation_tracking_ignores_rotation_dominant_model_action(self):
+        diagnostic = _translation_tracking_diagnostic(
+            np.asarray([-0.00019463, -0.00017546, 0.00012080]),
+            np.asarray([-0.000172, 0.0, 0.0]),
+            np.asarray([0.00020623, 0.0873, 0.00017051]),
+        )
+        self.assertFalse(diagnostic["checked"])
+        self.assertTrue(diagnostic["pass"])
+        self.assertEqual(diagnostic["skip_reason"], "rotation_dominant")
+
+    def test_translation_tracking_scales_progress_for_small_commands(self):
+        diagnostic = _translation_tracking_diagnostic(
+            np.asarray([0.001, 0.0, 0.0]),
+            np.asarray([0.000114, 0.000423, 0.0]),
+        )
+        self.assertTrue(diagnostic["checked"])
+        self.assertTrue(diagnostic["pass"])
+        self.assertAlmostEqual(diagnostic["minimum_forward_progress_m"], 0.0001)
+
+    def test_translation_tracking_still_rejects_reverse_small_motion(self):
+        diagnostic = _translation_tracking_diagnostic(
+            np.asarray([0.001, 0.0, 0.0]),
+            np.asarray([-0.001254, 0.0, 0.0]),
+        )
+        self.assertTrue(diagnostic["checked"])
+        self.assertFalse(diagnostic["pass"])
+
     def test_identity_rotation_matrix_becomes_identity_quaternion(self):
         quaternion = _rotation_matrix_to_quaternion(np.eye(3))
         np.testing.assert_allclose(quaternion, [1.0, 0.0, 0.0, 0.0])
