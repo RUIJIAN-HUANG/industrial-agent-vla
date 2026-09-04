@@ -27,7 +27,7 @@ from industrial_agent.sync_contract import (
 
 _ARMS = ("Arm_A", "Arm_B")
 _FINGER_JOINTS = ("panda_finger_joint1", "panda_finger_joint2")
-_MIN_TRANSLATION_COMMAND_M = 0.00025
+_MIN_TRANSLATION_COMMAND_M = 0.001
 _MIN_TRANSLATION_PROGRESS_M = 0.00025
 _MIN_TRANSLATION_PROGRESS_RATIO = 0.10
 _MIN_TRANSLATION_DIRECTION_COSINE = 0.25

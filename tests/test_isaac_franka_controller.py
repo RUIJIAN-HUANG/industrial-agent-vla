@@ -70,6 +70,16 @@ class IsaacFrankaControllerMathTests(unittest.TestCase):
         self.assertFalse(diagnostic["checked"])
         self.assertTrue(diagnostic["pass"])
 
+    def test_translation_tracking_ignores_observed_closed_loop_jitter(self):
+        diagnostic = _translation_tracking_diagnostic(
+            np.asarray([0.00057072, 0.00030333, 0.00008662]),
+            np.asarray([-0.000839, 0.0, 0.0]),
+            np.asarray([-0.00003925, 0.00026993, 0.00015199]),
+        )
+        self.assertFalse(diagnostic["checked"])
+        self.assertTrue(diagnostic["pass"])
+        self.assertEqual(diagnostic["skip_reason"], "translation_deadband")
+
     def test_translation_tracking_ignores_rotation_dominant_model_action(self):
         diagnostic = _translation_tracking_diagnostic(
             np.asarray([-0.00019463, -0.00017546, 0.00012080]),
