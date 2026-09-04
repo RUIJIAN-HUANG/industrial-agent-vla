@@ -321,8 +321,9 @@ class LocalOpenPiPolicyClient:
         self._ckpt = ckpt
         self._config_name = config_name
         self._audit = ActionAudit()
-        self._audit_context: ContextVar[dict[str, Any]] = ContextVar(
-            "pi05_action_audit_context", default={}
+        self._audit_degraded = False
+        self._audit_context: ContextVar[dict[str, Any] | None] = ContextVar(
+            "pi05_action_audit_context", default=None
         )
         self._install_audit_transform()
         logger.info("【JAX 客户端】加载 %s @ %s", config_name, ckpt)
@@ -342,11 +343,17 @@ class LocalOpenPiPolicyClient:
             return
         original = getattr(self._policy, "_output_transform", None)
         if not callable(original):
+            self._audit_degraded = True
+            self._audit.emit(
+                "audit_unavailable",
+                component="policy_output_transform",
+                reason="callable _output_transform not found",
+            )
             logger.warning("audit enabled but policy has no callable _output_transform")
             return
 
         def audited_transform(outputs: Any) -> Any:
-            context = self._audit_context.get()
+            context = self._audit_context.get() or {}
             try:
                 self._audit.emit(
                     "model_output_normalized",
@@ -369,8 +376,14 @@ class LocalOpenPiPolicyClient:
             return transformed
 
         try:
-            setattr(self._policy, "_output_transform", audited_transform)
+            self._policy._output_transform = audited_transform
         except Exception as exc:
+            self._audit_degraded = True
+            self._audit.emit(
+                "audit_unavailable",
+                component="policy_output_transform",
+                reason=f"failed to install _output_transform wrapper: {exc}",
+            )
             logger.warning("audit transform installation failed: %s", exc)
 
     def infer(self, example: dict) -> dict:
@@ -404,6 +417,10 @@ class LocalOpenPiPolicyClient:
     @property
     def client_type(self) -> str:
         return "local"
+
+    @property
+    def audit_degraded(self) -> bool:
+        return self._audit_degraded
 
     @property
     def checkpoint_dir(self) -> str | None:

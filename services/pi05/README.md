@@ -115,9 +115,11 @@ python -m services.pi05.src.openpi_service
 如果目录或文件不可写，审计会记录 warning 并自动关闭，PI05 服务仍会继续启动和推理。
 
 审计文件按 `request_id + step_id` 关联 HTTP 请求、解码后的图像/state、模型原始
-归一化动作、官方反归一化动作、PI05 裁剪前后动作和 HTTP 返回动作。图像只记录
-字节 SHA-256、shape 和 dtype，不保存像素。审计写入失败不会改变推理结果；完成
-排查后取消 `PI05_ACTION_AUDIT` 即恢复默认行为。
+归一化动作、官方反归一化动作、PI05 裁剪前后动作和 HTTP 返回动作；失败请求会以
+`http_error` 终止事件记录状态码、错误码与失败阶段。图像只记录字节 SHA-256、shape
+和 dtype，不保存像素。如果当前 OpenPI 版本不再提供可包装的输出转换钩子，审计会
+写入 `audit_unavailable`，同时 `/health` 的执行器信息中 `audit_degraded=true`。审计
+写入失败不会改变推理结果；完成排查后取消 `PI05_ACTION_AUDIT` 即恢复默认行为。
 
 ## 历史 Canonical v1 数据 Gate（禁止用于正式训练）
 

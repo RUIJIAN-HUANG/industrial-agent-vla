@@ -64,7 +64,7 @@ from services.pi05.src.observation import (
     is_image_reference,
     validate_image_reference,
 )
-from industrial_agent.errors import FailureCode, ImageCasError
+from industrial_agent.errors import ExecutorError, FailureCode, ImageCasError
 from industrial_agent.image_cas import ImageCas, ImageCasConfig
 from industrial_agent.service_images import CasRequestImageResolver
 
@@ -1357,6 +1357,63 @@ def test_http_real_mode_preserves_cas_error_semantics(
     assert error["code"] == failure_code.value
     assert error["retryable"] is retryable
     mock_executor.infer.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_status", "expected_code"),
+    [
+        (
+            ImageCasError(
+                FailureCode.CAS_NOT_FOUND,
+                "missing audit image",
+                retryable=True,
+            ),
+            503,
+            FailureCode.CAS_NOT_FOUND.value,
+        ),
+        (
+            ExecutorError(
+                FailureCode.EXECUTOR_RUNTIME,
+                "injected executor failure",
+                retryable=False,
+            ),
+            503,
+            FailureCode.EXECUTOR_RUNTIME.value,
+        ),
+        (
+            RuntimeError("unexpected inference failure"),
+            500,
+            FailureCode.EXECUTOR_RUNTIME.value,
+        ),
+    ],
+)
+def test_http_infer_audits_terminal_handler_errors(
+    test_client,
+    monkeypatch,
+    error,
+    expected_status,
+    expected_code,
+):
+    """Every failure after http_request must produce a correlated terminal event."""
+
+    handler = MagicMock(spec=["handle"])
+    handler.handle.side_effect = error
+    audit = MagicMock(spec=["emit"])
+    monkeypatch.setattr(openpi_service, "v1_infer_handler", handler)
+    monkeypatch.setattr(openpi_service, "_action_audit", audit)
+
+    response = test_client.post("/v1/infer", json=_make_http_infer_body())
+
+    assert response.status_code == expected_status
+    error_events = [
+        call for call in audit.emit.call_args_list if call.args[0] == "http_error"
+    ]
+    assert len(error_events) == 1
+    event = error_events[0]
+    assert event.kwargs["context"]["request_id"] == "req-http-001"
+    assert event.kwargs["status_code"] == expected_status
+    assert event.kwargs["error_code"] == expected_code
+    assert event.kwargs["failure_stage"] == "handler"
 
 
 def test_http_infer_sha_mismatch_rejected(test_client, mock_executor):

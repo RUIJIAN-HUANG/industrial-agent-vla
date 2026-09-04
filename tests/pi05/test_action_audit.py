@@ -7,12 +7,14 @@ must remain unchanged when it is enabled or disabled.
 from __future__ import annotations
 
 import json
+from unittest.mock import MagicMock
 
 import numpy as np
 
 from services.pi05.src.action_audit import ActionAudit, array_payload
 from services.pi05.src.observation import ObsPacket
 from services.pi05.src.pi05 import Pi05Executor
+from services.pi05.src.pi05_client import LocalOpenPiPolicyClient
 
 
 def test_action_audit_is_disabled_by_default(monkeypatch, tmp_path):
@@ -126,3 +128,22 @@ def test_action_audit_write_failure_disables_audit(monkeypatch, tmp_path):
     audit.emit("write_failure", value=1)
 
     assert audit.enabled is False
+
+
+def test_missing_output_transform_emits_audit_unavailable():
+    """An OpenPI compatibility break must be visible in the audit stream."""
+
+    client = object.__new__(LocalOpenPiPolicyClient)
+    client._policy = object()
+    client._audit = MagicMock(enabled=True)
+    client._audit_degraded = False
+
+    client._install_audit_transform()
+
+    assert client._audit_degraded is True
+    assert client.audit_degraded is True
+    client._audit.emit.assert_called_once_with(
+        "audit_unavailable",
+        component="policy_output_transform",
+        reason="callable _output_transform not found",
+    )
