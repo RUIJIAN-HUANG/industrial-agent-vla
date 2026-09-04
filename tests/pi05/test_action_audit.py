@@ -39,7 +39,7 @@ def test_action_audit_writes_jsonl_without_pixel_values(monkeypatch, tmp_path):
         state=array_payload(np.zeros(7, dtype=np.float32)),
     )
 
-    record = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
+    record = json.loads(audit.path.read_text(encoding="utf-8").splitlines()[0])
     assert record["stage"] == "decoded_observation"
     assert record["request_id"] == "req-1"
     assert record["step_id"] == 3
@@ -74,7 +74,7 @@ def test_executor_audit_does_not_change_published_action(monkeypatch, tmp_path):
     np.testing.assert_allclose(chunk.actions[0], [0, 0.05, 0, 0, 0, 0, 0.75])
     records = [
         json.loads(line)
-        for line in (tmp_path / "audit.jsonl").read_text(encoding="utf-8").splitlines()
+        for line in executor._audit.path.read_text(encoding="utf-8").splitlines()
     ]
     stages = [record["stage"] for record in records]
     assert stages == [
@@ -85,3 +85,44 @@ def test_executor_audit_does_not_change_published_action(monkeypatch, tmp_path):
     assert all(record["request_id"] == "req-1" for record in records)
     clip = next(record for record in records if record["stage"] == "clip_actions")
     assert clip["clipped_dimensions"] == ["dy"]
+
+
+def test_action_audit_initialization_is_fail_open(monkeypatch, tmp_path):
+    parent = tmp_path / "not-a-directory"
+    parent.write_text("occupied", encoding="utf-8")
+    monkeypatch.setenv("PI05_ACTION_AUDIT", "1")
+    monkeypatch.setenv("PI05_ACTION_AUDIT_PATH", str(parent / "audit.jsonl"))
+
+    audit = ActionAudit()
+
+    assert audit.enabled is False
+
+
+def test_action_audit_uses_a_distinct_path_per_process(monkeypatch, tmp_path):
+    configured = tmp_path / "audit.jsonl"
+    monkeypatch.setenv("PI05_ACTION_AUDIT", "1")
+    monkeypatch.setenv("PI05_ACTION_AUDIT_PATH", str(configured))
+
+    with monkeypatch.context() as process_one:
+        process_one.setattr("services.pi05.src.action_audit.os.getpid", lambda: 101)
+        first = ActionAudit()
+    with monkeypatch.context() as process_two:
+        process_two.setattr("services.pi05.src.action_audit.os.getpid", lambda: 202)
+        second = ActionAudit()
+
+    assert first.path != second.path
+    assert first.path.name == "audit.pid-101.jsonl"
+    assert second.path.name == "audit.pid-202.jsonl"
+
+
+def test_action_audit_write_failure_disables_audit(monkeypatch, tmp_path):
+    monkeypatch.setenv("PI05_ACTION_AUDIT", "1")
+    monkeypatch.setenv("PI05_ACTION_AUDIT_PATH", str(tmp_path / "audit.jsonl"))
+    audit = ActionAudit()
+    broken_target = tmp_path / "directory-target"
+    broken_target.mkdir()
+    audit.path = broken_target
+
+    audit.emit("write_failure", value=1)
+
+    assert audit.enabled is False

@@ -70,6 +70,18 @@ def _json_safe(value: Any) -> Any:
     return value
 
 
+def _pid_audit_path(configured: Path) -> Path:
+    """Return a per-process path so workers never append to one JSONL file."""
+
+    suffix = configured.suffix or ".jsonl"
+    stem = (
+        configured.name[: -len(configured.suffix)]
+        if configured.suffix
+        else configured.name
+    )
+    return configured.with_name(f"{stem}.pid-{os.getpid()}{suffix}")
+
+
 class ActionAudit:
     """Process-local JSONL writer, disabled unless explicitly requested."""
 
@@ -80,9 +92,21 @@ class ActionAudit:
         configured = os.environ.get(
             "PI05_ACTION_AUDIT_PATH", "/tmp/pi05-action-audit.jsonl"
         )
-        self.path = Path(configured).expanduser()
+        self.path = _pid_audit_path(Path(configured).expanduser())
         if self.enabled:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+                # Check the actual append target during initialization.  Audit
+                # diagnostics are fail-open and must never block service start.
+                with self.path.open("a", encoding="utf-8"):
+                    pass
+            except OSError as exc:
+                self.enabled = False
+                logger.warning(
+                    "audit disabled during initialization path=%s error=%s",
+                    self.path,
+                    exc,
+                )
 
     def emit(
         self,
@@ -108,6 +132,7 @@ class ActionAudit:
                 with self.path.open("a", encoding="utf-8") as handle:
                     handle.write(line + "\n")
         except Exception as exc:  # diagnostics must never alter inference
+            self.enabled = False
             logger.warning("audit write failed path=%s error=%s", self.path, exc)
 
 

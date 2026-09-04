@@ -110,6 +110,10 @@ PI05_SERVICE_MODE=real PI05_TASK_PROFILE_VERSION=v2 \
 python -m services.pi05.src.openpi_service
 ```
 
+每个服务进程会实际写入带 PID 的文件，例如
+`pi05-action-audit.pid-12345.jsonl`；多卡 worker 不会共享同一个 JSONL 文件。
+如果目录或文件不可写，审计会记录 warning 并自动关闭，PI05 服务仍会继续启动和推理。
+
 审计文件按 `request_id + step_id` 关联 HTTP 请求、解码后的图像/state、模型原始
 归一化动作、官方反归一化动作、PI05 裁剪前后动作和 HTTP 返回动作。图像只记录
 字节 SHA-256、shape 和 dtype，不保存像素。审计写入失败不会改变推理结果；完成
