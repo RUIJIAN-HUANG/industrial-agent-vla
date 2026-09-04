@@ -692,9 +692,7 @@ class Pi05Executor(BaseExecutor):
             "last_latency_ms": self._last_latency_ms,
             "openpi_available": OPENPI_AVAILABLE,
             "ws_available": WS_CLIENT_AVAILABLE,
-            "audit_degraded": bool(
-                getattr(self._policy, "audit_degraded", False)
-            ),
+            "audit_degraded": bool(getattr(self._policy, "audit_degraded", False)),
         }
 
     # ===================== 冻结契约叠加层（体系B 对齐）=====================
