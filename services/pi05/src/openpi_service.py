@@ -65,6 +65,7 @@ except Exception:  # 退化为 asyncio 线程池
 import numpy as np
 
 from industrial_agent.sync_contract import MODEL_INFERENCE_HZ
+from services.pi05.src.action_audit import ActionAudit, array_payload, array_sha256
 
 # ---------------------------------------------------------------------------
 # 环境变量配置
@@ -150,6 +151,7 @@ if not logger.handlers:
     )
     logger.addHandler(_h)
 logger.setLevel(logging.INFO)
+_action_audit = ActionAudit()
 
 # ---------------------------------------------------------------------------
 # 导入执行器
@@ -566,6 +568,28 @@ def _make_infer_error_body(
     }
 
 
+def _emit_http_error_audit(
+    context: dict[str, Any],
+    *,
+    status_code: int,
+    code: str,
+    message: str,
+    retryable: bool,
+    failure_stage: str,
+) -> None:
+    """Record a terminal HTTP inference failure without changing fail-open behavior."""
+
+    _action_audit.emit(
+        "http_error",
+        context=context,
+        status_code=status_code,
+        error_code=code,
+        message=message,
+        retryable=retryable,
+        failure_stage=failure_stage,
+    )
+
+
 def _build_obs_from_model_input(
     model_input: dict[str, Any], req: dict[str, Any]
 ) -> Any:
@@ -680,6 +704,29 @@ def _build_obs_from_model_input(
     if not isinstance(safety, dict):
         safety = {}
 
+    context = {
+        "request_id": str(req.get("request_id", "")),
+        "trace_id": str(req.get("trace_id", "")),
+        "episode_id": str(req.get("episode_id", "")),
+        "task_id": str(req.get("task_id", "")),
+        "subtask_id": str(req.get("subtask_id", "")),
+        "step_id": int(req.get("step_id", 0)),
+        "observation_id": str(req.get("observation_id", "")),
+        "arm_id": str(req.get("arm_id", model_input.get("arm_id", ""))),
+    }
+    _action_audit.emit(
+        "decoded_observation",
+        context=context,
+        prompt=prompt,
+        state=array_payload(robot_state),
+        tcp_pose_m_rad=array_payload(tcp_pose),
+        image={
+            "sha256": array_sha256(rgb_front),
+            "shape": list(rgb_front.shape),
+            "dtype": str(rgb_front.dtype),
+        },
+    )
+
     return ObsPacket(
         episode_id=str(req.get("episode_id", "")),
         step_id=int(req.get("step_id", 0)),
@@ -688,7 +735,7 @@ def _build_obs_from_model_input(
         rgb_wrist=rgb_wrist,
         robot_state=robot_state,
         instruction=prompt,
-        runtime_flags={"safety": dict(safety)},
+        runtime_flags={"safety": dict(safety), **context},
     )
 
 
@@ -907,11 +954,55 @@ async def http_infer(request: Request) -> JSONResponse:
     _seen_task_ids[req["task_id"]] = time.time()
 
     # ---- 公共 CAS handler 解析真实图像后调用 backend 推理 ----
+    request_context = {
+        "request_id": str(req["request_id"]),
+        "trace_id": str(req["trace_id"]),
+        "episode_id": str(req["episode_id"]),
+        "task_id": str(req["task_id"]),
+        "subtask_id": str(req["subtask_id"]),
+        "step_id": int(req["step_id"]),
+        "observation_id": str(req["observation_id"]),
+        "arm_id": str(req.get("arm_id", req["model_input"].get("arm_id", ""))),
+    }
+    model_input = req["model_input"]
+    request_observation = model_input.get("observation", {})
+    request_camera = (
+        request_observation.get("camera", {})
+        if isinstance(request_observation, dict)
+        else {}
+    )
+    request_robot = (
+        request_observation.get("robot", {})
+        if isinstance(request_observation, dict)
+        else {}
+    )
+    _action_audit.emit(
+        "http_request",
+        context=request_context,
+        prompt=model_input.get("prompt", ""),
+        image_reference=(
+            request_camera.get("full_image")
+            if isinstance(request_camera, dict)
+            else None
+        ),
+        state=(request_robot.get("state") if isinstance(request_robot, dict) else None),
+    )
+
     if v1_infer_handler is None:
+        code = _failure_code_value(FailureCode.CAS_UNAVAILABLE)
+        message = _image_cas_init_error or "公共 VLA CAS resolver 未初始化"
+        _emit_http_error_audit(
+            request_context,
+            status_code=503,
+            code=code,
+            message=message,
+            retryable=True,
+            failure_stage="handler_unavailable",
+        )
         err_body = _make_infer_error_body(
             req,
-            code=_failure_code_value(FailureCode.CAS_UNAVAILABLE),
-            message=_image_cas_init_error or "公共 VLA CAS resolver 未初始化",
+            code=code,
+            message=message,
             retryable=True,
             retry_after_ms=500,
         )
@@ -929,30 +1020,58 @@ async def http_infer(request: Request) -> JSONResponse:
             )
         chunk = handled["chunk"]
     except ImageCasError as e:
+        status_code = 503 if e.retryable else 422
+        message = str(e)
+        _emit_http_error_audit(
+            request_context,
+            status_code=status_code,
+            code=_failure_code_value(e.code),
+            message=message,
+            retryable=e.retryable,
+            failure_stage="handler",
+        )
         err_body = _make_infer_error_body(
             req,
             code=_failure_code_value(e.code),
-            message=str(e),
+            message=message,
             retryable=e.retryable,
         )
         return JSONResponse(
-            status_code=503 if e.retryable else 422,
+            status_code=status_code,
             content=err_body,
         )
     except ExecutorError as e:
+        message = str(e)
+        _emit_http_error_audit(
+            request_context,
+            status_code=503,
+            code=_failure_code_value(e.code),
+            message=message,
+            retryable=e.retryable,
+            failure_stage="handler",
+        )
         err_body = _make_infer_error_body(
             req,
             code=_failure_code_value(e.code),
-            message=str(e),
+            message=message,
             retryable=e.retryable,
         )
         return JSONResponse(status_code=503, content=err_body)
     except Exception as e:
         logger.error("HTTP /v1/infer 推理异常：%s", e)
+        message = f"推理失败：{e}"
+        _emit_http_error_audit(
+            request_context,
+            status_code=500,
+            code=_failure_code_value(FailureCode.EXECUTOR_RUNTIME),
+            message=message,
+            retryable=False,
+            failure_stage="handler",
+        )
         err_body = _make_infer_error_body(
             req,
             code=_failure_code_value(FailureCode.EXECUTOR_RUNTIME),
-            message=f"推理失败：{e}",
+            message=message,
             retryable=False,
         )
         return JSONResponse(status_code=500, content=err_body)
@@ -971,6 +1090,14 @@ async def http_infer(request: Request) -> JSONResponse:
             message=f"推理完成时 deadline 已过期：deadline_ms={deadline_ms}",
             retryable=False,
         )
+        _emit_http_error_audit(
+            request_context,
+            status_code=408,
+            code=_failure_code_value(FailureCode.EXECUTOR_TIMEOUT),
+            message=err_body["error"]["message"],
+            retryable=False,
+            failure_stage="post_inference_deadline",
+        )
         return JSONResponse(status_code=408, content=err_body)
 
     # ---- CanonicalActionChunk → action_chunk dict ----
@@ -984,6 +1111,14 @@ async def http_infer(request: Request) -> JSONResponse:
             message=f"action_chunk 转换失败：{e}",
             retryable=False,
         )
+        _emit_http_error_audit(
+            request_context,
+            status_code=500,
+            code=_failure_code_value(FailureCode.EXECUTOR_RUNTIME),
+            message=err_body["error"]["message"],
+            retryable=False,
+            failure_stage="action_chunk_conversion",
+        )
         return JSONResponse(status_code=500, content=err_body)
 
     # ---- E-05：推理完成后检查取消状态（防止迟到结果覆盖 cancel）----
@@ -994,6 +1129,14 @@ async def http_infer(request: Request) -> JSONResponse:
             code=_failure_code_value(FailureCode.EXECUTOR_CANCELLED),
             message="推理结果已因 cancel 请求而丢弃",
             retryable=False,
+        )
+        _emit_http_error_audit(
+            request_context,
+            status_code=200,
+            code=_failure_code_value(FailureCode.EXECUTOR_CANCELLED),
+            message=err_body["error"]["message"],
+            retryable=False,
+            failure_stage="cancelled_after_inference",
         )
         return JSONResponse(status_code=200, content=err_body)
 
@@ -1018,6 +1161,14 @@ async def http_infer(request: Request) -> JSONResponse:
             "total_ms": round((t_infer_end - t_request_start) * 1000, 3),
         },
     }
+    _action_audit.emit(
+        "http_response",
+        context=request_context,
+        chunk_id=action_chunk["chunk_id"],
+        first_action=action_chunk["steps"][0]["values"],
+        action_step_count=len(action_chunk["steps"]),
+        timing=response["timing"],
+    )
     return JSONResponse(status_code=200, content=response)
 
 

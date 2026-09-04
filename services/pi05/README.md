@@ -99,6 +99,28 @@ python -m services.pi05.serve_multi_gpu
 单卡仍可使用 `PI05_GPU_ID=0` 作为兼容配置。训练的 `fsdp_devices` 和推理的
 worker 数是两个独立参数：前者用于单进程模型分片，后者用于多进程推理吞吐。
 
+## 推理链路审计（只读、默认关闭）
+
+排查模型输出时可临时打开审计，不改变模型、动作限幅或 HTTP 契约：
+
+```bash
+PI05_ACTION_AUDIT=1 \
+PI05_ACTION_AUDIT_PATH=/mnt/d/industrial-agent-vla-e/logs/pi05-action-audit.jsonl \
+PI05_SERVICE_MODE=real PI05_TASK_PROFILE_VERSION=v2 \
+python -m services.pi05.src.openpi_service
+```
+
+每个服务进程会实际写入带 PID 的文件，例如
+`pi05-action-audit.pid-12345.jsonl`；多卡 worker 不会共享同一个 JSONL 文件。
+如果目录或文件不可写，审计会记录 warning 并自动关闭，PI05 服务仍会继续启动和推理。
+
+审计文件按 `request_id + step_id` 关联 HTTP 请求、解码后的图像/state、模型原始
+归一化动作、官方反归一化动作、PI05 裁剪前后动作和 HTTP 返回动作；失败请求会以
+`http_error` 终止事件记录状态码、错误码与失败阶段。图像只记录字节 SHA-256、shape
+和 dtype，不保存像素。如果当前 OpenPI 版本不再提供可包装的输出转换钩子，审计会
+写入 `audit_unavailable`，同时 `/health` 的执行器信息中 `audit_degraded=true`。审计
+写入失败不会改变推理结果；完成排查后取消 `PI05_ACTION_AUDIT` 即恢复默认行为。
+
 ## 历史 Canonical v1 数据 Gate（禁止用于正式训练）
 
 以下内容仅用于验证旧数据可读性。`scripts/pi05/canonical_v1.py` 是角色 E 的薄适配层，底层强制复用主线
