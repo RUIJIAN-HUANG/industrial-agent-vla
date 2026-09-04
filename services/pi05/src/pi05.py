@@ -45,6 +45,11 @@ logger.setLevel(logging.INFO)
 
 
 from services.pi05.src.action import CanonicalActionChunk
+from services.pi05.src.action_audit import (
+    ActionAudit,
+    array_payload,
+    observation_context,
+)
 from services.pi05.src.base import BaseExecutor
 from services.pi05.src.observation import ObsPacket
 
@@ -236,6 +241,7 @@ class Pi05Executor(BaseExecutor):
         self._last_latency_ms: int | None = None
         self._last_truncation_count: int = 0
         self._state_lock = threading.Lock()  # 保护 _pending_chunk 并发读写
+        self._audit = ActionAudit()
 
         # ---- 初始化 ----
         if self.mode == "real":
@@ -353,7 +359,7 @@ class Pi05Executor(BaseExecutor):
             )
         if not np.all(np.isfinite(state_7d)):
             raise ValueError("observation/state contains NaN or Infinity")
-        return {
+        example = {
             "observation/image": _prep_image(obs.rgb_front),
             "observation/state": state_7d,
             "prompt": obs.instruction,
@@ -364,6 +370,18 @@ class Pi05Executor(BaseExecutor):
             "timestamp_ns": obs.timestamp_ns,
             "runtime_flags": obs.runtime_flags,
         }
+        self._audit.emit(
+            "input_observation",
+            context=observation_context(obs),
+            prompt=obs.instruction,
+            state=array_payload(state_7d),
+            image={
+                "sha256": _image_checksum(example["observation/image"]),
+                "shape": list(example["observation/image"].shape),
+                "dtype": str(example["observation/image"].dtype),
+            },
+        )
+        return example
 
     def _pixel_audit_if_test(self, obs: ObsPacket) -> None:
         """若传入固定测试图，校验预处理未破坏 RGB/方向/dtype（方案书 §7.5 image_pipeline）。"""
@@ -524,7 +542,24 @@ class Pi05Executor(BaseExecutor):
         actions_7 = raw
         # 反归一化由 openpi output_transform 在 policy.infer 内完成（用本项目 compute_norm_stats，
         # 满足 §3.3.1 Para185/186），适配器不再二次反归一化。
+        self._audit.emit(
+            "policy_return_physical",
+            context=observation_context(obs),
+            actions=array_payload(raw),
+        )
+        actions_before_clip = np.array(actions_7, copy=True)
         actions_7 = self._clip_actions(actions_7)  # 安全限幅
+        clip_delta = np.abs(actions_before_clip - actions_7) > 1e-9
+        self._audit.emit(
+            "clip_actions",
+            context=observation_context(obs),
+            raw_actions=array_payload(actions_before_clip),
+            clipped_actions=array_payload(actions_7),
+            clipped_dimensions=[
+                DIM_NAMES[int(column)]
+                for column in np.flatnonzero(np.any(clip_delta, axis=0))
+            ],
+        )
         first_action = np.ascontiguousarray(actions_7[:1])
 
         latency_ms = int((time.time() - t0) * 1000)
@@ -545,6 +580,12 @@ class Pi05Executor(BaseExecutor):
             latency_ms,
             self.mode,
             self._last_truncation_count,
+        )
+        self._audit.emit(
+            "published_first_action",
+            context=observation_context(obs),
+            actions=array_payload(first_action),
+            truncation_count=self._last_truncation_count,
         )
 
         return CanonicalActionChunk(

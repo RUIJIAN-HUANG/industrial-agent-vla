@@ -99,6 +99,22 @@ python -m services.pi05.serve_multi_gpu
 单卡仍可使用 `PI05_GPU_ID=0` 作为兼容配置。训练的 `fsdp_devices` 和推理的
 worker 数是两个独立参数：前者用于单进程模型分片，后者用于多进程推理吞吐。
 
+## 推理链路审计（只读、默认关闭）
+
+排查模型输出时可临时打开审计，不改变模型、动作限幅或 HTTP 契约：
+
+```bash
+PI05_ACTION_AUDIT=1 \
+PI05_ACTION_AUDIT_PATH=/mnt/d/industrial-agent-vla-e/logs/pi05-action-audit.jsonl \
+PI05_SERVICE_MODE=real PI05_TASK_PROFILE_VERSION=v2 \
+python -m services.pi05.src.openpi_service
+```
+
+审计文件按 `request_id + step_id` 关联 HTTP 请求、解码后的图像/state、模型原始
+归一化动作、官方反归一化动作、PI05 裁剪前后动作和 HTTP 返回动作。图像只记录
+字节 SHA-256、shape 和 dtype，不保存像素。审计写入失败不会改变推理结果；完成
+排查后取消 `PI05_ACTION_AUDIT` 即恢复默认行为。
+
 ## 历史 Canonical v1 数据 Gate（禁止用于正式训练）
 
 以下内容仅用于验证旧数据可读性。`scripts/pi05/canonical_v1.py` 是角色 E 的薄适配层，底层强制复用主线

@@ -65,6 +65,7 @@ except Exception:  # 退化为 asyncio 线程池
 import numpy as np
 
 from industrial_agent.sync_contract import MODEL_INFERENCE_HZ
+from services.pi05.src.action_audit import ActionAudit, array_payload, array_sha256
 
 # ---------------------------------------------------------------------------
 # 环境变量配置
@@ -150,6 +151,7 @@ if not logger.handlers:
     )
     logger.addHandler(_h)
 logger.setLevel(logging.INFO)
+_action_audit = ActionAudit()
 
 # ---------------------------------------------------------------------------
 # 导入执行器
@@ -680,6 +682,29 @@ def _build_obs_from_model_input(
     if not isinstance(safety, dict):
         safety = {}
 
+    context = {
+        "request_id": str(req.get("request_id", "")),
+        "trace_id": str(req.get("trace_id", "")),
+        "episode_id": str(req.get("episode_id", "")),
+        "task_id": str(req.get("task_id", "")),
+        "subtask_id": str(req.get("subtask_id", "")),
+        "step_id": int(req.get("step_id", 0)),
+        "observation_id": str(req.get("observation_id", "")),
+        "arm_id": str(req.get("arm_id", model_input.get("arm_id", ""))),
+    }
+    _action_audit.emit(
+        "decoded_observation",
+        context=context,
+        prompt=prompt,
+        state=array_payload(robot_state),
+        tcp_pose_m_rad=array_payload(tcp_pose),
+        image={
+            "sha256": array_sha256(rgb_front),
+            "shape": list(rgb_front.shape),
+            "dtype": str(rgb_front.dtype),
+        },
+    )
+
     return ObsPacket(
         episode_id=str(req.get("episode_id", "")),
         step_id=int(req.get("step_id", 0)),
@@ -688,7 +713,7 @@ def _build_obs_from_model_input(
         rgb_wrist=rgb_wrist,
         robot_state=robot_state,
         instruction=prompt,
-        runtime_flags={"safety": dict(safety)},
+        runtime_flags={"safety": dict(safety), **context},
     )
 
 
@@ -917,6 +942,40 @@ async def http_infer(request: Request) -> JSONResponse:
         )
         return JSONResponse(status_code=503, content=err_body)
 
+    request_context = {
+        "request_id": str(req["request_id"]),
+        "trace_id": str(req["trace_id"]),
+        "episode_id": str(req["episode_id"]),
+        "task_id": str(req["task_id"]),
+        "subtask_id": str(req["subtask_id"]),
+        "step_id": int(req["step_id"]),
+        "observation_id": str(req["observation_id"]),
+        "arm_id": str(req.get("arm_id", req["model_input"].get("arm_id", ""))),
+    }
+    model_input = req["model_input"]
+    request_observation = model_input.get("observation", {})
+    request_camera = (
+        request_observation.get("camera", {})
+        if isinstance(request_observation, dict)
+        else {}
+    )
+    request_robot = (
+        request_observation.get("robot", {})
+        if isinstance(request_observation, dict)
+        else {}
+    )
+    _action_audit.emit(
+        "http_request",
+        context=request_context,
+        prompt=model_input.get("prompt", ""),
+        image_reference=(
+            request_camera.get("full_image")
+            if isinstance(request_camera, dict)
+            else None
+        ),
+        state=(request_robot.get("state") if isinstance(request_robot, dict) else None),
+    )
+
     t_infer_start = time.time()
     try:
         if run_in_threadpool is not None:
@@ -1018,6 +1077,14 @@ async def http_infer(request: Request) -> JSONResponse:
             "total_ms": round((t_infer_end - t_request_start) * 1000, 3),
         },
     }
+    _action_audit.emit(
+        "http_response",
+        context=request_context,
+        chunk_id=action_chunk["chunk_id"],
+        first_action=action_chunk["steps"][0]["values"],
+        action_step_count=len(action_chunk["steps"]),
+        timing=response["timing"],
+    )
     return JSONResponse(status_code=200, content=response)
 
 

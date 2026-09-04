@@ -21,11 +21,14 @@ from __future__ import annotations
 
 import json
 import logging
+from contextvars import ContextVar
 import time
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
+
+from services.pi05.src.action_audit import ActionAudit, array_payload
 
 logger = logging.getLogger("pi05_client")
 if not logger.handlers:
@@ -317,10 +320,83 @@ class LocalOpenPiPolicyClient:
         )
         self._ckpt = ckpt
         self._config_name = config_name
+        self._audit = ActionAudit()
+        self._audit_context: ContextVar[dict[str, Any]] = ContextVar(
+            "pi05_action_audit_context", default={}
+        )
+        self._install_audit_transform()
         logger.info("【JAX 客户端】加载 %s @ %s", config_name, ckpt)
 
+    @staticmethod
+    def _actions_from_transform_value(value: Any) -> Any:
+        """Extract the official policy action field without changing its object."""
+
+        if isinstance(value, dict) and "actions" in value:
+            return value["actions"]
+        return value
+
+    def _install_audit_transform(self) -> None:
+        """Wrap the official transform only when opt-in auditing is enabled."""
+
+        if not self._audit.enabled:
+            return
+        original = getattr(self._policy, "_output_transform", None)
+        if not callable(original):
+            logger.warning("audit enabled but policy has no callable _output_transform")
+            return
+
+        def audited_transform(outputs: Any) -> Any:
+            context = self._audit_context.get()
+            try:
+                self._audit.emit(
+                    "model_output_normalized",
+                    context=context,
+                    actions=array_payload(self._actions_from_transform_value(outputs)),
+                )
+            except Exception as exc:
+                logger.warning("normalized output audit failed: %s", exc)
+            transformed = original(outputs)
+            try:
+                self._audit.emit(
+                    "openpi_output_physical",
+                    context=context,
+                    actions=array_payload(
+                        self._actions_from_transform_value(transformed)
+                    ),
+                )
+            except Exception as exc:
+                logger.warning("physical output audit failed: %s", exc)
+            return transformed
+
+        try:
+            setattr(self._policy, "_output_transform", audited_transform)
+        except Exception as exc:
+            logger.warning("audit transform installation failed: %s", exc)
+
     def infer(self, example: dict) -> dict:
-        return self._policy.infer(example)
+        flags = example.get("runtime_flags", {}) or {}
+        context = {
+            "request_id": flags.get("request_id", ""),
+            "trace_id": flags.get("trace_id", ""),
+            "episode_id": str(example.get("episode_id", "")),
+            "task_id": flags.get("task_id", ""),
+            "subtask_id": flags.get("subtask_id", ""),
+            "step_id": int(example.get("step_id", 0)),
+            "observation_id": flags.get("observation_id", ""),
+            "arm_id": flags.get("arm_id", ""),
+        }
+        token = self._audit_context.set(context)
+        try:
+            result = self._policy.infer(example)
+            if self._audit.enabled:
+                self._audit.emit(
+                    "policy_return",
+                    context=context,
+                    actions=array_payload(self._actions_from_transform_value(result)),
+                )
+            return result
+        finally:
+            self._audit_context.reset(token)
 
     def clear_cache(self) -> None:
         _safe_clear_cache(self._policy)
