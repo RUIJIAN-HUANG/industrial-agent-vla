@@ -7,7 +7,8 @@ from typing import Any, Mapping
 
 import pytest
 
-from industrial_agent.contracts import ActionStep, TaskSchema
+from industrial_agent.contracts import ActionChunk, ActionStep, Observation, TaskSchema
+from industrial_agent.safety import ActionSafetyValidator, SafetyPolicy
 from industrial_agent.environment import SafeStopReceipt
 from industrial_agent.errors import FailureCode
 from industrial_agent.fsm import AgentState
@@ -15,6 +16,7 @@ from industrial_agent.isaac_runtime import IsaacMainThreadGate
 from simulation.pi05_isaac_supervisor_runtime import (
     _ActionRecorder,
     _RecordingEnvironment,
+    Task3WorkspaceGraceSafety,
     run_supervisor_runtime,
     with_decision_budget,
 )
@@ -42,6 +44,81 @@ def _task() -> TaskSchema:
             )
         )
     )
+
+
+def _task3() -> TaskSchema:
+    return TaskSchema.from_dict(
+        json.loads(
+            (ROOT / "configs" / "task.v2.bin01-to-finished01.example.json").read_text(
+                encoding="utf-8"
+            )
+        )
+    )
+
+
+def _action_chunk(values: list[float]) -> ActionChunk:
+    return ActionChunk(
+        contract_version="1.0",
+        chunk_id="task3-test-chunk",
+        task_id="BIN01_TO_FINISHED01",
+        executor="pi05",
+        steps=(ActionStep.from_sequence(values),),
+    )
+
+
+def _task3_observation(x: float) -> Observation:
+    payload = v2_observation(observation_id="task3-observation")
+    payload["robot"]["arm_a"]["tcp_pose_m_rad"][0] = x
+    return Observation(
+        observation_id="task3-observation",
+        timestamp_ms=1,
+        data=payload,
+    )
+
+
+def test_task3_workspace_grace_clamps_within_margin_and_rejects_beyond() -> None:
+    safety = Task3WorkspaceGraceSafety(ActionSafetyValidator(SafetyPolicy()))
+    observation = _task3_observation(0.679)
+
+    clamped = safety.validate_and_limit(
+        _action_chunk([0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]),
+        observation,
+        arm_id="Arm_A",
+        control_token="A_ONLY",
+    )
+    assert clamped.accepted is True
+    assert clamped.chunk is not None
+    assert clamped.chunk.steps[0].values[0] == pytest.approx(0.020)
+    assert "dx" in clamped.limited_axes
+
+    rejected = safety.validate_and_limit(
+        _action_chunk([0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]),
+        _task3_observation(0.69),
+        arm_id="Arm_A",
+        control_token="A_ONLY",
+    )
+    assert rejected.accepted is False
+    assert rejected.code is FailureCode.ACTION_WORKSPACE_BREACH
+
+
+def test_task3_grace_does_not_change_p01_validator_path() -> None:
+    safety = ActionSafetyValidator(SafetyPolicy())
+    chunk = ActionChunk(
+        contract_version="1.0",
+        chunk_id="p01-test-chunk",
+        task_id="P01_TO_S11",
+        executor="pi05",
+        steps=(ActionStep.from_sequence([0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]),),
+    )
+    observation = _task3_observation(0.69)
+    decision = safety.validate_and_limit(
+        chunk,
+        observation,
+        arm_id="Arm_A",
+        control_token="A_ONLY",
+    )
+    assert decision.accepted is False
+    assert decision.code is FailureCode.ACTION_WORKSPACE_BREACH
 
 
 class _Transport:

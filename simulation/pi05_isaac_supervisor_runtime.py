@@ -10,19 +10,25 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import logging
 from threading import Event, Lock
 from typing import Any, TYPE_CHECKING
 
 from industrial_agent.contracts import ActionChunk, ActionStep, TaskSchema
 from industrial_agent.environment import ExecutionEnvironment, SafeStopReceipt
+from industrial_agent.errors import FailureCode
 from industrial_agent.executor import (
     ExecutionContext,
     Executor,
     ProcessTransport,
 )
 from industrial_agent.run_result import RunResult
+from industrial_agent.safety import (
+    AXIS_NAMES,
+    ActionSafetyValidator,
+    SafetyDecision,
+)
 from industrial_agent.supervisor_main import build_supervisor
 from industrial_agent.v2_supervisor import V2Supervisor
 
@@ -31,6 +37,241 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
+
+
+_TASK3_ID = "BIN01_TO_FINISHED01"
+_TASK3_WORKSPACE_GRACE_XY_M = 0.030
+_TASK3_WORKSPACE_GRACE_Z_LOWER_M = 0.010
+_TASK3_WORKSPACE_GRACE_Z_UPPER_M = 0.005
+_TASK3_WORKSPACE_CLAMP_INSET_M = 0.001
+_TASK3_WORKSPACE_MAX_CONSECUTIVE_CLAMPS = 8
+
+
+class Task3WorkspaceGraceSafety:
+    """Apply the formal task-three boundary grace before safety validation.
+
+    The frozen workspace remains the nominal execution envelope.  A task-three
+    action that predicts a small overshoot is projected back inside that
+    envelope, while an overshoot beyond the configured grace is still rejected.
+    The underlying validator keeps all action, token, frame, and finite-value
+    checks.  This class is intentionally kept in the role-E simulation bridge;
+    the framework safety policy is not changed for P01/W01 or other callers.
+    """
+
+    def __init__(self, delegate: ActionSafetyValidator) -> None:
+        self._delegate = delegate
+        self._consecutive_clamps = 0
+
+        policy = delegate.policy
+        expanded_a_min = tuple(
+            value - margin
+            for value, margin in zip(
+                policy.arm_a_workspace_min_m,
+                (
+                    _TASK3_WORKSPACE_GRACE_XY_M,
+                    _TASK3_WORKSPACE_GRACE_XY_M,
+                    _TASK3_WORKSPACE_GRACE_Z_LOWER_M,
+                ),
+            )
+        )
+        expanded_a_max = tuple(
+            value + margin
+            for value, margin in zip(
+                policy.arm_a_workspace_max_m,
+                (
+                    _TASK3_WORKSPACE_GRACE_XY_M,
+                    _TASK3_WORKSPACE_GRACE_XY_M,
+                    _TASK3_WORKSPACE_GRACE_Z_UPPER_M,
+                ),
+            )
+        )
+        expanded_b_min = tuple(
+            value - margin
+            for value, margin in zip(
+                policy.arm_b_workspace_min_m,
+                (
+                    _TASK3_WORKSPACE_GRACE_XY_M,
+                    _TASK3_WORKSPACE_GRACE_XY_M,
+                    _TASK3_WORKSPACE_GRACE_Z_LOWER_M,
+                ),
+            )
+        )
+        expanded_b_max = tuple(
+            value + margin
+            for value, margin in zip(
+                policy.arm_b_workspace_max_m,
+                (
+                    _TASK3_WORKSPACE_GRACE_XY_M,
+                    _TASK3_WORKSPACE_GRACE_XY_M,
+                    _TASK3_WORKSPACE_GRACE_Z_UPPER_M,
+                ),
+            )
+        )
+        expanded_policy = replace(
+            policy,
+            arm_a_workspace_min_m=expanded_a_min,
+            arm_a_workspace_max_m=expanded_a_max,
+            arm_b_workspace_min_m=expanded_b_min,
+            arm_b_workspace_max_m=expanded_b_max,
+        )
+        self._expanded_delegate = ActionSafetyValidator(expanded_policy)
+
+    @property
+    def policy(self) -> Any:
+        return self._delegate.policy
+
+    def _workspace(self, arm_id: str) -> tuple[tuple[float, ...], tuple[float, ...]]:
+        policy = self._delegate.policy
+        if arm_id == "Arm_A":
+            return policy.arm_a_workspace_min_m, policy.arm_a_workspace_max_m
+        if arm_id == "Arm_B":
+            return policy.arm_b_workspace_min_m, policy.arm_b_workspace_max_m
+        raise ValueError(f"unsupported arm_id for task-three workspace: {arm_id!r}")
+
+    def _grace(self, axis: int, *, lower: bool) -> float:
+        if axis < 2:
+            return _TASK3_WORKSPACE_GRACE_XY_M
+        return (
+            _TASK3_WORKSPACE_GRACE_Z_LOWER_M
+            if lower
+            else _TASK3_WORKSPACE_GRACE_Z_UPPER_M
+        )
+
+    def validate_and_limit(
+        self,
+        chunk: ActionChunk,
+        observation: Any,
+        *,
+        arm_id: str,
+        control_token: str,
+    ) -> SafetyDecision:
+        try:
+            chunk.validate_contract()
+        except Exception:
+            return self._expanded_delegate.validate_and_limit(
+                chunk,
+                observation,
+                arm_id=arm_id,
+                control_token=control_token,
+            )
+
+        workspace_min, workspace_max = self._workspace(arm_id)
+        robot = observation.data.get("robot", {})
+        arm_key = {"Arm_A": "arm_a", "Arm_B": "arm_b"}.get(arm_id)
+        arm_state = robot.get(arm_key) if isinstance(robot, Mapping) else None
+        pose = (
+            arm_state.get("tcp_pose_m_rad") if isinstance(arm_state, Mapping) else None
+        )
+        if (
+            not isinstance(pose, (list, tuple))
+            or len(pose) < 3
+            or any(not isinstance(value, (int, float)) for value in pose[:3])
+        ):
+            return self._expanded_delegate.validate_and_limit(
+                chunk,
+                observation,
+                arm_id=arm_id,
+                control_token=control_token,
+            )
+
+        projected = [float(value) for value in pose[:3]]
+        for axis, current in enumerate(projected):
+            expanded_min = workspace_min[axis] - self._grace(axis, lower=True)
+            expanded_max = workspace_max[axis] + self._grace(axis, lower=False)
+            if current < expanded_min or current > expanded_max:
+                return SafetyDecision(
+                    False,
+                    FailureCode.ACTION_WORKSPACE_BREACH,
+                    f"current {AXIS_NAMES[axis][1:]}={current:.6f}m exceeds "
+                    f"task-three grace for {arm_id} robot_base workspace",
+                )
+        adjusted_steps: list[ActionStep] = []
+        limited_axes: set[str] = set()
+        first_step_clamped = False
+        for step_index, step in enumerate(chunk.steps):
+            if step.has_non_finite():
+                return self._expanded_delegate.validate_and_limit(
+                    chunk,
+                    observation,
+                    arm_id=arm_id,
+                    control_token=control_token,
+                )
+            values = list(step.values)
+            for index, limit in enumerate(self._delegate.policy.axis_abs_limits):
+                bounded = min(limit, max(-limit, values[index]))
+                if bounded != values[index]:
+                    values[index] = bounded
+                    limited_axes.add(AXIS_NAMES[index])
+
+            step_clamped = False
+            for axis in range(3):
+                target = projected[axis] + values[axis]
+                if target < workspace_min[axis]:
+                    overshoot = workspace_min[axis] - target
+                    if overshoot > self._grace(axis, lower=True):
+                        return SafetyDecision(
+                            False,
+                            FailureCode.ACTION_WORKSPACE_BREACH,
+                            f"projected {AXIS_NAMES[axis][1:]}={target:.6f}m "
+                            f"exceeds task-three grace for {arm_id} robot_base workspace",
+                        )
+                    target = workspace_min[axis] + _TASK3_WORKSPACE_CLAMP_INSET_M
+                    values[axis] = target - projected[axis]
+                    limited_axes.add(AXIS_NAMES[axis])
+                    step_clamped = True
+                elif target > workspace_max[axis]:
+                    overshoot = target - workspace_max[axis]
+                    if overshoot > self._grace(axis, lower=False):
+                        return SafetyDecision(
+                            False,
+                            FailureCode.ACTION_WORKSPACE_BREACH,
+                            f"projected {AXIS_NAMES[axis][1:]}={target:.6f}m "
+                            f"exceeds task-three grace for {arm_id} robot_base workspace",
+                        )
+                    target = workspace_max[axis] - _TASK3_WORKSPACE_CLAMP_INSET_M
+                    values[axis] = target - projected[axis]
+                    limited_axes.add(AXIS_NAMES[axis])
+                    step_clamped = True
+                projected[axis] = target
+            if step_index == 0:
+                first_step_clamped = step_clamped
+            adjusted_steps.append(
+                ActionStep.from_sequence(values, duration_ms=step.duration_ms)
+            )
+
+        if first_step_clamped:
+            self._consecutive_clamps += 1
+        else:
+            self._consecutive_clamps = 0
+        if self._consecutive_clamps > _TASK3_WORKSPACE_MAX_CONSECUTIVE_CLAMPS:
+            return SafetyDecision(
+                False,
+                FailureCode.ACTION_WORKSPACE_BREACH,
+                "task-three workspace grace exceeded consecutive clamp budget",
+            )
+
+        adjusted = replace(chunk, steps=tuple(adjusted_steps))
+        decision = self._expanded_delegate.validate_and_limit(
+            adjusted,
+            observation,
+            arm_id=arm_id,
+            control_token=control_token,
+        )
+        if decision.accepted and limited_axes:
+            logger.warning(
+                "task-three workspace grace applied arm=%s chunk_id=%s "
+                "axes=%s consecutive=%d",
+                arm_id,
+                chunk.chunk_id,
+                ",".join(sorted(limited_axes)),
+                self._consecutive_clamps,
+            )
+            return replace(
+                decision,
+                reason="accepted with task-three workspace grace",
+                limited_axes=tuple(sorted(set(decision.limited_axes) | limited_axes)),
+            )
+        return decision
 
 
 @dataclass(frozen=True)
@@ -361,6 +602,15 @@ def run_supervisor_runtime(
             runtime_config,
             transport_factory=transport_factory,
         )
+        if task.task_id == _TASK3_ID:
+            supervisor.safety = Task3WorkspaceGraceSafety(supervisor.safety)
+            logger.info(
+                "task-three workspace grace enabled xy_mm=%.1f "
+                "z_lower_mm=%.1f z_upper_mm=%.1f",
+                _TASK3_WORKSPACE_GRACE_XY_M * 1000.0,
+                _TASK3_WORKSPACE_GRACE_Z_LOWER_M * 1000.0,
+                _TASK3_WORKSPACE_GRACE_Z_UPPER_M * 1000.0,
+            )
         supervisor.executor = _RecordingExecutor(
             supervisor.executor,
             recorder,
@@ -420,6 +670,7 @@ def run_v2_supervisor_runtime(
 __all__ = [
     "ActionExecutionRecord",
     "SupervisorRuntimeReport",
+    "Task3WorkspaceGraceSafety",
     "run_supervisor_runtime",
     "run_v2_supervisor_runtime",
     "with_decision_budget",
