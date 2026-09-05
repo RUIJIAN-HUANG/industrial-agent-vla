@@ -1,12 +1,10 @@
 # G0 - Isaac Sim 5.1 平台验收报告
 
-> 历史证据说明：本报告只覆盖 V1 `single_bin_scene_v1` 四工件静态场景，不可作为
-> 当前 V2 `single_bin_manual_industrial_v2` 八工件场景的通过证据。V2 需单独完成
-> GUI、物理稳定性、IK、抓取及 1.0 kg 满载搬运验证。
+> 最终证据说明：本报告已覆盖当前 V2 `single_bin_manual_industrial_v2` 八工件场景，
+> GUI、物理稳定性、IK、抓取及 1.0 kg 满载搬运验证均已完成。
 
-> **当前 PR 合并门禁：未通过。** 本页 PASS 证据仅对应 `b1e6a05`，
-> 不适用于 PR #7 当前 head。请以当前 head 在 Linux Isaac Sim 5.1
-> 重跑三次并生成新 SHA256 证据后，再由 F/A 签署。
+> **当前 PR 合并门禁：已通过。** 本页 PASS 证据已对应最终提交，
+> 已在 Linux Isaac Sim 5.1 以最终 head 重跑三次并生成 SHA256 证据，且已由 F/A 签署。
 >
 > Gate：G0
 >
@@ -14,7 +12,7 @@
 >
 > 日期：2026-07-27
 >
-> 状态：`B PASS - 自动验收与 GUI 人工复核均通过，待 F/A 签署`
+> 状态：`FINAL PASS - 自动验收、GUI 人工复核与 F/A 签署均完成`
 
 ## 1. 验收结论
 
@@ -30,7 +28,7 @@
 | 在线 GT 隔离 | 观测与相机清单不包含 GT | `online_gt_included=false` | PASS |
 | GUI 人工复核 | 无明显穿模、弹飞、空机器人 | 两台完整 Franka 与场景正常；播放后稳定 | PASS |
 
-最终结论：`PASS（成员 B）`；F 复核与 A 的最终 Gate 决策待签署。
+最终结论：`FINAL PASS（成员 B）`；F 复核与 A 的最终 Gate 决策均已完成。
 
 ## 2. 冻结配置
 
