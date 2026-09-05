@@ -7,11 +7,13 @@ scene, robot, and Supervisor operations.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from queue import Empty, Queue
 from threading import Event, Lock
+from typing import Any
 from industrial_agent.contracts import TaskSchema
 from industrial_agent.instructions import normalize_mvp_instruction
 from industrial_agent.v2_task_profile import require_formal_v2_task
@@ -80,12 +82,30 @@ class CompetitionCommand:
 
 
 @dataclass(frozen=True)
+class UiYoloDetection:
+    """Validated YOLO fields needed by the visible competition window."""
+
+    detection_id: str
+    class_name: str
+    confidence: float
+    bbox_xyxy: tuple[float, float, float, float]
+    camera_id: str
+    image_width: int
+    image_height: int
+
+
+@dataclass(frozen=True)
 class CompetitionSnapshot:
     state: UiRunState
     selected_task_id: str
     instruction: str
     pi05_ready: bool
     yolo_ready: bool
+    yolo_detections: tuple[UiYoloDetection, ...]
+    yolo_observation_id: str
+    yolo_camera_id: str
+    yolo_image_width: int
+    yolo_image_height: int
     verifier_configured: bool
     step: int
     max_steps: int
@@ -143,6 +163,11 @@ class CompetitionController:
         self._instruction = default.display_instruction
         self._pi05_ready = False
         self._yolo_ready = False
+        self._yolo_detections: tuple[UiYoloDetection, ...] = ()
+        self._yolo_observation_id = ""
+        self._yolo_camera_id = ""
+        self._yolo_image_width = 0
+        self._yolo_image_height = 0
         self._verifier_configured = bool(verifier_configured)
         self._step = 0
         self._max_steps = int(max_steps)
@@ -184,6 +209,61 @@ class CompetitionController:
                 else:
                     self._state = UiRunState.WAITING_SERVICES
                     self._message = "等待 Π0.5 和 YOLO 服务就绪"
+
+    def update_yolo_detections(self, view: Mapping[str, Any] | None) -> None:
+        """Publish one validated YOLO packet to the UI without changing task state."""
+
+        if view is None:
+            detections: tuple[UiYoloDetection, ...] = ()
+            observation_id = ""
+            camera_id = ""
+            image_width = 0
+            image_height = 0
+        else:
+            raw_detections = view.get("detections", ())
+            if not isinstance(raw_detections, Sequence) or isinstance(
+                raw_detections, (str, bytes, bytearray)
+            ):
+                raise ValueError("YOLO UI detections must be a sequence")
+            parsed: list[UiYoloDetection] = []
+            for raw in raw_detections:
+                if not isinstance(raw, Mapping):
+                    raise ValueError("YOLO UI detection must be an object")
+                bbox = raw.get("bbox_xyxy")
+                if (
+                    not isinstance(bbox, Sequence)
+                    or isinstance(bbox, (str, bytes, bytearray))
+                    or len(bbox) != 4
+                ):
+                    raise ValueError("YOLO UI detection bbox must contain four values")
+                parsed.append(
+                    UiYoloDetection(
+                        detection_id=str(raw["detection_id"]),
+                        class_name=str(raw["class_name"]),
+                        confidence=float(raw["confidence"]),
+                        bbox_xyxy=tuple(float(value) for value in bbox),
+                        camera_id=str(raw["camera_id"]),
+                        image_width=int(raw["image_width"]),
+                        image_height=int(raw["image_height"]),
+                    )
+                )
+            detections = tuple(parsed)
+            observation_id = str(view.get("observation_id", ""))
+            camera_id = str(view.get("camera_id", ""))
+            image_width = int(view.get("image_width", 0))
+            image_height = int(view.get("image_height", 0))
+
+        with self._lock:
+            self._yolo_detections = detections
+            self._yolo_observation_id = observation_id
+            self._yolo_camera_id = camera_id
+            self._yolo_image_width = image_width
+            self._yolo_image_height = image_height
+
+    def clear_yolo_detections(self) -> None:
+        """Clear stale detection data when a new task episode starts."""
+
+        self.update_yolo_detections(None)
 
     def request_start(self, instruction: str) -> bool:
         try:
@@ -298,6 +378,11 @@ class CompetitionController:
                 instruction=self._instruction,
                 pi05_ready=self._pi05_ready,
                 yolo_ready=self._yolo_ready,
+                yolo_detections=self._yolo_detections,
+                yolo_observation_id=self._yolo_observation_id,
+                yolo_camera_id=self._yolo_camera_id,
+                yolo_image_width=self._yolo_image_width,
+                yolo_image_height=self._yolo_image_height,
                 verifier_configured=self._verifier_configured,
                 step=self._step,
                 max_steps=self._max_steps,
@@ -315,6 +400,7 @@ __all__ = [
     "CompetitionSnapshot",
     "CompetitionTaskOption",
     "UiRunState",
+    "UiYoloDetection",
     "load_competition_task",
     "task_option_for_instruction",
 ]

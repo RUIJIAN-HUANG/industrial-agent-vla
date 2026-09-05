@@ -322,6 +322,9 @@ def _run_competition(args: argparse.Namespace) -> int:
                     timeout_ms=args.yolo_deadline_ms,
                 )
 
+            controller_state.clear_yolo_detections()
+            window.update_yolo_frame(None)
+
             observation_counter = 0
 
             def current_active_arm() -> str:
@@ -395,6 +398,18 @@ def _run_competition(args: argparse.Namespace) -> int:
                             robot=state["robot"],
                         )
                     )
+                    latest_detection_view = getattr(
+                        task_state_provider, "latest_detection_view", None
+                    )
+                    if callable(latest_detection_view):
+                        detection_view = latest_detection_view()
+                        controller_state.update_yolo_detections(detection_view)
+                        if detection_view is not None:
+                            window.update_yolo_frame(
+                                rgb_pipeline.latest_frame(
+                                    str(detection_view["camera_id"])
+                                )
+                            )
                     state["robot"]["active_arm"] = current_active_arm()
                 controller_state.update_progress(
                     max(0, observation_counter - 1),
