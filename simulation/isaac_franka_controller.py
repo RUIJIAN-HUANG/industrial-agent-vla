@@ -322,7 +322,8 @@ def _post_grasp_tracking_grace_eligible(
     return bool(
         grasp_verified
         and not grace_used
-        and _MIN_TRANSLATION_COMMAND_M <= float(np.linalg.norm(requested))
+        and _MIN_TRANSLATION_COMMAND_M
+        <= float(np.linalg.norm(requested))
         <= _POST_GRASP_TRACKING_MAX_COMMAND_M
         and float(np.linalg.norm(rotation)) < _ROTATION_DOMINANT_MIN_ROTATION_RAD
     )
@@ -340,7 +341,9 @@ def _post_grasp_tracking_within_bounds(
     settle_delta = np.asarray(settle_delta_world_m, dtype=float)
     if any(value.shape != (3,) for value in (requested, observed, settle_delta)):
         return False
-    if not all(np.all(np.isfinite(value)) for value in (requested, observed, settle_delta)):
+    if not all(
+        np.all(np.isfinite(value)) for value in (requested, observed, settle_delta)
+    ):
         return False
     requested_norm = float(np.linalg.norm(requested))
     if requested_norm <= 0.0:
@@ -348,8 +351,7 @@ def _post_grasp_tracking_within_bounds(
     forward_progress = float(np.dot(observed, requested / requested_norm))
     return bool(
         forward_progress >= -_POST_GRASP_TRACKING_REVERSE_TOLERANCE_M
-        and float(np.linalg.norm(observed))
-        <= _POST_GRASP_TRACKING_JITTER_TOLERANCE_M
+        and float(np.linalg.norm(observed)) <= _POST_GRASP_TRACKING_JITTER_TOLERANCE_M
         and float(np.linalg.norm(settle_delta))
         <= _POST_GRASP_TRACKING_JITTER_TOLERANCE_M
     )
