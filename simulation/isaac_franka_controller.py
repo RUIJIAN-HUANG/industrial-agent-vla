@@ -33,6 +33,14 @@ _MIN_TRANSLATION_PROGRESS_RATIO = 0.10
 _MIN_TRANSLATION_DIRECTION_COSINE = 0.25
 _ROTATION_DOMINANT_MIN_ROTATION_RAD = 0.05
 _ROTATION_DOMINANT_MAX_TRANSLATION_M = 0.001
+# A grasped object can make a small placement correction look like a brief
+# backward or sideways TCP motion while the fingers settle against the object.
+# Keep this as a one-shot, post-grasp grace; the normal tracking guard remains
+# unchanged for all other actions.
+_POST_GRASP_TRACKING_MAX_COMMAND_M = 0.005
+_POST_GRASP_TRACKING_REVERSE_TOLERANCE_M = 0.001
+_POST_GRASP_TRACKING_JITTER_TOLERANCE_M = 0.003
+_POST_GRASP_TRACKING_SETTLE_CONTROL_PERIODS = 2
 
 
 class CartesianTrackingRejected(RuntimeError):
@@ -290,6 +298,63 @@ def _translation_tracking_diagnostic(
     }
 
 
+def _post_grasp_tracking_grace_eligible(
+    requested_world_m: np.ndarray,
+    requested_rotation_rad: np.ndarray,
+    *,
+    grasp_verified: bool,
+    grace_used: bool,
+) -> bool:
+    """Return whether a failed tracking check may use one contact grace.
+
+    This gate is deliberately narrow: it applies only after a confirmed close,
+    to a small mostly-translational correction, and only once per grasp.
+    Workspace and action-axis limits are still enforced before this function is
+    reached.
+    """
+
+    requested = np.asarray(requested_world_m, dtype=float)
+    rotation = np.asarray(requested_rotation_rad, dtype=float)
+    if requested.shape != (3,) or rotation.shape != (3,):
+        return False
+    if not np.all(np.isfinite(requested)) or not np.all(np.isfinite(rotation)):
+        return False
+    return bool(
+        grasp_verified
+        and not grace_used
+        and _MIN_TRANSLATION_COMMAND_M <= float(np.linalg.norm(requested))
+        <= _POST_GRASP_TRACKING_MAX_COMMAND_M
+        and float(np.linalg.norm(rotation)) < _ROTATION_DOMINANT_MIN_ROTATION_RAD
+    )
+
+
+def _post_grasp_tracking_within_bounds(
+    requested_world_m: np.ndarray,
+    observed_world_m: np.ndarray,
+    settle_delta_world_m: np.ndarray,
+) -> bool:
+    """Bound the one-shot contact grace by reverse motion and TCP jitter."""
+
+    requested = np.asarray(requested_world_m, dtype=float)
+    observed = np.asarray(observed_world_m, dtype=float)
+    settle_delta = np.asarray(settle_delta_world_m, dtype=float)
+    if any(value.shape != (3,) for value in (requested, observed, settle_delta)):
+        return False
+    if not all(np.all(np.isfinite(value)) for value in (requested, observed, settle_delta)):
+        return False
+    requested_norm = float(np.linalg.norm(requested))
+    if requested_norm <= 0.0:
+        return False
+    forward_progress = float(np.dot(observed, requested / requested_norm))
+    return bool(
+        forward_progress >= -_POST_GRASP_TRACKING_REVERSE_TOLERANCE_M
+        and float(np.linalg.norm(observed))
+        <= _POST_GRASP_TRACKING_JITTER_TOLERANCE_M
+        and float(np.linalg.norm(settle_delta))
+        <= _POST_GRASP_TRACKING_JITTER_TOLERANCE_M
+    )
+
+
 def _control_world_position_for_tcp(
     tcp_position_world_m: np.ndarray,
     tcp_orientation_world_wxyz: np.ndarray,
@@ -442,6 +507,9 @@ class IsaacSimFrankaController:
         self._tcp_offsets_local_m: dict[str, np.ndarray] = {}
         self._tcp_definitions: dict[str, dict[str, Any]] = {}
         self._last_motion_diagnostics: dict[str, dict[str, Any]] = {}
+        self._post_grasp_tracking_grace_used_by_arm = {
+            arm_id: False for arm_id in _ARMS
+        }
 
         if getattr(self, "_ik_backend", "lula") == "pink":
             # Loading Isaac Sim's Lula extension before Pinocchio corrupts the
@@ -914,6 +982,12 @@ class IsaacSimFrankaController:
         if not isinstance(verified_by_arm, dict):
             verified_by_arm = {candidate: False for candidate in _ARMS}
             self._gripper_close_verified_by_arm = verified_by_arm
+        grace_used_by_arm = getattr(
+            self, "_post_grasp_tracking_grace_used_by_arm", None
+        )
+        if not isinstance(grace_used_by_arm, dict):
+            grace_used_by_arm = {candidate: False for candidate in _ARMS}
+            self._post_grasp_tracking_grace_used_by_arm = grace_used_by_arm
         previous_open = command_by_arm.get(arm_id)
         value = float(command)
         if (
@@ -926,8 +1000,10 @@ class IsaacSimFrankaController:
         command_by_arm[arm_id] = resolved_open
         if resolved_open:
             verified_by_arm[arm_id] = False
+            grace_used_by_arm[arm_id] = False
         elif previous_open is None or previous_open:
             verified_by_arm[arm_id] = False
+            grace_used_by_arm[arm_id] = False
         return resolved_open
 
     def _advance_one_control_period(self) -> None:
@@ -1275,9 +1351,63 @@ class IsaacSimFrankaController:
                     np.asarray(final_position, dtype=float) - current_position,
                     rotation,
                 )
-                self._last_motion_diagnostics[arm_id] = motion_diagnostic
                 if not motion_diagnostic["pass"]:
-                    raise CartesianTrackingRejected(arm_id, motion_diagnostic)
+                    grace_used_by_arm = getattr(
+                        self, "_post_grasp_tracking_grace_used_by_arm", {}
+                    )
+                    grasp_verified = bool(
+                        getattr(self, "_gripper_close_verified_by_arm", {}).get(
+                            arm_id, False
+                        )
+                    )
+                    grace_eligible = _post_grasp_tracking_grace_eligible(
+                        world_translation,
+                        rotation,
+                        grasp_verified=grasp_verified,
+                        grace_used=bool(grace_used_by_arm.get(arm_id, False)),
+                    )
+                    if grace_eligible:
+                        initial_observed = (
+                            np.asarray(final_position, dtype=float) - current_position
+                        )
+                        for _ in range(_POST_GRASP_TRACKING_SETTLE_CONTROL_PERIODS):
+                            self._advance_one_control_period()
+                        settled_position, _ = self.end_effector_pose(arm_id)
+                        settled_observed = (
+                            np.asarray(settled_position, dtype=float) - current_position
+                        )
+                        settled_diagnostic = _translation_tracking_diagnostic(
+                            world_translation,
+                            settled_observed,
+                            rotation,
+                        )
+                        settled_diagnostic["post_grasp_tracking_grace"] = {
+                            "eligible": True,
+                            "applied": False,
+                            "settle_control_periods": (
+                                _POST_GRASP_TRACKING_SETTLE_CONTROL_PERIODS
+                            ),
+                            "initial_diagnostic": motion_diagnostic,
+                        }
+                        if settled_diagnostic["pass"]:
+                            motion_diagnostic = settled_diagnostic
+                        elif _post_grasp_tracking_within_bounds(
+                            world_translation,
+                            initial_observed,
+                            settled_observed - initial_observed,
+                        ):
+                            grace_used_by_arm[arm_id] = True
+                            settled_diagnostic["pass"] = True
+                            settled_diagnostic["post_grasp_tracking_grace"][
+                                "applied"
+                            ] = True
+                            motion_diagnostic = settled_diagnostic
+                        else:
+                            motion_diagnostic = settled_diagnostic
+                    if not motion_diagnostic["pass"]:
+                        self._last_motion_diagnostics[arm_id] = motion_diagnostic
+                        raise CartesianTrackingRejected(arm_id, motion_diagnostic)
+                self._last_motion_diagnostics[arm_id] = motion_diagnostic
         finally:
             self._action_idle.set()
             self._action_lock.release()

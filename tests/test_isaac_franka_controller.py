@@ -19,6 +19,8 @@ from simulation.isaac_franka_controller import (
     _control_world_position_for_tcp,
     _gripper_opening_m,
     _midpoint_tcp_offset_local,
+    _post_grasp_tracking_grace_eligible,
+    _post_grasp_tracking_within_bounds,
     _position_targets_match,
     _quaternion_to_rotvec,
     _rotate_vector,
@@ -106,6 +108,57 @@ class IsaacFrankaControllerMathTests(unittest.TestCase):
         )
         self.assertTrue(diagnostic["checked"])
         self.assertFalse(diagnostic["pass"])
+
+    def test_post_grasp_tracking_grace_allows_bounded_contact_rebound(self):
+        self.assertTrue(
+            _post_grasp_tracking_grace_eligible(
+                np.asarray([0.004, 0.0, 0.0]),
+                np.asarray([0.0, 0.0, 0.0]),
+                grasp_verified=True,
+                grace_used=False,
+            )
+        )
+        self.assertTrue(
+            _post_grasp_tracking_within_bounds(
+                np.asarray([0.004, 0.0, 0.0]),
+                np.asarray([-0.0009, 0.0002, 0.0]),
+                np.asarray([0.001, 0.001, 0.0]),
+            )
+        )
+
+    def test_post_grasp_tracking_grace_rejects_excessive_rebound_or_jitter(self):
+        self.assertFalse(
+            _post_grasp_tracking_within_bounds(
+                np.asarray([0.004, 0.0, 0.0]),
+                np.asarray([-0.0011, 0.0, 0.0]),
+                np.zeros(3),
+            )
+        )
+        self.assertFalse(
+            _post_grasp_tracking_within_bounds(
+                np.asarray([0.004, 0.0, 0.0]),
+                np.zeros(3),
+                np.asarray([0.0031, 0.0, 0.0]),
+            )
+        )
+
+    def test_post_grasp_tracking_grace_requires_fresh_grasp(self):
+        self.assertFalse(
+            _post_grasp_tracking_grace_eligible(
+                np.asarray([0.004, 0.0, 0.0]),
+                np.zeros(3),
+                grasp_verified=False,
+                grace_used=False,
+            )
+        )
+        self.assertFalse(
+            _post_grasp_tracking_grace_eligible(
+                np.asarray([0.004, 0.0, 0.0]),
+                np.zeros(3),
+                grasp_verified=True,
+                grace_used=True,
+            )
+        )
 
     def test_identity_rotation_matrix_becomes_identity_quaternion(self):
         quaternion = _rotation_matrix_to_quaternion(np.eye(3))
