@@ -224,6 +224,7 @@ __marimo__/
 # Project-local secrets and machine-specific overrides
 .env.*
 !.env.example
+!deploy/.env.production.example
 *.pem
 *.key
 credentials*.json

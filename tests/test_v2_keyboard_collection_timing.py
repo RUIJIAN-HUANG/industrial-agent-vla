@@ -16,6 +16,8 @@ from simulation.canonical_recorder_bridge import CanonicalRecorderBridge
 from simulation.run_v2_keyboard_collection import (
     GRIPPER_SETTLE_ACTION_COUNT,
     _collect_p01_terminal_success,
+    _completion_precondition_failures,
+    _handoff_precondition_failures,
     _interactive_action_repeat_count,
     _record_and_execute_formal_action,
     _replay_task_actions_from_rows,
@@ -27,6 +29,34 @@ def test_gripper_toggle_gets_five_recorded_settle_actions() -> None:
     assert GRIPPER_SETTLE_ACTION_COUNT == 5
     assert _interactive_action_repeat_count(SimpleNamespace(key="g")) == 5
     assert _interactive_action_repeat_count(SimpleNamespace(key="q")) == 1
+
+
+def test_handoff_precheck_reports_only_unmet_conditions() -> None:
+    assert _handoff_precondition_failures(
+        {"pass": True},
+        {"gripper_open": True, "retreated": False},
+    ) == ("RETREAT ARM_A OUTSIDE GREEN ZONE",)
+    assert (
+        _handoff_precondition_failures(
+            {"pass": True},
+            {"gripper_open": True, "retreated": True},
+        )
+        == ()
+    )
+
+
+def test_completion_precheck_reports_only_unmet_conditions() -> None:
+    assert _completion_precondition_failures(
+        {"pass": True},
+        {"gripper_open": True, "retreated": False},
+    ) == ("RETREAT ARM_B OUTSIDE FINISHED_01 ZONE",)
+    assert (
+        _completion_precondition_failures(
+            {"pass": True},
+            {"gripper_open": True, "retreated": True},
+        )
+        == ()
+    )
 
 
 class _RgbPipeline:
@@ -119,7 +149,7 @@ def test_formal_keyboard_actions_and_terminal_holds_remain_exactly_12_ticks_and_
     metadata = CanonicalV2EpisodeMetadata(
         episode_id=episode_id,
         task_id="P01_TO_S11",
-        instruction="请将轴件 P01 放置到料箱的 S11 格子中。",
+        instruction="把P01放到S11中",
         scene_seed=31,
         git_sha="a" * 40,
         scene_config_sha256=f"sha256:{'b' * 64}",

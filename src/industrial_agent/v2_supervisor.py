@@ -1,18 +1,19 @@
-"""Formal V2 π0.5/Arm_A continuous closed-loop Supervisor."""
+"""Formal V2 π0.5 closed-loop Supervisor for either configured arm."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from threading import Lock
 from typing import Any
 from uuid import uuid4
 
-from .contracts import Subtask, SubtaskStatus, TaskPlan, TaskSchema
+from .contracts import Postcondition, Subtask, SubtaskStatus, TaskPlan, TaskSchema
 from .environment import ExecutionEnvironment, execution_guard_digest
 from .errors import AgentError, FailureCode
 from .executor import ExecutionContext, Executor
 from .fsm import AgentFSM, AgentState
-from .orchestrator import RunResult
+from .run_result import RunResult
 from .safety import ActionSafetyValidator, SafetyPolicy, safety_state_failure
 from .v2_observation import V2ObservationGateway
 from .v2_task_profile import (
@@ -24,6 +25,7 @@ from .v2_task_profile import (
 
 
 V2_CONTROL_TOKEN = "A_ONLY"
+BIN_HANDOFF_TASK_ID = "BIN01_TO_FINISHED01"
 
 
 def _tuple3(value: Any, label: str) -> tuple[float, float, float]:
@@ -60,7 +62,7 @@ def v2_safety_policy_from_config(config: Mapping[str, Any]) -> SafetyPolicy:
 
 
 class V2TaskPlanner:
-    """Map one frozen V2 user choice to one π0.5 subtask without NLP routing."""
+    """Map one frozen V2 user choice to an ordered π0.5 execution plan."""
 
     def plan(self, task: TaskSchema, run_id: str) -> TaskPlan:
         task.validate()
@@ -69,7 +71,8 @@ class V2TaskPlanner:
             raise ValueError("task instruction does not match the frozen V2 catalog")
         if task.target_object != spec.target_object:
             raise ValueError("task target_object does not match the frozen V2 catalog")
-        if task.target_location != spec.target_slot:
+        expected_target = spec.target_slot or spec.target_zone
+        if task.target_location != expected_target:
             raise ValueError(
                 "task target_location does not match the frozen V2 catalog"
             )
@@ -77,30 +80,69 @@ class V2TaskPlanner:
             raise ValueError(f"task metadata.profile_id must be {V2_PROFILE_ID!r}")
         if task.constraints.get("scene_id") != V2_SCENE_ID:
             raise ValueError(f"task constraints.scene_id must be {V2_SCENE_ID!r}")
-        subtask = Subtask(
-            subtask_id=spec.task_id,
-            sequence=1,
-            instruction=spec.instruction,
-            task_type=task.task_type,
-            preconditions=(),
-            postconditions=task.postconditions,
-            assigned_executor="pi05",
-            repeat_until_postcondition=True,
-            max_iterations=100,
-            status=SubtaskStatus.READY,
-        )
+        if spec.task_id == BIN_HANDOFF_TASK_ID:
+            handoff_subtask = Subtask(
+                subtask_id="BIN01_TO_HANDOFF_CENTER",
+                sequence=1,
+                instruction="把Bin_01搬到HANDOFF_CENTER",
+                task_type=task.task_type,
+                preconditions=(),
+                postconditions=(
+                    Postcondition(
+                        kind="object_in_zone",
+                        object_id="Bin_01",
+                        zone_id="HANDOFF_CENTER",
+                    ),
+                ),
+                assigned_executor="pi05",
+                arm_id="Arm_A",
+                repeat_until_postcondition=True,
+                max_iterations=100,
+                status=SubtaskStatus.READY,
+            )
+            finish_subtask = Subtask(
+                subtask_id="BIN01_HANDOFF_TO_FINISHED01",
+                sequence=2,
+                instruction=spec.instruction,
+                task_type=task.task_type,
+                preconditions=handoff_subtask.postconditions,
+                postconditions=task.postconditions,
+                depends_on=(handoff_subtask.subtask_id,),
+                assigned_executor="pi05",
+                arm_id="Arm_B",
+                repeat_until_postcondition=True,
+                max_iterations=100,
+                status=SubtaskStatus.PENDING,
+            )
+            subtasks = [handoff_subtask, finish_subtask]
+        else:
+            subtasks = [
+                Subtask(
+                    subtask_id=spec.task_id,
+                    sequence=1,
+                    instruction=spec.instruction,
+                    task_type=task.task_type,
+                    preconditions=(),
+                    postconditions=task.postconditions,
+                    assigned_executor="pi05",
+                    arm_id=spec.active_arm,
+                    repeat_until_postcondition=True,
+                    max_iterations=100,
+                    status=SubtaskStatus.READY,
+                )
+            ]
         plan = TaskPlan(
             plan_id=f"v2-plan-{uuid4().hex}",
             episode_id=run_id,
             task_id=task.task_id,
-            subtasks=[subtask],
+            subtasks=subtasks,
         )
         plan.validate()
         return plan
 
 
 class V2Supervisor:
-    """Single-policy V2 Supervisor with bounded decisions and atomic execution."""
+    """Single-policy V2 Supervisor with bounded, ordered execution."""
 
     def __init__(
         self,
@@ -186,7 +228,7 @@ class V2Supervisor:
         gateway = V2ObservationGateway()
         plan: TaskPlan | None = None
         executor_history: list[str] = []
-        token_history = ["NONE"]
+        token_history: list[str] = []
         motion_started = False
         try:
             fsm.transition(AgentState.VALIDATING_TASK, "validate frozen V2 task")
@@ -210,7 +252,10 @@ class V2Supervisor:
                     executor_history,
                     token_history,
                 )
-            fsm.transition(AgentState.PLANNING, "V2 task mapped to pi05/Arm_A")
+            fsm.transition(
+                AgentState.PLANNING,
+                f"V2 task mapped to {len(plan.subtasks)} ordered pi05 subtask(s)",
+            )
             if not self.executor.health():
                 fsm.transition(AgentState.FAILED, "pi05 health check failed")
                 return self._result(
@@ -227,7 +272,9 @@ class V2Supervisor:
             fsm.transition(AgentState.OBSERVING, "read initial V2 observation")
             try:
                 observation = gateway.ingest_online(environment.observe())
-                for step_id in range(self.max_decisions):
+                action_count = 0
+                handoff_verification_reads = 0
+                while action_count < self.max_decisions:
                     safety_failure = safety_state_failure(observation)
                     if safety_failure:
                         code, reason = safety_failure
@@ -274,8 +321,9 @@ class V2Supervisor:
                         fsm.transition(
                             AgentState.SUCCEEDED, "V2 terminal evidence accepted"
                         )
-                        plan.subtasks[0].status = SubtaskStatus.VERIFIED
-                        token_history.append("NONE")
+                        for subtask in plan.subtasks:
+                            subtask.status = SubtaskStatus.VERIFIED
+                        self._append_control_token(token_history, "NONE")
                         return self._result(
                             run_id,
                             task.task_id,
@@ -288,26 +336,80 @@ class V2Supervisor:
                             token_history,
                         )
 
-                    fsm.transition(AgentState.ASSIGNING_ROLE, "grant A_ONLY to pi05")
-                    token_history.append(V2_CONTROL_TOKEN)
+                    control_token = self._observation_control_token(task, observation)
+                    self._append_control_token(token_history, control_token)
+                    if control_token == "HANDOFF_VERIFY":
+                        handoff_verification_reads += 1
+                        if handoff_verification_reads > self.verification_frames * 2:
+                            return self._stop_result(
+                                environment,
+                                run_id,
+                                task.task_id,
+                                fsm,
+                                FailureCode.VERIFICATION_UNCERTAIN,
+                                "handoff verification did not reach B_ONLY within the fresh-frame budget",
+                                plan,
+                                executor_history,
+                                token_history,
+                            )
+                        observation = gateway.ingest_online(environment.observe())
+                        continue
+
+                    active_subtask = self._active_subtask(task, plan, observation)
+                    active_subtask.status = SubtaskStatus.RUNNING
+                    arm_id = active_subtask.arm_id or "Arm_A"
+                    expected_token = "A_ONLY" if arm_id == "Arm_A" else "B_ONLY"
+                    if control_token != expected_token:
+                        raise ValueError(
+                            f"online control token {control_token!r} does not match {arm_id}"
+                        )
+                    fsm.transition(
+                        AgentState.ASSIGNING_ROLE,
+                        f"grant {control_token} to pi05",
+                    )
                     fsm.transition(
                         AgentState.EXECUTING, "request and execute one 7D action"
                     )
                     context = ExecutionContext(
                         run_id=run_id,
                         strategy_attempt=0,
-                        replan_index=step_id,
-                        step_id=step_id,
+                        replan_index=action_count,
+                        step_id=action_count,
                         timeout_ms=self.executor_timeout_ms,
-                        original_instruction=task.instruction,
+                        original_instruction=active_subtask.instruction,
+                        arm_id=arm_id,
+                        # PI05 must always receive the frozen formal task,
+                        # while active_subtask remains Supervisor-only state.
+                        model_task_id=task.task_id,
+                        model_subtask_id=task.task_id,
+                        model_instruction=task.instruction,
                     )
-                    chunk = self.executor.plan(task, observation, context)
+                    target_location = next(
+                        (
+                            condition.zone_id
+                            for condition in active_subtask.postconditions
+                            if condition.zone_id is not None
+                        ),
+                        task.target_location,
+                    )
+                    execution_task = replace(
+                        task,
+                        instruction=active_subtask.instruction,
+                        target_location=target_location,
+                        postconditions=active_subtask.postconditions,
+                        metadata={
+                            **dict(task.metadata),
+                            "subtask_id": active_subtask.subtask_id,
+                            "arm_id": arm_id,
+                        },
+                    )
+                    chunk = self.executor.plan(execution_task, observation, context)
                     executor_history.append("pi05")
                     decision = self.safety.validate_and_limit(
                         chunk,
                         observation,
-                        arm_id="Arm_A",
-                        control_token=V2_CONTROL_TOKEN,
+                        arm_id=arm_id,
+                        control_token=control_token,
                     )
                     if not decision.accepted or decision.chunk is None:
                         return self._stop_result(
@@ -325,15 +427,15 @@ class V2Supervisor:
                     motion_started = True
                     next_raw = environment.step(
                         action,
-                        arm_id="Arm_A",
-                        control_token=V2_CONTROL_TOKEN,
-                        command_id=f"{run_id}-command-{step_id:06d}",
+                        arm_id=arm_id,
+                        control_token=control_token,
+                        command_id=f"{run_id}-command-{action_count:06d}",
                         expected_observation_id=observation.observation_id,
                         expected_state_digest=execution_guard_digest(observation.data),
                     )
+                    action_count += 1
                     fsm.transition(AgentState.VERIFYING, "ingest next sensor frame")
                     observation = gateway.ingest_online(next_raw)
-                    token_history.append("NONE")
                     terminal, terminal_failure = self._terminal_state(observation, task)
                     if terminal_failure:
                         return self._stop_result(
@@ -366,7 +468,9 @@ class V2Supervisor:
                         fsm.transition(
                             AgentState.SUCCEEDED, "V2 terminal evidence accepted"
                         )
-                        plan.subtasks[0].status = SubtaskStatus.VERIFIED
+                        for subtask in plan.subtasks:
+                            subtask.status = SubtaskStatus.VERIFIED
+                        self._append_control_token(token_history, "NONE")
                         return self._result(
                             run_id,
                             task.task_id,
@@ -378,7 +482,7 @@ class V2Supervisor:
                             executor_history,
                             token_history,
                         )
-                    if step_id + 1 < self.max_decisions:
+                    if action_count < self.max_decisions:
                         fsm.transition(AgentState.REPLANNING, "terminal not reached")
                         fsm.transition(AgentState.OBSERVING, "continue V2 closed loop")
 
@@ -438,6 +542,48 @@ class V2Supervisor:
                 )
         finally:
             self._run_lock.release()
+
+    @staticmethod
+    def _active_subtask(task: TaskSchema, plan: TaskPlan, observation: Any) -> Subtask:
+        """Select the current relay leg from the authoritative active-arm lease."""
+
+        if task.task_id != BIN_HANDOFF_TASK_ID:
+            return plan.subtasks[0]
+        robot = observation.data.get("robot")
+        active_arm = robot.get("active_arm") if isinstance(robot, Mapping) else None
+        if active_arm == "Arm_A":
+            return plan.subtasks[0]
+        if active_arm == "Arm_B":
+            plan.subtasks[0].status = SubtaskStatus.VERIFIED
+            return plan.subtasks[1]
+        raise ValueError(
+            "BIN01_TO_FINISHED01 requires an active Arm_A or Arm_B lease "
+            "before requesting an action"
+        )
+
+    @staticmethod
+    def _observation_control_token(task: TaskSchema, observation: Any) -> str:
+        robot = observation.data.get("robot")
+        active_arm = robot.get("active_arm") if isinstance(robot, Mapping) else None
+        if active_arm == "Arm_A":
+            return "A_ONLY"
+        if active_arm == "Arm_B":
+            return "B_ONLY"
+        if active_arm == "NONE" and task.task_id == BIN_HANDOFF_TASK_ID:
+            raw_task = observation.data.get("task")
+            if isinstance(raw_task, Mapping) and raw_task.get("terminal") is True:
+                return "NONE"
+            return "HANDOFF_VERIFY"
+        if active_arm == "NONE":
+            return "NONE"
+        raise ValueError("online observation has no valid active-arm lease")
+
+    @staticmethod
+    def _append_control_token(history: list[str], token: str) -> None:
+        if token not in {"A_ONLY", "HANDOFF_VERIFY", "B_ONLY", "NONE"}:
+            raise ValueError(f"invalid V2 control token: {token!r}")
+        if not history or history[-1] != token:
+            history.append(token)
 
     def _terminal_state(
         self, observation: Any, task: TaskSchema
@@ -509,7 +655,7 @@ class V2Supervisor:
             confirmed = False
         target = AgentState.SAFE_STOPPED if confirmed else AgentState.SAFE_STOP_FAILED
         fsm.force_safety_terminal(target, message)
-        token_history.append("NONE")
+        self._append_control_token(token_history, "NONE")
         return self._result(
             run_id,
             task_id,

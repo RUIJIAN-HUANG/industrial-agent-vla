@@ -366,7 +366,7 @@ def test_existing_output_is_never_overwritten(tmp_path: Path) -> None:
 def test_provenance_tampering_is_detected(tmp_path: Path) -> None:
     result, _ = _convert_one(tmp_path)
     payload = json.loads(result.manifest_path.read_text(encoding="utf-8"))
-    payload["episodes"][0]["robot_role"] = "arm_b_openvla"
+    payload["episodes"][0]["robot_role"] = "arm_b_pi05"
     result.manifest_path.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(ValueError, match="SHA-256 mismatch"):
         load_provenance(result.manifest_path)

@@ -3,16 +3,39 @@ import json
 
 import pytest
 
-from simulation.run_v2_keyboard_collection import _collect_p01_terminal_success
+from simulation.run_v2_keyboard_collection import (
+    _collect_bin01_terminal_success,
+    _collect_p01_terminal_success,
+)
 from simulation.offline_gt import slot_interior_bounds
 from simulation.v2_terminal_success import (
     P01_MAX_VERTICAL_ERROR_RAD,
     evaluate_fresh_gt_votes,
+    evaluate_bin01_terminal_success,
     evaluate_p01_terminal_success,
     evaluate_w01_terminal_success,
     evaluate_terminal_hold_drift,
     vertical_error_rad,
 )
+
+
+def test_bin01_terminal_success_requires_finished_votes_and_stable_hold() -> None:
+    result = evaluate_bin01_terminal_success(
+        vote_reports=_votes(True, True, True),
+        positions_world=[[0, 0, 0], [0.0005, 0, 0]],
+        timestamps_s=[0, 1],
+    )
+    assert result.passed is True
+    assert result.failure_codes == ()
+
+    failed = evaluate_bin01_terminal_success(
+        vote_reports=_votes(True, False, False),
+        positions_world=[[0, 0, 0], [0.002, 0, 0]],
+        timestamps_s=[0, 1],
+    )
+    assert failed.passed is False
+    assert "BIN01_GT_VOTE_INSUFFICIENT" in failed.failure_codes
+    assert "BIN01_TERMINAL_DRIFT_EXCEEDED" in failed.failure_codes
 
 
 class _FakeController:
@@ -68,6 +91,13 @@ class _FakeProbe:
             "pass": True,
             "slot_id": "S11",
             "containment": containment,
+        }
+
+    def bin01_in_finished01(self, *, bin_path: str, stations, bin_config):
+        return {
+            "pass": True,
+            "bin_path": bin_path,
+            "station_id": "FINISHED_01",
         }
 
 
@@ -250,3 +280,31 @@ def test_terminal_collection_rejects_hold_actions_over_max_actions(tmp_path) -> 
             action_count=1,
             max_actions=10,
         )
+
+
+def test_bin01_terminal_collection_records_ten_arm_b_holds(tmp_path) -> None:
+    controller = _FakeController()
+    bridge = _FakeBridge()
+    result, report_path, action_count = _collect_bin01_terminal_success(
+        bridge=bridge,
+        controller=controller,
+        probe=_FakeProbe(),
+        config={
+            "scene_id": "single_bin_manual_industrial_v2",
+            "stations": [],
+            "bin": {},
+        },
+        artifact_dir=tmp_path,
+        task_id="BIN01_TO_FINISHED01",
+        episode_id="bin01-terminal-hold-test",
+        action_count=0,
+    )
+
+    assert result.passed is True
+    assert action_count == 10
+    assert len(bridge.records) == 10
+    assert {record["arm_id"] for record in bridge.records} == {"Arm_B"}
+    assert {record["subtask_id"] for record in bridge.records} == {
+        "BIN01_TO_FINISHED01"
+    }
+    assert report_path.is_file()

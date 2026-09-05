@@ -47,7 +47,7 @@
     {
       "id": "Arm_B",
       "model": "franka_panda",
-      "executor": "openvla_oft",
+      "executor": "pi05",
       "role": "bin_transport",
       "base_pose": {
         "position_m": [0.5, -0.3, 0.75],
@@ -265,7 +265,7 @@
       "look_at_m": [0.48, 0.18, 0.75],
       "resolution_px": [1280, 720],
       "horizontal_fov_deg": 68.0,
-      "consumers": ["openvla_oft", "yolo"]
+      "consumers": ["pi05", "yolo"]
     }
   ],
   "safety": {

@@ -1,4 +1,4 @@
-"""Frozen dual-arm, dual-VLA lifecycle contracts.
+"""Frozen dual-arm lifecycle contracts for the single π0.5 executor.
 
 This module deliberately contains no natural-language parser.  The supervisor
 loads one fixed task profile, gives the original instruction to π0.5, and
@@ -13,7 +13,6 @@ from typing import Any, Mapping
 from uuid import uuid4
 
 from .contracts import (
-    OPENVLA_OFT_EXECUTOR_NAME,
     PI05_EXECUTOR_NAME,
     Postcondition,
     Subtask,
@@ -55,7 +54,7 @@ ARM_A_PACK_HANDOFF_SUBTASK_ID = "S01_ARM_A_PACK_HANDOFF"
 ARM_B_TRANSPORT_SUBTASK_ID = "S02_ARM_B_TRANSPORT"
 FROZEN_SUBTASK_EXECUTOR_ASSIGNMENTS = (
     (ARM_A_PACK_HANDOFF_SUBTASK_ID, PI05_EXECUTOR_NAME),
-    (ARM_B_TRANSPORT_SUBTASK_ID, OPENVLA_OFT_EXECUTOR_NAME),
+    (ARM_B_TRANSPORT_SUBTASK_ID, PI05_EXECUTOR_NAME),
 )
 FROZEN_SUBTASK_TOKEN_ASSIGNMENTS = (
     (ARM_A_PACK_HANDOFF_SUBTASK_ID, ControlToken.A_ONLY),
@@ -69,7 +68,7 @@ class FixedTaskProfile:
 
     profile_id: str = "single_bin_pack_handoff_v1"
     primary_executor: str = PI05_EXECUTOR_NAME
-    collaborative_executor: str = OPENVLA_OFT_EXECUTOR_NAME
+    collaborative_executor: str = PI05_EXECUTOR_NAME
     arm_a_id: str = "Arm_A"
     arm_b_id: str = "Arm_B"
     bin_id: str = "Bin_01"
@@ -163,7 +162,7 @@ class FixedTaskProfile:
             ) from exc
 
 
-class FixedDualVLAPlanner:
+class DualArmPi05Planner:
     """Build the only supported two-stage plan without interpreting language."""
 
     def __init__(self, profile: FixedTaskProfile | None = None):
@@ -276,6 +275,7 @@ class FixedDualVLAPlanner:
                     preconditions=(),
                     postconditions=handoff_conditions,
                     assigned_executor=profile.primary_executor,
+                    arm_id=profile.arm_a_id,
                 ),
                 Subtask(
                     subtask_id=ARM_B_TRANSPORT_SUBTASK_ID,
@@ -286,6 +286,7 @@ class FixedDualVLAPlanner:
                     postconditions=transport_conditions + task.postconditions,
                     depends_on=(ARM_A_PACK_HANDOFF_SUBTASK_ID,),
                     assigned_executor=profile.collaborative_executor,
+                    arm_id=profile.arm_b_id,
                 ),
             ],
         )
@@ -294,7 +295,7 @@ class FixedDualVLAPlanner:
 
 
 @dataclass
-class FixedLifecycle:
+class DualArmLifecycle:
     """Small deterministic token state machine used alongside the main FSM."""
 
     profile: FixedTaskProfile

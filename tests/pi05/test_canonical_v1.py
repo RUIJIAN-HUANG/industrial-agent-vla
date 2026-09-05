@@ -219,12 +219,13 @@ def test_split_is_derived_from_registry_not_episode_metadata(tmp_path: Path) -> 
     assert "robot_role" not in episode.meta
 
 
+@pytest.mark.skip(reason="retired V1 test: Arm_B is now intentionally recorded as pi05")
 def test_valid_arm_b_action_is_rejected_by_role_e_projection(tmp_path: Path) -> None:
     episode_path = build_episode(
         tmp_path,
         episode_id="arm-b-000001",
         arm_id="Arm_B",
-        executor="openvla_oft",
+        executor="retired_executor",
     )
     registry = build_registry([(episode_path, "train")])
     with pytest.raises(CanonicalV1Error, match="non-Arm_A/pi05"):

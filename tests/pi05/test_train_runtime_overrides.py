@@ -15,6 +15,7 @@ RUNTIME_ENV_NAMES = (
     "PI05_LOG_INTERVAL",
     "PI05_SAVE_INTERVAL",
     "PI05_KEEP_PERIOD",
+    "PI05_FSDP_DEVICES",
 )
 
 
@@ -37,6 +38,7 @@ print(json.dumps({
     "log_interval": config.log_interval,
     "save_interval": config.save_interval,
     "keep_period": config.keep_period,
+    "fsdp_devices": config.fsdp_devices,
 }))
 """
     result = subprocess.run(
@@ -61,6 +63,7 @@ def test_runtime_training_defaults_remain_unchanged() -> None:
         "log_interval": 100,
         "save_interval": 1_000,
         "keep_period": 5_000,
+        "fsdp_devices": 1,
     }
 
 
@@ -73,6 +76,7 @@ def test_runtime_training_environment_overrides_reach_openpi_config() -> None:
             "PI05_LOG_INTERVAL": "1",
             "PI05_SAVE_INTERVAL": "10",
             "PI05_KEEP_PERIOD": "10",
+            "PI05_FSDP_DEVICES": "2",
         }
     )
 
@@ -83,6 +87,7 @@ def test_runtime_training_environment_overrides_reach_openpi_config() -> None:
         "log_interval": 1,
         "save_interval": 10,
         "keep_period": 10,
+        "fsdp_devices": 2,
     }
 
 
@@ -95,6 +100,7 @@ def test_invalid_runtime_training_environment_uses_safe_defaults() -> None:
             "PI05_LOG_INTERVAL": "0",
             "PI05_SAVE_INTERVAL": "-10",
             "PI05_KEEP_PERIOD": "invalid",
+            "PI05_FSDP_DEVICES": "0",
         }
     )
 
@@ -105,6 +111,7 @@ def test_invalid_runtime_training_environment_uses_safe_defaults() -> None:
         "log_interval": 100,
         "save_interval": 1_000,
         "keep_period": 5_000,
+        "fsdp_devices": 1,
     }
     for name in RUNTIME_ENV_NAMES:
         assert name in stderr

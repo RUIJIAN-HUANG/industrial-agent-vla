@@ -6,11 +6,11 @@
 
 方案书出处：
 - §3.3 / §3.3.1：π0.5 适配流程（JAX 路径、LeRobot、norm stats、LoRA、动作块适配）。
-- §3.2.1：LoRA rank 32 为 OpenVLA-OFT 官方示例候选（openpi/π0.5 暂以此为初始值，
+- §3.2.1：LoRA rank 32 为公开微调示例候选（π0.5 暂以此为初始值，
   D21 实验后按闭环表现确认或调整；方案书未对 π0.5 单独规定 LoRA rank 数值）。
 - §3.3：π0.5 显存参考：推理 >8GB、LoRA >22.5GB、全参 >70GB；需要 LoRA 时必走 JAX 路径，
   PyTorch 路径目前不支持 LoRA / 混合精度 / FSDP / EMA。
-- §3.3.1 Para186：本项目自有 norm stats，不沿用 OpenVLA；训练前必跑 compute_norm_stats。
+- §3.3.1 Para186：π0.5 使用本项目自有 norm stats；训练前必跑 compute_norm_stats。
 - §3.4：动作 7 维 [dx,dy,dz,dax,day,daz,gripper]，robot_base，axis-angle，control_hz=10。
 - §3.3：LIBERO 配置动作块常为 10，其他域可能不同；以本项目 checkpoint 配置为准，
   不照抄论文动作长度。
@@ -31,7 +31,7 @@
 
 关键参数：
 - base checkpoint：gs://openpi-assets/checkpoints/pi05_base
-- LoRA rank：32（参考方案书 §3.2.1 OpenVLA-OFT LoRA 示例；π0.5 初始候选值，D21 后按实验确认）
+- LoRA rank：32（参考公开 LoRA 示例；π0.5 初始候选值，D21 后按实验确认）
 - 显存要求：>22.5GB（方案书 §3.3）；22.5GB 卡建议 batch_size 降到 16 或 8。
 - num_train_steps：30000（openpi 官方示例参考值；首轮微调 100—500 条/核心技能 §6.3，
   实际步数 D21 按数据量与收敛情况调整）
@@ -191,6 +191,9 @@ GRADIENT_ACCUMULATION_STEPS: int = int(
 MIXED_PRECISION: str = os.environ.get("PI05_MIXED_PRECISION", "bf16")
 # eval_interval：验证评测间隔步数（方案书 §6.3 要求每个 checkpoint 在独立验证 seed 闭环评测）
 EVAL_INTERVAL: int = int(os.environ.get("PI05_EVAL_INTERVAL", "1000"))
+# JAX/OpenPI 单机模型分片使用的 GPU 数。显式配置，避免容器 GPU 映射与
+# CUDA_VISIBLE_DEVICES 不一致时静默落回单卡。
+FSDP_DEVICES: int = _read_int_env("PI05_FSDP_DEVICES", 1)
 
 
 # ---------------------------------------------------------------------------
@@ -509,7 +512,7 @@ def _build_pi05_industrial_config() -> TrainConfig:
         # ---- 其他 ----
         overwrite=True,
         wandb_enabled=True,
-        fsdp_devices=1,  # 单卡用 1（方案书 §3.3：JAX 路径）
+        fsdp_devices=FSDP_DEVICES,
     )
     return cfg
 
@@ -643,14 +646,15 @@ def _print_summary() -> None:
     print(
         f"eval_interval:      {EVAL_INTERVAL}  (W2 修复；若 openpi API 不支持则由外部脚本触发)"
     )
-    print(
-        f"LoRA rank:          {LORA_RANK} (方案书 §3.2.1 OpenVLA-OFT 示例；π0.5 初始候选值)"
-    )
+    print(f"LoRA rank:          {LORA_RANK} (公开 LoRA 示例；π0.5 初始候选值)")
     print(f"base checkpoint:    {BASE_CHECKPOINT}")
     print(f"dataset repo_id:    {DATASET_REPO_ID}")
     print(f"input format:       {PI05_INPUT_FORMAT}")
     print(f"output_dir:         {OUTPUT_DIR}")
-    print("fsdp_devices:       1   (单卡，方案书 §3.3 JAX 路径)")
+    print(
+        f"fsdp_devices:       {FSDP_DEVICES}   "
+        "(JAX/OpenPI 单机模型分片卡数；PI05_FSDP_DEVICES)"
+    )
     print(f"本地配置已注册:      {_REGISTERED}")
     # LoRA 安全闸门提示
     _lora_ok = validate_lora_ready()

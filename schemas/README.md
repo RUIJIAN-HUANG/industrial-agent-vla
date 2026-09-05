@@ -3,7 +3,6 @@
 | 文件 | 责任方 | 用途 |
 |---|---|---|
 | `agent-config-v2.schema.json` | A/E | V2 正式总控配置 |
-| `agent-config.schema.json` | A | 已废除 V1 配置，仅历史回归 |
 | `task.schema.json` | A | 用户任务输入 |
 | `task-plan.schema.json` | A | 语义 TaskPlan |
 | `online-observation-v2.schema.json` | A/B/E/F | V2 正式在线传感观测与终局证据；禁止 GT |
@@ -25,10 +24,10 @@
 CI 会用 Draft 2020-12 元 Schema 校验所有文件，并验证默认 Agent 配置。
 Schema 变化必须先更新接口文档和契约测试，再修改生产服务。
 
-Canonical V1 只为历史数据审计保留，正式训练仅使用 V2。V1 顶层版本键为
+Canonical 1.0 只为历史数据审计保留，正式训练仅使用 V2。1.0 顶层版本键为
 `schema_version="1.0"`；V2 顶层版本键为
 `canonical_schema_version="2.0"`。Recorder、Reader 和转换器必须按版本显式选择，
-不得通过改写字段把 V1 Episode 冒充为 V2。
+不得通过改写字段把 1.0 Episode 冒充为 V2。
 
 Schema 只覆盖跨进程、落盘或对外交换的 JSON 合同。`RunMemory`、
 `StateTransition`、`ExecutorDescriptor`、`ExecutionContext`、

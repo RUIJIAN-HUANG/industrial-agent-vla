@@ -12,6 +12,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 
+SIMPLIFIED_CHINESE_EXTENSION = "omni.kit.language.simplified_chinese"
+SIMPLIFIED_CHINESE_LOCALE_ARG = "--/persistent/app/locale_id=zh-CN"
+
+
 FRANKA_ASSET_CANDIDATES = (
     "/Isaac/Robots/FrankaRobotics/FrankaPanda/franka.usd",
     "/Isaac/Robots/Franka/franka.usd",
@@ -68,8 +72,21 @@ def require_isaac_sim_51() -> dict[str, str]:
     return info
 
 
-def launch_simulation_app(*, headless: bool) -> Any:
-    """Launch Isaac Sim, preferring the 5.x namespace."""
+def launch_simulation_app(*, headless: bool, enable_chinese_ui: bool = False) -> Any:
+    """Launch Isaac Sim, optionally preloading the Simplified Chinese UI.
+
+    The language extension and locale must be passed to Kit before its font
+    atlas is initialized.  Enabling this only for the visible competition UI
+    keeps the other headless/smoke entry points unchanged.
+    """
+
+    launch_config: dict[str, Any] = {"headless": headless}
+    if enable_chinese_ui:
+        launch_config["extra_args"] = [
+            "--enable",
+            SIMPLIFIED_CHINESE_EXTENSION,
+            SIMPLIFIED_CHINESE_LOCALE_ARG,
+        ]
 
     try:
         from isaacsim import SimulationApp
@@ -82,7 +99,7 @@ def launch_simulation_app(*, headless: bool) -> Any:
                 "Isaac Sim's python.bat/python.sh, or from its Python environment."
             ) from exc
 
-    return SimulationApp({"headless": headless})
+    return SimulationApp(launch_config)
 
 
 def _stage_function(name: str) -> Callable[..., Any]:

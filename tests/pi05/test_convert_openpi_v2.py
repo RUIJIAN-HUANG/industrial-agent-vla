@@ -1,17 +1,21 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
+import h5py
 import numpy as np
 import pytest
 
 from industrial_agent.data import SplitRegistry
 from industrial_agent.image_cas import ImageCas, ImageCasConfig
-from scripts.pi05.canonical_v2 import CanonicalV2Error
+from scripts.pi05.canonical_v2 import CanonicalV2Error, CanonicalV2Reader
 from scripts.pi05.convert_openpi import main as convert_openpi_main
 from scripts.pi05.convert_openpi_v2 import (
     ACTION_HORIZON,
+    SEGMENT_WINDOW_RULE,
     build_complete_action_windows,
     convert_canonical_v2_to_lerobot,
     main,
@@ -59,11 +63,13 @@ def _record_episode(
     *,
     action_count: int = 10,
     outcome: str = "SUCCEEDED",
+    episode_id: str = "v2-convert-000001",
+    scene_seed: int = 31,
 ) -> Path:
     image_cas = ImageCas(ImageCasConfig(root=tmp_path / "cas"))
     identity = V2CollectionIdentity(
-        episode_id="v2-convert-000001",
-        scene_seed=31,
+        episode_id=episode_id,
+        scene_seed=scene_seed,
         git_sha="a" * 40,
         scene_config_sha256=f"sha256:{'b' * 64}",
     )
@@ -106,6 +112,36 @@ def _record_episode(
         return writer.finalize(outcome=outcome, failure_code=failure_code)
 
 
+def _rewrite_as_legacy_bin_episode(episode_path: Path, *, split_at: int) -> None:
+    structure_path = episode_path / "structure.json"
+    hdf5_path = episode_path / "episode.h5"
+    manifest = json.loads(structure_path.read_text(encoding="utf-8"))
+    task_id = "BIN01_TO_FINISHED01"
+    instruction = "把Bin_01搬到FINISHED_01"
+    manifest["metadata"]["task_id"] = task_id
+    manifest["metadata"]["instruction"] = instruction
+    with h5py.File(hdf5_path, "r+") as h5:
+        h5.attrs["task_id"] = task_id
+        h5.attrs["instruction"] = instruction
+        count = int(h5["actions/action_7d"].shape[0])
+        h5["actions/arm_id"][:] = ["Arm_A"] * split_at + ["Arm_B"] * (count - split_at)
+        h5["actions/executor"][:] = ["pi05"] * split_at + ["openvla_oft"] * (
+            count - split_at
+        )
+        h5["actions/subtask_id"][:] = [task_id] * count
+        h5["robot_state/Arm_A/state_7d"][:, 0] = np.float32(0.1)
+        h5["robot_state/Arm_B/state_7d"][:, 0] = np.float32(0.9)
+        h5["cameras/CAM_A_TOP/rgb"][:, 0, 0, 0] = np.uint8(11)
+        h5["cameras/CAM_B_TOP/rgb"][:, 0, 0, 0] = np.uint8(22)
+    manifest["storage"]["sha256"] = (
+        "sha256:" + hashlib.sha256(hdf5_path.read_bytes()).hexdigest()
+    )
+    structure_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
 def _registry(episode_id: str) -> SplitRegistry:
     registry = SplitRegistry()
     registry.assign_episode(
@@ -117,6 +153,24 @@ def _registry(episode_id: str) -> SplitRegistry:
         camera_seed=41,
         lighting_seed=51,
     )
+    return registry
+
+
+def _registry_with_train_and_val() -> SplitRegistry:
+    registry = SplitRegistry()
+    for episode_id, split, scene_seed in (
+        ("v2-train-000001", "train", 31),
+        ("v2-val-000001", "val", 32),
+    ):
+        registry.assign_episode(
+            episode_id,
+            split,
+            scenario_group_id=f"group-{episode_id}",
+            scene_seed=scene_seed,
+            asset_variant=f"v2-fixed-{scene_seed}",
+            camera_seed=scene_seed,
+            lighting_seed=scene_seed,
+        )
     return registry
 
 
@@ -148,6 +202,31 @@ def test_complete_windows_reject_short_episode_without_padding() -> None:
 def test_complete_windows_reject_invalid_action_contract(actions: np.ndarray) -> None:
     with pytest.raises(ValueError, match="float32|NaN"):
         build_complete_action_windows(actions)
+
+
+def test_preflight_can_exclude_validation_episodes(tmp_path: Path) -> None:
+    _record_episode(
+        tmp_path,
+        episode_id="v2-train-000001",
+        scene_seed=31,
+    )
+    _record_episode(
+        tmp_path,
+        episode_id="v2-val-000001",
+        scene_seed=32,
+    )
+
+    report = preflight_canonical_v2_windows(
+        data_dir=tmp_path / "canonical",
+        split_registry=_registry_with_train_and_val(),
+        included_splits=["train"],
+    )
+
+    assert report["included_splits"] == ["train"]
+    assert report["counts"]["canonical_episodes"] == 1
+    assert report["counts"]["excluded_episodes"] == 1
+    assert report["counts"]["splits"] == {"train": 1, "val": 0, "test": 0}
+    assert report["episodes"][0]["episode_id"] == "v2-train-000001"
 
 
 @pytest.mark.parametrize("outcome", ["FAILED", "SAFE_STOPPED", "SAFE_STOP_FAILED"])
@@ -216,7 +295,7 @@ def test_canonical_v2_to_lerobot_smoke_is_lossless(
         == 0
     )
     cli_report = capsys.readouterr().out
-    assert '"window_rule": "N-9"' in cli_report
+    assert f'"window_rule": "{SEGMENT_WINDOW_RULE}"' in cli_report
 
     holder: dict[str, FakeLeRobotDataset] = {}
 
@@ -246,8 +325,12 @@ def test_canonical_v2_to_lerobot_smoke_is_lossless(
     assert dataset[0]["state"][6] == pytest.approx(0.375)
     assert result.manifest["action_horizon"] == 10
     assert result.manifest["padding"] == "forbidden"
-    assert result.manifest["window_rule"] == "N-9"
-    assert result.manifest["counts"] == {"episodes": 1, "windows": 1}
+    assert result.manifest["window_rule"] == SEGMENT_WINDOW_RULE
+    assert result.manifest["counts"] == {
+        "episodes": 1,
+        "canonical_episodes": 1,
+        "windows": 1,
+    }
     assert result.manifest["roundtrip"]["max_action_error"] == 0.0
     assert result.manifest["episodes"][0]["source_action_count"] == 10
     assert result.manifest["episodes"][0]["window_count"] == 1
@@ -259,6 +342,82 @@ def test_canonical_v2_to_lerobot_smoke_is_lossless(
     result.manifest_path.write_text("{}\n", encoding="utf-8")
     with pytest.raises(ValueError, match="SHA-256 mismatch"):
         verify_conversion_manifest(result.manifest_path)
+
+
+def test_legacy_bin_episode_is_split_into_arm_local_lerobot_episodes(
+    tmp_path: Path,
+) -> None:
+    episode_path = _record_episode(tmp_path, action_count=24)
+    _rewrite_as_legacy_bin_episode(episode_path, split_at=12)
+    registry = _registry("v2-convert-000001")
+
+    with pytest.raises(CanonicalV2Error, match="actions.executor"):
+        CanonicalV2Reader(episode_path)
+    with CanonicalV2Reader(
+        episode_path,
+        allow_legacy_bin01_source=True,
+    ) as reader:
+        assert reader.manifest["metadata"]["instruction"] == ("把Bin_01搬到FINISHED_01")
+
+    report = preflight_canonical_v2_windows(
+        data_dir=episode_path.parent,
+        split_registry=registry,
+        included_splits=["train"],
+    )
+    assert report["counts"]["canonical_episodes"] == 1
+    assert report["counts"]["lerobot_episodes"] == 2
+    assert report["counts"]["windows"] == 6
+    assert [
+        (segment["active_arm"], segment["camera_id"], segment["source_executor"])
+        for segment in report["episodes"][0]["segments"]
+    ] == [
+        ("Arm_A", "CAM_A_TOP", "pi05"),
+        ("Arm_B", "CAM_B_TOP", "openvla_oft"),
+    ]
+
+    holder: dict[str, FakeLeRobotDataset] = {}
+
+    def factory(**kwargs: Any) -> FakeLeRobotDataset:
+        dataset = FakeLeRobotDataset(kwargs["output_dir"])
+        holder["dataset"] = dataset
+        return dataset
+
+    result = convert_canonical_v2_to_lerobot(
+        data_dir=episode_path.parent,
+        output_dir=tmp_path / "lerobot-bin",
+        repo_id="test/pi05-v2-bin",
+        split_registry=registry,
+        dataset_factory=factory,
+        dataset_opener=lambda _root, _repo_id: holder["dataset"],
+        included_splits=["train"],
+    )
+
+    dataset = holder["dataset"]
+    assert dataset.num_episodes == 2
+    assert len(dataset.frames) == 6
+    assert all(frame["state"][0] == pytest.approx(0.1) for frame in dataset.frames[:3])
+    assert all(frame["state"][0] == pytest.approx(0.9) for frame in dataset.frames[3:])
+    assert all(frame["image"][0, 0, 0] == 11 for frame in dataset.frames[:3])
+    assert all(frame["image"][0, 0, 0] == 22 for frame in dataset.frames[3:])
+    with CanonicalV2Reader(
+        episode_path,
+        allow_legacy_bin01_source=True,
+    ) as reader:
+        source_actions = np.asarray(
+            reader.h5["actions/action_7d"][:],
+            dtype=np.float32,
+        )
+    np.testing.assert_array_equal(dataset.frames[2]["actions"], source_actions[2:12])
+    np.testing.assert_array_equal(dataset.frames[3]["actions"], source_actions[12:22])
+    assert [item["active_arm"] for item in result.manifest["episodes"]] == [
+        "Arm_A",
+        "Arm_B",
+    ]
+    assert [item["target_executor"] for item in result.manifest["episodes"]] == [
+        "pi05",
+        "pi05",
+    ]
+    assert verify_conversion_manifest(result.manifest_path) == result.manifest
 
 
 def test_formal_converter_entry_dispatches_v2_reader_and_preflight(

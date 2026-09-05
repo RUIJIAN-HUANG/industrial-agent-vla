@@ -16,13 +16,49 @@ import numpy as np
 
 from industrial_agent.contracts import ActionStep
 from industrial_agent.environment import SafeStopReceipt
-from industrial_agent.sync_contract import FROZEN_MULTI_RATE
+from industrial_agent.sync_contract import (
+    FROZEN_MULTI_RATE,
+    GRIPPER_CLOSE_COMMAND_MAX,
+    GRIPPER_OPEN_COMMAND_MIN,
+    normalize_gripper_opening,
+    resolve_gripper_command,
+)
 
 
 _ARMS = ("Arm_A", "Arm_B")
 _FINGER_JOINTS = ("panda_finger_joint1", "panda_finger_joint2")
+_MIN_TRANSLATION_COMMAND_M = 0.001
 _MIN_TRANSLATION_PROGRESS_M = 0.00025
+_MIN_TRANSLATION_PROGRESS_RATIO = 0.10
 _MIN_TRANSLATION_DIRECTION_COSINE = 0.25
+_ROTATION_DOMINANT_MIN_ROTATION_RAD = 0.05
+_ROTATION_DOMINANT_MAX_TRANSLATION_M = 0.001
+
+
+class CartesianTrackingRejected(RuntimeError):
+    """A completed Cartesian command made no useful forward progress."""
+
+    def __init__(self, arm_id: str, diagnostic: Mapping[str, Any]) -> None:
+        self.arm_id = arm_id
+        self.diagnostic = dict(diagnostic)
+        super().__init__(
+            f"Pink Cartesian tracking guard rejected {arm_id}: "
+            f"forward_progress_m={self.diagnostic['forward_progress_m']:.6f}, "
+            f"direction_cosine={self.diagnostic['direction_cosine']:.3f}"
+        )
+
+
+class GripperCloseNotSettled(RuntimeError):
+    """A close command failed its bounded motion/contact completion gate."""
+
+    def __init__(self, arm_id: str, diagnostic: Mapping[str, Any]) -> None:
+        self.arm_id = arm_id
+        self.diagnostic = dict(diagnostic)
+        super().__init__(
+            f"{arm_id} gripper close did not settle before timeout: "
+            f"opening={self.diagnostic['opening_norm']:.3f}, "
+            f"velocity={self.diagnostic['max_velocity_m_s']:.6f}m/s"
+        )
 
 
 def _quat_multiply(left: np.ndarray, right: np.ndarray) -> np.ndarray:
@@ -188,31 +224,54 @@ def _virtual_tcp_world_position(
 def _translation_tracking_diagnostic(
     requested_world_m: np.ndarray,
     observed_world_m: np.ndarray,
+    requested_rotation_rad: np.ndarray | None = None,
 ) -> dict[str, Any]:
     """Check that a translated TCP actually moved in the requested direction."""
 
     requested = np.asarray(requested_world_m, dtype=float)
     observed = np.asarray(observed_world_m, dtype=float)
+    rotation = (
+        np.zeros(3, dtype=float)
+        if requested_rotation_rad is None
+        else np.asarray(requested_rotation_rad, dtype=float)
+    )
     if requested.shape != (3,) or observed.shape != (3,):
         raise ValueError("translation tracking vectors must be 3-D")
-    if not np.all(np.isfinite(requested)) or not np.all(np.isfinite(observed)):
-        raise ValueError("translation tracking vectors must be finite")
+    if rotation.shape != (3,):
+        raise ValueError("requested rotation vector must be 3-D")
+    if not all(np.all(np.isfinite(value)) for value in (requested, observed, rotation)):
+        raise ValueError("tracking vectors must be finite")
 
     requested_norm = float(np.linalg.norm(requested))
     observed_norm = float(np.linalg.norm(observed))
-    if requested_norm == 0.0:
+    rotation_norm = float(np.linalg.norm(rotation))
+    rotation_dominant = bool(
+        rotation_norm >= _ROTATION_DOMINANT_MIN_ROTATION_RAD
+        and requested_norm <= _ROTATION_DOMINANT_MAX_TRANSLATION_M
+    )
+    if requested_norm < _MIN_TRANSLATION_COMMAND_M or rotation_dominant:
         return {
             "checked": False,
             "pass": True,
+            "skip_reason": (
+                "rotation_dominant" if rotation_dominant else "translation_deadband"
+            ),
             "requested_world_m": requested.tolist(),
             "observed_world_m": observed.tolist(),
+            "requested_norm_m": requested_norm,
+            "requested_rotation_norm_rad": rotation_norm,
+            "minimum_checked_translation_m": _MIN_TRANSLATION_COMMAND_M,
         }
 
     requested_unit = requested / requested_norm
     forward_progress = float(np.dot(observed, requested_unit))
     direction_cosine = forward_progress / observed_norm if observed_norm > 0.0 else 0.0
+    minimum_forward_progress = min(
+        _MIN_TRANSLATION_PROGRESS_M,
+        requested_norm * _MIN_TRANSLATION_PROGRESS_RATIO,
+    )
     passed = bool(
-        forward_progress >= _MIN_TRANSLATION_PROGRESS_M
+        forward_progress >= minimum_forward_progress
         and direction_cosine >= _MIN_TRANSLATION_DIRECTION_COSINE
     )
     return {
@@ -221,10 +280,12 @@ def _translation_tracking_diagnostic(
         "requested_world_m": requested.tolist(),
         "observed_world_m": observed.tolist(),
         "requested_norm_m": requested_norm,
+        "requested_rotation_norm_rad": rotation_norm,
         "observed_norm_m": observed_norm,
         "forward_progress_m": forward_progress,
         "direction_cosine": direction_cosine,
-        "minimum_forward_progress_m": _MIN_TRANSLATION_PROGRESS_M,
+        "minimum_forward_progress_m": minimum_forward_progress,
+        "minimum_forward_progress_ratio": _MIN_TRANSLATION_PROGRESS_RATIO,
         "minimum_direction_cosine": _MIN_TRANSLATION_DIRECTION_COSINE,
     }
 
@@ -265,10 +326,12 @@ def _position_targets_match(controller: Any, expected_positions: np.ndarray) -> 
     )
 
 
-def _gripper_opening_m(command: float) -> float:
-    """Map the frozen normalized binary command to one finger position."""
+def _gripper_opening_m(command_open: bool) -> float:
+    """Map one resolved binary hardware command to one finger position."""
 
-    return 0.04 if float(command) >= 0.5 else 0.0
+    if not isinstance(command_open, bool):
+        raise TypeError("resolved gripper command must be boolean")
+    return 0.04 if command_open else 0.0
 
 
 class IsaacSimFrankaController:
@@ -283,6 +346,14 @@ class IsaacSimFrankaController:
         end_effector_frame_name: str = "right_gripper",
         virtual_tcp_fingertip_frame_names: tuple[str, str] | None = None,
         stationary_velocity_rad_s: float = 1e-3,
+        gripper_settle_velocity_m_s: float = 1e-3,
+        gripper_settle_control_ticks: int = 3,
+        gripper_close_timeout_s: float = 1.0,
+        gripper_closed_tolerance_m: float = 5e-4,
+        gripper_contact_min_travel_m: float = 1e-3,
+        gripper_contact_symmetry_tolerance_m: float = 3e-3,
+        gripper_contact_position_delta_m: float = 1e-4,
+        gripper_contact_source: Callable[[str], bool] | None = None,
         safe_stop_action_grace_s: float = 0.25,
         ik_backend: str = "lula",
         pink_device: str = "cuda:0",
@@ -302,19 +373,37 @@ class IsaacSimFrankaController:
             )
         if safe_stop_action_grace_s < 0.0:
             raise ValueError("safe_stop_action_grace_s cannot be negative")
+        if not 0.0 < gripper_settle_velocity_m_s <= 0.05:
+            raise ValueError("gripper_settle_velocity_m_s must be in (0, 0.05]")
+        if (
+            isinstance(gripper_settle_control_ticks, bool)
+            or not isinstance(gripper_settle_control_ticks, int)
+            or gripper_settle_control_ticks < 1
+        ):
+            raise ValueError("gripper_settle_control_ticks must be a positive integer")
+        if gripper_close_timeout_s <= 0.0:
+            raise ValueError("gripper_close_timeout_s must be positive")
+        if (
+            gripper_close_timeout_s * FROZEN_MULTI_RATE.control_hz
+            < gripper_settle_control_ticks
+        ):
+            raise ValueError(
+                "gripper_close_timeout_s is shorter than the required stable window"
+            )
+        if not 0.0 <= gripper_closed_tolerance_m <= 0.005:
+            raise ValueError("gripper_closed_tolerance_m must be in [0, 0.005]")
+        if not 0.0 < gripper_contact_min_travel_m <= 0.02:
+            raise ValueError("gripper_contact_min_travel_m must be in (0, 0.02]")
+        if not 0.0 <= gripper_contact_symmetry_tolerance_m <= 0.01:
+            raise ValueError(
+                "gripper_contact_symmetry_tolerance_m must be in [0, 0.01]"
+            )
+        if not 0.0 < gripper_contact_position_delta_m <= 0.005:
+            raise ValueError("gripper_contact_position_delta_m must be in (0, 0.005]")
+        if gripper_contact_source is not None and not callable(gripper_contact_source):
+            raise TypeError("gripper_contact_source must be callable or None")
         if ik_backend not in {"lula", "pink"}:
             raise ValueError("ik_backend must be 'lula' or 'pink'")
-
-        try:
-            from isaacsim.robot_motion.motion_generation import (
-                ArticulationKinematicsSolver,
-                LulaKinematicsSolver,
-                interface_config_loader,
-            )
-        except ImportError as exc:
-            raise RuntimeError(
-                "Isaac Sim 5.1 Lula motion-generation extension is unavailable"
-            ) from exc
 
         self._world = world
         self._arms = dict(arms)
@@ -323,6 +412,19 @@ class IsaacSimFrankaController:
         self._physics_tick_index = 0
         self._tick_observer: Callable[[int, bool], None] | None = None
         self._stationary_velocity_rad_s = float(stationary_velocity_rad_s)
+        self._gripper_settle_velocity_m_s = float(gripper_settle_velocity_m_s)
+        self._gripper_settle_control_ticks = int(gripper_settle_control_ticks)
+        self._gripper_close_timeout_s = float(gripper_close_timeout_s)
+        self._gripper_closed_tolerance_m = float(gripper_closed_tolerance_m)
+        self._gripper_contact_min_travel_m = float(gripper_contact_min_travel_m)
+        self._gripper_contact_symmetry_tolerance_m = float(
+            gripper_contact_symmetry_tolerance_m
+        )
+        self._gripper_contact_position_delta_m = float(gripper_contact_position_delta_m)
+        self._gripper_contact_source = gripper_contact_source
+        self._gripper_command_open_by_arm: dict[str, bool] = {}
+        self._gripper_close_verified_by_arm = {arm_id: False for arm_id in _ARMS}
+        self._last_gripper_diagnostics: dict[str, dict[str, Any]] = {}
         self._safe_stop_action_grace_s = float(safe_stop_action_grace_s)
         self._owner_thread_id = get_ident()
         self._action_lock = Lock()
@@ -340,6 +442,77 @@ class IsaacSimFrankaController:
         self._tcp_offsets_local_m: dict[str, np.ndarray] = {}
         self._tcp_definitions: dict[str, dict[str, Any]] = {}
         self._last_motion_diagnostics: dict[str, dict[str, Any]] = {}
+
+        if getattr(self, "_ik_backend", "lula") == "pink":
+            # Loading Isaac Sim's Lula extension before Pinocchio corrupts the
+            # std::vector<std::string> Python binding in Isaac Sim 5.1.  Keep
+            # the Pink path completely independent from that native extension.
+            from simulation.pink_franka_adapter import PinkFrankaAdapter
+
+            self._pink_adapter = PinkFrankaAdapter(
+                arms=self._arms,
+                control_frame_name=end_effector_frame_name,
+                device=pink_device,
+            )
+            for arm_id, arm in self._arms.items():
+                current = np.asarray(arm.get_joint_positions(), dtype=float)
+                control_position, control_rotation = (
+                    self._pink_adapter.control_frame_pose_in_base(
+                        arm_id=arm_id,
+                        joint_positions=current,
+                    )
+                )
+                if virtual_tcp_fingertip_frame_names is None:
+                    self._tcp_offsets_local_m[arm_id] = np.zeros(3, dtype=float)
+                    self._tcp_definitions[arm_id] = {
+                        "mode": "pink_frame",
+                        "control_frame_name": end_effector_frame_name,
+                        "tcp_frame_name": end_effector_frame_name,
+                        "tcp_offset_local_m": [0.0, 0.0, 0.0],
+                    }
+                    continue
+                left_position, _ = self._pink_adapter.frame_pose_in_base(
+                    arm_id=arm_id,
+                    frame_name=virtual_tcp_fingertip_frame_names[0],
+                    joint_positions=current,
+                )
+                right_position, _ = self._pink_adapter.frame_pose_in_base(
+                    arm_id=arm_id,
+                    frame_name=virtual_tcp_fingertip_frame_names[1],
+                    joint_positions=current,
+                )
+                offset = _midpoint_tcp_offset_local(
+                    control_position_world_m=control_position,
+                    control_rotation_world=control_rotation,
+                    left_tip_world_m=left_position,
+                    right_tip_world_m=right_position,
+                )
+                separation_m = float(np.linalg.norm(left_position - right_position))
+                if not 0.0 < separation_m <= 0.20:
+                    raise RuntimeError(
+                        "Pink fingertip separation is invalid for virtual TCP: "
+                        f"{separation_m:.6f} m"
+                    )
+                self._tcp_offsets_local_m[arm_id] = offset
+                self._tcp_definitions[arm_id] = {
+                    "mode": "virtual_two_fingertip_midpoint",
+                    "control_frame_name": end_effector_frame_name,
+                    "fingertip_frame_names": list(virtual_tcp_fingertip_frame_names),
+                    "tcp_offset_local_m": offset.tolist(),
+                    "calibration_fingertip_separation_m": separation_m,
+                }
+            return
+
+        try:
+            from isaacsim.robot_motion.motion_generation import (
+                ArticulationKinematicsSolver,
+                LulaKinematicsSolver,
+                interface_config_loader,
+            )
+        except ImportError as exc:
+            raise RuntimeError(
+                "Isaac Sim 5.1 Lula motion-generation extension is unavailable"
+            ) from exc
         for arm_id, arm in self._arms.items():
             config = (
                 interface_config_loader.load_supported_lula_kinematics_solver_config(
@@ -422,16 +595,6 @@ class IsaacSimFrankaController:
                 "calibration_fingertip_separation_m": separation_m,
             }
 
-        if self._ik_backend == "pink":
-            from simulation.pink_franka_adapter import PinkFrankaAdapter
-
-            self._pink_adapter = PinkFrankaAdapter(
-                arms=self._arms,
-                lula_configs=self._lula_configs,
-                control_frame_name=end_effector_frame_name,
-                device=pink_device,
-            )
-
     @property
     def ik_backend(self) -> str:
         """Return the selected live inverse-kinematics backend."""
@@ -509,13 +672,35 @@ class IsaacSimFrankaController:
             raise RuntimeError(f"unknown Isaac Franka arm: {arm_id!r}")
         arm = self._arms[arm_id]
         base_position, base_orientation = arm.get_world_pose()
-        self._lula_solvers[arm_id].set_robot_base_pose(
-            np.asarray(base_position, dtype=float),
-            np.asarray(base_orientation, dtype=float),
-        )
-        control_position, rotation = self._solvers[arm_id].compute_end_effector_pose()
-        control_position = np.asarray(control_position, dtype=float)
-        rotation = np.asarray(rotation, dtype=float)
+        base_position = np.asarray(base_position, dtype=float)
+        base_orientation = np.asarray(base_orientation, dtype=float)
+        if getattr(self, "_ik_backend", "lula") == "pink":
+            current = np.asarray(arm.get_joint_positions(), dtype=float)
+            control_position_base, rotation_base = (
+                self._pink_adapter.control_frame_pose_in_base(
+                    arm_id=arm_id,
+                    joint_positions=current,
+                )
+            )
+            control_position = base_position + _rotate_vector(
+                base_orientation, control_position_base
+            )
+            rotation = np.column_stack(
+                [
+                    _rotate_vector(base_orientation, rotation_base[:, index])
+                    for index in range(3)
+                ]
+            )
+        else:
+            self._lula_solvers[arm_id].set_robot_base_pose(
+                base_position,
+                base_orientation,
+            )
+            control_position, rotation = self._solvers[
+                arm_id
+            ].compute_end_effector_pose()
+            control_position = np.asarray(control_position, dtype=float)
+            rotation = np.asarray(rotation, dtype=float)
         if (
             control_position.shape != (3,)
             or not np.all(np.isfinite(control_position))
@@ -564,6 +749,65 @@ class IsaacSimFrankaController:
             payload["pink"] = self._pink_adapter.diagnostics(arm_id)
         return payload
 
+    def predict_pink_tcp_pose_read_only(
+        self,
+        *,
+        arm_id: str,
+        current_joint_positions: np.ndarray,
+        target_tcp_position_world_m: np.ndarray,
+        target_tcp_orientation_world_wxyz: np.ndarray,
+        dt_s: float,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Predict one Pink update without applying it to the live articulation."""
+
+        self._require_owner_thread()
+        if self._ik_backend != "pink" or self._pink_adapter is None:
+            raise RuntimeError("read-only Pink prediction requires ik_backend='pink'")
+        if arm_id not in self._arms:
+            raise RuntimeError(f"unknown Isaac Franka arm: {arm_id!r}")
+
+        base_position, base_orientation = self._arms[arm_id].get_world_pose()
+        base_position = np.asarray(base_position, dtype=float)
+        base_orientation = np.asarray(base_orientation, dtype=float)
+        target_orientation_world = np.asarray(
+            target_tcp_orientation_world_wxyz, dtype=float
+        )
+        target_control_world = _control_world_position_for_tcp(
+            np.asarray(target_tcp_position_world_m, dtype=float),
+            target_orientation_world,
+            self._tcp_offsets_local_m[arm_id],
+        )
+        inverse_base = _quat_inverse(base_orientation)
+        target_control_base = _rotate_vector(
+            inverse_base, target_control_world - base_position
+        )
+        target_orientation_base = _quat_multiply(inverse_base, target_orientation_world)
+
+        predicted = np.asarray(current_joint_positions, dtype=float).copy()
+        controlled_indices = self._pink_adapter.controlled_indices(arm_id)
+        predicted[controlled_indices] = self._pink_adapter.compute(
+            arm_id=arm_id,
+            current_joint_positions=predicted,
+            target_position_base_m=target_control_base,
+            target_orientation_base_wxyz=target_orientation_base,
+            dt_s=dt_s,
+        )
+        control_position_base, control_rotation_base = (
+            self._pink_adapter.control_frame_pose_in_base(
+                arm_id=arm_id,
+                joint_positions=predicted,
+            )
+        )
+        tcp_position_base = _virtual_tcp_world_position(
+            control_position_base,
+            control_rotation_base,
+            self._tcp_offsets_local_m[arm_id],
+        )
+        predicted_tcp_world = base_position + _rotate_vector(
+            base_orientation, tcp_position_base
+        )
+        return predicted, predicted_tcp_world, control_rotation_base
+
     def end_effector_pose_in_base(
         self,
         arm_id: str,
@@ -610,6 +854,33 @@ class IsaacSimFrankaController:
         )
         return _quaternion_to_rotvec(delta_base)
 
+    def _gripper_joint_state(
+        self,
+        arm_id: str,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Read finite two-finger positions and velocities from the articulation."""
+
+        positions = self.gripper_joint_positions(arm_id)
+        arm = self._arms[arm_id]
+        names = self._joint_names(arm)
+        try:
+            indices = [names.index(name) for name in _FINGER_JOINTS]
+        except ValueError as exc:
+            raise RuntimeError(
+                f"{arm_id} Franka finger joints are missing from {names!r}"
+            ) from exc
+        velocities = np.asarray(arm.get_joint_velocities(), dtype=float)
+        if velocities.ndim != 1 or velocities.size <= max(indices):
+            raise RuntimeError(
+                f"Isaac returned invalid finger joint state for {arm_id}"
+            )
+        finger_velocities = velocities[indices]
+        if not np.all(np.isfinite(finger_velocities)):
+            raise RuntimeError(
+                f"Isaac returned non-finite finger joint state for {arm_id}"
+            )
+        return positions, finger_velocities.copy()
+
     def gripper_joint_positions(self, arm_id: str) -> np.ndarray:
         """Read both live finger positions in metres from the articulation."""
 
@@ -633,6 +904,130 @@ class IsaacSimFrankaController:
                 f"Isaac returned non-finite finger positions for {arm_id}"
             )
         return fingers.copy()
+
+    def _resolve_gripper_command(self, arm_id: str, command: float) -> bool:
+        command_by_arm = getattr(self, "_gripper_command_open_by_arm", None)
+        if not isinstance(command_by_arm, dict):
+            command_by_arm = {}
+            self._gripper_command_open_by_arm = command_by_arm
+        verified_by_arm = getattr(self, "_gripper_close_verified_by_arm", None)
+        if not isinstance(verified_by_arm, dict):
+            verified_by_arm = {candidate: False for candidate in _ARMS}
+            self._gripper_close_verified_by_arm = verified_by_arm
+        previous_open = command_by_arm.get(arm_id)
+        value = float(command)
+        if (
+            previous_open is None
+            and GRIPPER_CLOSE_COMMAND_MAX < value < GRIPPER_OPEN_COMMAND_MIN
+        ):
+            positions = self.gripper_joint_positions(arm_id)
+            previous_open = normalize_gripper_opening(positions) >= 0.5
+        resolved_open = resolve_gripper_command(value, previous_open)
+        command_by_arm[arm_id] = resolved_open
+        if resolved_open:
+            verified_by_arm[arm_id] = False
+        elif previous_open is None or previous_open:
+            verified_by_arm[arm_id] = False
+        return resolved_open
+
+    def _advance_one_control_period(self) -> None:
+        for _ in range(self._multi_rate.physics_ticks_per_control):
+            if self._stop_requested.is_set():
+                raise RuntimeError("control lease was revoked during action execution")
+            self._physics_tick_index += 1
+            render_due = (
+                self._physics_tick_index % self._multi_rate.physics_ticks_per_render
+                == 0
+            )
+            self._world.step(render=render_due)
+            observer = getattr(self, "_tick_observer", None)
+            if observer is not None:
+                observer(self._physics_tick_index, render_due)
+            if self._stop_requested.is_set():
+                raise RuntimeError("control lease was revoked during action execution")
+
+    def _wait_for_gripper_close(
+        self,
+        *,
+        arm_id: str,
+        arm: Any,
+        finger_indices: list[int],
+        initial_positions: np.ndarray,
+        articulation_action_type: Any,
+    ) -> None:
+        """Hold the TCP and close command until stable closure/contact is observed."""
+
+        max_control_ticks = max(
+            1,
+            int(round(self._gripper_close_timeout_s * self._multi_rate.control_hz)),
+        )
+        stable_ticks = 0
+        previous_positions = np.asarray(initial_positions, dtype=float)
+        diagnostic: dict[str, Any] = {
+            "opening_norm": normalize_gripper_opening(initial_positions),
+            "max_velocity_m_s": float("inf"),
+            "max_position_delta_m": float("inf"),
+            "position_plateau": False,
+            "stable_control_ticks": 0,
+            "closed_endpoint": False,
+            "contact_confirmed": False,
+        }
+        close_action = articulation_action_type(
+            joint_positions=np.zeros(2, dtype=float),
+            joint_indices=np.asarray(finger_indices, dtype=np.int64),
+        )
+        for _ in range(max_control_ticks):
+            if self._stop_requested.is_set():
+                raise RuntimeError("control lease was revoked during gripper close")
+            arm.apply_action(close_action)
+            self._advance_one_control_period()
+            positions, velocities = self._gripper_joint_state(arm_id)
+            opening_norm = normalize_gripper_opening(positions)
+            max_velocity = float(np.max(np.abs(velocities)))
+            max_position_delta = float(np.max(np.abs(positions - previous_positions)))
+            position_plateau = bool(
+                max_position_delta <= self._gripper_contact_position_delta_m
+            )
+            previous_positions = positions.copy()
+            closed_endpoint = bool(
+                np.max(np.abs(positions)) <= self._gripper_closed_tolerance_m
+            )
+            mean_travel = float(np.mean(initial_positions) - np.mean(positions))
+            inferred_contact = bool(
+                np.all(positions >= 0.0)
+                and np.ptp(positions) <= self._gripper_contact_symmetry_tolerance_m
+                and mean_travel >= self._gripper_contact_min_travel_m
+            )
+            contact_confirmed = inferred_contact
+            if self._gripper_contact_source is not None:
+                external_contact = self._gripper_contact_source(arm_id)
+                if not isinstance(external_contact, bool):
+                    raise RuntimeError("gripper_contact_source must return a boolean")
+                contact_confirmed = contact_confirmed or external_contact
+            velocity_settled = max_velocity <= self._gripper_settle_velocity_m_s
+            settled = velocity_settled or (contact_confirmed and position_plateau)
+            if settled and (closed_endpoint or contact_confirmed):
+                stable_ticks += 1
+            else:
+                stable_ticks = 0
+            diagnostic = {
+                "opening_norm": opening_norm,
+                "max_velocity_m_s": max_velocity,
+                "max_position_delta_m": max_position_delta,
+                "position_plateau": position_plateau,
+                "stable_control_ticks": stable_ticks,
+                "closed_endpoint": closed_endpoint,
+                "contact_confirmed": contact_confirmed,
+            }
+            diagnostics = getattr(self, "_last_gripper_diagnostics", None)
+            if not isinstance(diagnostics, dict):
+                diagnostics = {}
+                self._last_gripper_diagnostics = diagnostics
+            diagnostics[arm_id] = diagnostic
+            if stable_ticks >= self._gripper_settle_control_ticks:
+                self._gripper_close_verified_by_arm[arm_id] = True
+                return
+        raise GripperCloseNotSettled(arm_id, diagnostic)
 
     def action_rejection_reason(self, action: ActionStep, *, arm_id: str) -> str | None:
         """Return an IK rejection reason without moving the robot."""
@@ -713,36 +1108,21 @@ class IsaacSimFrankaController:
                     "Isaac Franka controller rejected action after safe-stop"
                 )
             arm = self._arms[arm_id]
-            solver = self._solvers[arm_id]
-            lula_solver = self._lula_solvers[arm_id]
+            solver = self._solvers.get(arm_id)
+            lula_solver = self._lula_solvers.get(arm_id)
             translation = np.asarray(action.values[:3], dtype=float)
             rotation = np.asarray(action.values[3:6], dtype=float)
             control_ticks = self._multi_rate.control_ticks_for_duration_ms(
                 action.duration_ms
             )
-            # The frozen canonical command is binary at the hardware boundary:
-            # values >= 0.5 mean open, and values < 0.5 mean closed. This maps
-            # pi0.5's 0/1 and OpenVLA-OFT's -1/+1 endpoints identically.
-            finger_position_m = _gripper_opening_m(action.values[6])
 
             base_position, base_orientation = arm.get_world_pose()
             base_position = np.asarray(base_position, dtype=float)
             base_orientation = np.asarray(base_orientation, dtype=float)
-            # Lula assumes its robot base is at the world origin unless this pose is
-            # refreshed.  The frozen scene places two Frankas away from the origin,
-            # so omitting it produces valid-looking but incorrect IK targets.
-            lula_solver.set_robot_base_pose(base_position, base_orientation)
-            control_position, current_rotation = solver.compute_end_effector_pose()
-            control_position = np.asarray(control_position, dtype=float)
-            current_rotation = np.asarray(current_rotation, dtype=float)
             tcp_offset_local = getattr(self, "_tcp_offsets_local_m", {}).get(
                 arm_id, np.zeros(3, dtype=float)
             )
-            current_position = _virtual_tcp_world_position(
-                control_position,
-                current_rotation,
-                tcp_offset_local,
-            )
+            current_position, current_rotation = self.end_effector_pose(arm_id)
             current_orientation = _rotation_matrix_to_quaternion(current_rotation)
             try:
                 from isaacsim.core.utils.types import ArticulationAction
@@ -757,11 +1137,36 @@ class IsaacSimFrankaController:
                 raise RuntimeError(
                     f"{arm_id} Franka finger joints are missing from {names!r}"
                 ) from exc
+            gripper_open = self._resolve_gripper_command(
+                arm_id,
+                action.values[6],
+            )
+            finger_position_m = _gripper_opening_m(gripper_open)
+            close_gate_required = not gripper_open and not bool(
+                self._gripper_close_verified_by_arm.get(arm_id, False)
+            )
+            close_initial_positions = (
+                self.gripper_joint_positions(arm_id)
+                if close_gate_required
+                else np.empty(0, dtype=float)
+            )
             if self._stop_requested.is_set():
                 raise RuntimeError("control lease was revoked before simulation play")
             play = getattr(self._world, "play", None)
             if callable(play):
                 play()
+
+            # A close+lift prediction must first hold the current TCP until the
+            # fingers have stopped at the closed endpoint or on symmetric
+            # contact. Only then may the positive robot-base Z delta begin.
+            if close_gate_required and translation[2] > 0.0:
+                self._wait_for_gripper_close(
+                    arm_id=arm_id,
+                    arm=arm,
+                    finger_indices=finger_indices,
+                    initial_positions=close_initial_positions,
+                    articulation_action_type=ArticulationAction,
+                )
 
             # One 10Hz model delta spans exactly six 60Hz controller updates.
             # Each controller update advances two 120Hz physics ticks, while
@@ -822,6 +1227,9 @@ class IsaacSimFrankaController:
                         ),
                     )
                 else:
+                    if solver is None or lula_solver is None:
+                        raise RuntimeError(f"Lula solver is unavailable for {arm_id}")
+                    lula_solver.set_robot_base_pose(base_position, base_orientation)
                     ik_action, success = solver.compute_inverse_kinematics(
                         target_position,
                         target_orientation,
@@ -845,41 +1253,31 @@ class IsaacSimFrankaController:
                     )
                 )
 
-                for _ in range(self._multi_rate.physics_ticks_per_control):
-                    if self._stop_requested.is_set():
-                        raise RuntimeError(
-                            "control lease was revoked during action execution"
-                        )
-                    self._physics_tick_index += 1
-                    render_due = (
-                        self._physics_tick_index
-                        % self._multi_rate.physics_ticks_per_render
-                        == 0
-                    )
-                    self._world.step(render=render_due)
-                    observer = getattr(self, "_tick_observer", None)
-                    if observer is not None:
-                        observer(self._physics_tick_index, render_due)
-                    if self._stop_requested.is_set():
-                        raise RuntimeError(
-                            "control lease was revoked during action execution"
-                        )
+                self._advance_one_control_period()
+
+            # A close command without upward motion may close while approaching;
+            # do not acknowledge the action until closure/contact is stable.
+            if close_gate_required and not self._gripper_close_verified_by_arm.get(
+                arm_id, False
+            ):
+                self._wait_for_gripper_close(
+                    arm_id=arm_id,
+                    arm=arm,
+                    finger_indices=finger_indices,
+                    initial_positions=close_initial_positions,
+                    articulation_action_type=ArticulationAction,
+                )
 
             if getattr(self, "_ik_backend", "lula") == "pink":
                 final_position, _ = self.end_effector_pose(arm_id)
                 motion_diagnostic = _translation_tracking_diagnostic(
                     world_translation,
                     np.asarray(final_position, dtype=float) - current_position,
+                    rotation,
                 )
                 self._last_motion_diagnostics[arm_id] = motion_diagnostic
                 if not motion_diagnostic["pass"]:
-                    raise RuntimeError(
-                        f"Pink Cartesian tracking guard rejected {arm_id}: "
-                        f"forward_progress_m="
-                        f"{motion_diagnostic['forward_progress_m']:.6f}, "
-                        f"direction_cosine="
-                        f"{motion_diagnostic['direction_cosine']:.3f}"
-                    )
+                    raise CartesianTrackingRejected(arm_id, motion_diagnostic)
         finally:
             self._action_idle.set()
             self._action_lock.release()

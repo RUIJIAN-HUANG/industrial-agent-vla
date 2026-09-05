@@ -25,7 +25,7 @@ def _metadata(**overrides: object) -> CanonicalV2EpisodeMetadata:
     values: dict[str, object] = {
         "episode_id": "v2-p01-000001",
         "task_id": "P01_TO_S11",
-        "instruction": "请将轴件 P01 放置到料箱的 S11 格子中。",
+        "instruction": "把P01放到S11中",
         "scene_seed": 20260819,
         "git_sha": "a" * 40,
         "scene_config_sha256": f"sha256:{'b' * 64}",
@@ -50,7 +50,7 @@ def _record_complete_episode(
     tmp_path: Path,
     *,
     task_id: str = "P01_TO_S11",
-    instruction: str = "请将轴件 P01 放置到料箱的 S11 格子中。",
+    instruction: str = "把P01放到S11中",
 ) -> Path:
     recorder, image_cas = _recorder(tmp_path, task_id=task_id, instruction=instruction)
     frame = np.zeros((720, 1280, 3), dtype=np.uint8)
@@ -76,9 +76,12 @@ def _record_complete_episode(
                 sequence_id=0,
                 state_7d=[0.4, 0.0, 0.3, 0.0, 0.0, 0.0, 0.375],
             )
+        arm_id, executor = (
+            ("Arm_B", "pi05") if task_id == "BIN01_TO_FINISHED01" else ("Arm_A", "pi05")
+        )
         recorder.add_action(
-            arm_id="Arm_A",
-            executor="pi05",
+            arm_id=arm_id,
+            executor=executor,
             subtask_id=task_id,
             chunk_id="manual-p01-000001",
             timestamp_ns=1_000_000_000,
@@ -114,11 +117,62 @@ def test_w01_v2_recorder_writes_reader_valid_episode(tmp_path: Path) -> None:
     episode_path = _record_complete_episode(
         tmp_path,
         task_id="W01_TO_S14",
-        instruction="请将扳手 W01 放置到料箱的 S14 格子中。",
+        instruction="把W01放到S14中",
     )
     with CanonicalV2Reader(episode_path) as reader:
         assert reader.manifest["metadata"]["task_id"] == "W01_TO_S14"
         assert len(tuple(reader.iter_action_7d())) == 1
+
+
+def test_bin01_v2_recorder_accepts_ordered_dual_arm_actions(tmp_path: Path) -> None:
+    recorder, image_cas = _recorder(
+        tmp_path,
+        task_id="BIN01_TO_FINISHED01",
+        instruction="把Bin_01搬到FINISHED_01",
+    )
+    frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+    references = {
+        camera_id: image_cas.write_rgb(frame, camera_id=camera_id)
+        for camera_id in CAMERA_IDS
+    }
+    with recorder:
+        for camera_id in CAMERA_IDS:
+            recorder.add_frame(
+                camera_id=camera_id,
+                timestamp_ns=1_000_000_000,
+                physics_tick=0,
+                sequence_id=0,
+                image_reference=references[camera_id],
+            )
+        for arm_id in ARM_IDS:
+            recorder.add_state(
+                arm_id=arm_id,
+                timestamp_ns=1_000_000_000,
+                physics_tick=0,
+                sequence_id=0,
+                state_7d=[0.0] * 7,
+            )
+        for sequence_id, (arm_id, executor) in enumerate(
+            (("Arm_A", "pi05"), ("Arm_B", "pi05"))
+        ):
+            physics_tick = sequence_id * 12
+            recorder.add_action(
+                arm_id=arm_id,
+                executor=executor,
+                subtask_id="BIN01_TO_FINISHED01",
+                chunk_id=f"manual-bin01-{sequence_id}",
+                timestamp_ns=1_000_000_000 + sequence_id * 100_000_000,
+                physics_tick=physics_tick,
+                sequence_id=sequence_id,
+                action_7d=[0.0] * 7,
+            )
+        episode_path = recorder.save_episode(outcome="SUCCEEDED")
+    with CanonicalV2Reader(episode_path) as reader:
+        assert reader.manifest["metadata"]["task_id"] == "BIN01_TO_FINISHED01"
+        assert [value.decode() for value in reader.h5["actions/arm_id"][:]] == [
+            "Arm_A",
+            "Arm_B",
+        ]
 
 
 @pytest.mark.parametrize(
@@ -158,7 +212,7 @@ def test_v2_recorder_rejects_padding_policy(tmp_path: Path) -> None:
     ("field", "value"),
     [
         ("arm_id", "Arm_B"),
-        ("executor", "openvla_oft"),
+        ("executor", "retired_executor"),
         ("subtask_id", "P02_TO_S21"),
     ],
 )

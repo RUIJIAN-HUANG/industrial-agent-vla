@@ -1,0 +1,41 @@
+{
+  "schema_version": "1.0",
+  "service": "yolo",
+  "service_version": "0.2.0",
+  "mock_mode": false,
+  "host": "127.0.0.1",
+  "port": 8103,
+  "supported_task_types": [
+    "pick_place",
+    "object_localization",
+    "visual_manipulation",
+    "instruction_interaction",
+    "mock_demo"
+  ],
+  "supported_detection_contracts": [
+    "1.0"
+  ],
+  "api": {
+    "default_deadline_ms": 5000,
+    "max_deadline_ms": 120000,
+    "max_concurrent_requests": 1,
+    "max_request_bytes": 1048576
+  },
+  "model": {
+    "architecture": "yolo",
+    "device": "cpu",
+    "confidence_threshold": 0.25,
+    "iou_threshold": 0.45
+  },
+  "image_cas": {
+    "root": "artifacts/cas",
+    "layout": "sha256-v1",
+    "encoding": "png",
+    "digest_scope": "encoded_bytes",
+    "max_blob_bytes": 16777216,
+    "max_pixels": 4194304,
+    "cache_max_bytes": 67108864,
+    "missing_retry_count": 1,
+    "missing_retry_delay_ms": 25
+  }
+}

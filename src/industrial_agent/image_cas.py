@@ -2,7 +2,7 @@
 
 The Supervisor transports immutable :class:`ImageReference` values.  Camera
 producers and image-consuming services share this implementation so that
-π0.5, OpenVLA-OFT, and YOLO resolve exactly the same verified frame.
+π0.5 and YOLO resolve exactly the same verified frame.
 """
 
 from __future__ import annotations

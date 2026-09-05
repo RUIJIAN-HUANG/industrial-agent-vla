@@ -64,7 +64,7 @@ from services.pi05.src.observation import (
     is_image_reference,
     validate_image_reference,
 )
-from industrial_agent.errors import FailureCode, ImageCasError
+from industrial_agent.errors import ExecutorError, FailureCode, ImageCasError
 from industrial_agent.image_cas import ImageCas, ImageCasConfig
 from industrial_agent.service_images import CasRequestImageResolver
 
@@ -1014,7 +1014,7 @@ TEST_NORM_SHA_HTTP = (
 
 def _make_http_infer_body(
     task_id: str = "P01_TO_S11",
-    prompt: str = "请将轴件 P01 放置到料箱的 S11 格子中。",
+    prompt: str = "把P01放到S11中",
     full_image: dict | None = None,
     wrist_image: dict | None = None,
     robot_state: list | None = None,
@@ -1045,11 +1045,13 @@ def _make_http_infer_body(
         "observation_id": "obs-1029",
         "deadline_ms": 15000,
         "executor": "pi05",
+        "arm_id": "Arm_A",
         "checkpoint_sha": TEST_CKPT_SHA_HTTP,
         "norm_stats_sha": TEST_NORM_SHA_HTTP,
         "expected_action_contract": "1.0",
         "model_input": {
             "prompt": prompt,
+            "arm_id": "Arm_A",
             "observation": {
                 "camera": {
                     "full_image": full_image,
@@ -1357,6 +1359,63 @@ def test_http_real_mode_preserves_cas_error_semantics(
     mock_executor.infer.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    ("error", "expected_status", "expected_code"),
+    [
+        (
+            ImageCasError(
+                FailureCode.CAS_NOT_FOUND,
+                "missing audit image",
+                retryable=True,
+            ),
+            503,
+            FailureCode.CAS_NOT_FOUND.value,
+        ),
+        (
+            ExecutorError(
+                FailureCode.EXECUTOR_RUNTIME,
+                "injected executor failure",
+                retryable=False,
+            ),
+            503,
+            FailureCode.EXECUTOR_RUNTIME.value,
+        ),
+        (
+            RuntimeError("unexpected inference failure"),
+            500,
+            FailureCode.EXECUTOR_RUNTIME.value,
+        ),
+    ],
+)
+def test_http_infer_audits_terminal_handler_errors(
+    test_client,
+    monkeypatch,
+    error,
+    expected_status,
+    expected_code,
+):
+    """Every failure after http_request must produce a correlated terminal event."""
+
+    handler = MagicMock(spec=["handle"])
+    handler.handle.side_effect = error
+    audit = MagicMock(spec=["emit"])
+    monkeypatch.setattr(openpi_service, "v1_infer_handler", handler)
+    monkeypatch.setattr(openpi_service, "_action_audit", audit)
+
+    response = test_client.post("/v1/infer", json=_make_http_infer_body())
+
+    assert response.status_code == expected_status
+    error_events = [
+        call for call in audit.emit.call_args_list if call.args[0] == "http_error"
+    ]
+    assert len(error_events) == 1
+    event = error_events[0]
+    assert event.kwargs["context"]["request_id"] == "req-http-001"
+    assert event.kwargs["status_code"] == expected_status
+    assert event.kwargs["error_code"] == expected_code
+    assert event.kwargs["failure_stage"] == "handler"
+
+
 def test_http_infer_sha_mismatch_rejected(test_client, mock_executor):
     """HTTP /v1/infer 在校验 SHA 不匹配时返回 409 EXEC_2105_MODEL_REVISION_MISMATCH。"""
     body = _make_http_infer_body()
@@ -1373,7 +1432,7 @@ def test_http_infer_sha_mismatch_rejected(test_client, mock_executor):
 def test_http_infer_executor_name_mismatch(test_client, mock_executor):
     """HTTP /v1/infer 在校验 executor 字段不匹配时返回 400 TASK_1001_INVALID。"""
     body = _make_http_infer_body()
-    body["executor"] = "openvla_oft"  # 应为 pi05
+    body["executor"] = "retired_executor"  # 应为 pi05
 
     resp = test_client.post("/v1/infer", json=body)
     assert resp.status_code == 400

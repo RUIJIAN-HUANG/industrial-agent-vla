@@ -54,9 +54,12 @@
           "minimum": 1
         },
         "executor": {
+          "const": "pi05"
+        },
+        "arm_id": {
           "enum": [
-            "openvla_oft",
-            "pi05"
+            "Arm_A",
+            "Arm_B"
           ]
         },
         "checkpoint_sha": {
@@ -79,25 +82,6 @@
           "if": {
             "properties": {
               "executor": {
-                "const": "openvla_oft"
-              }
-            },
-            "required": [
-              "executor"
-            ]
-          },
-          "then": {
-            "properties": {
-              "model_input": {
-                "$ref": "#/$defs/openVlaModelInput"
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "executor": {
                 "const": "pi05"
               }
             },
@@ -106,6 +90,7 @@
             ]
           },
           "then": {
+            "required": ["arm_id"],
             "properties": {
               "model_input": {
                 "$ref": "#/$defs/pi05ModelInput"
@@ -160,10 +145,7 @@
           "type": "string"
         },
         "executor": {
-          "enum": [
-            "openvla_oft",
-            "pi05"
-          ]
+          "const": "pi05"
         },
         "checkpoint_sha": {
           "type": "string",
@@ -313,66 +295,24 @@
         }
       }
     },
-    "openVlaModelInput": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "task_description",
-        "full_image",
-        "wrist_image",
-        "state"
-      ],
-      "properties": {
-        "task_description": {
-          "type": "string",
-          "minLength": 1
-        },
-        "full_image": {
-          "allOf": [
-            {
-              "$ref": "#/$defs/imageReference"
-            },
-            {
-              "properties": {
-                "camera_id": {
-                  "const": "CAM_B_TOP"
-                },
-                "width": {
-                  "const": 1280
-                },
-                "height": {
-                  "const": 720
-                }
-              }
-            }
-          ]
-        },
-        "wrist_image": {
-          "description": "The frozen three-camera profile has no wrist camera.",
-          "const": null
-        },
-        "state": {
-          "type": "array",
-          "minItems": 7,
-          "maxItems": 7,
-          "description": "Canonical state_7d [x_m,y_m,z_m,ax_rad,ay_rad,az_rad,gripper_norm] in robot_base; ax/ay/az are a rotation vector, not Euler angles.",
-          "items": {
-            "type": "number"
-          }
-        }
-      }
-    },
     "pi05ModelInput": {
       "type": "object",
       "additionalProperties": false,
       "required": [
         "prompt",
+        "arm_id",
         "observation"
       ],
       "properties": {
         "prompt": {
           "type": "string",
           "minLength": 1
+        },
+        "arm_id": {
+          "enum": [
+            "Arm_A",
+            "Arm_B"
+          ]
         },
         "observation": {
           "type": "object",
@@ -398,7 +338,10 @@
                     {
                       "properties": {
                         "camera_id": {
-                          "const": "CAM_A_TOP"
+                          "enum": [
+                            "CAM_A_TOP",
+                            "CAM_B_TOP"
+                          ]
                         },
                         "width": {
                           "const": 1280
@@ -446,7 +389,67 @@
             }
           }
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "arm_id": {
+                "const": "Arm_A"
+              }
+            },
+            "required": ["arm_id"]
+          },
+          "then": {
+            "properties": {
+              "observation": {
+                "properties": {
+                  "camera": {
+                    "properties": {
+                      "full_image": {
+                        "properties": {
+                          "camera_id": {
+                            "const": "CAM_A_TOP"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "arm_id": {
+                "const": "Arm_B"
+              }
+            },
+            "required": ["arm_id"]
+          },
+          "then": {
+            "properties": {
+              "observation": {
+                "properties": {
+                  "camera": {
+                    "properties": {
+                      "full_image": {
+                        "properties": {
+                          "camera_id": {
+                            "const": "CAM_B_TOP"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
     }
   }
 }

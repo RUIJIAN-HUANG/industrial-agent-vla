@@ -18,14 +18,8 @@ TASK_SCHEMA_VERSION = "1.0"
 OBSERVATION_VERSION = "1.0"
 ACTION_CONTRACT_VERSION = "1.0"
 TASK_SCHEMA_VERSION_PATTERN = re.compile(r"^1\.[0-9]+$")
-OPENVLA_OFT_EXECUTOR_NAME = "openvla_oft"
 PI05_EXECUTOR_NAME = "pi05"
-FROZEN_VLA_EXECUTOR_NAMES = frozenset(
-    {
-        OPENVLA_OFT_EXECUTOR_NAME,
-        PI05_EXECUTOR_NAME,
-    }
-)
+FROZEN_EXECUTOR_NAMES = frozenset({PI05_EXECUTOR_NAME})
 MAX_ACTION_CHUNK_STEPS = 32
 
 SUPPORTED_TASK_TYPES = frozenset(
@@ -278,6 +272,7 @@ class Subtask:
     postconditions: tuple[Postcondition, ...]
     depends_on: tuple[str, ...] = ()
     assigned_executor: str | None = None
+    arm_id: str | None = None
     repeat_until_postcondition: bool = False
     max_iterations: int = 1
     status: SubtaskStatus = SubtaskStatus.PENDING
@@ -299,13 +294,18 @@ class Subtask:
             )
         if (
             self.assigned_executor is not None
-            and self.assigned_executor not in FROZEN_VLA_EXECUTOR_NAMES
+            and self.assigned_executor not in FROZEN_EXECUTOR_NAMES
         ):
             raise ContractError(
                 FailureCode.INVALID_TASK,
                 "assigned_executor must be one of "
-                f"{sorted(FROZEN_VLA_EXECUTOR_NAMES)}, "
+                f"{sorted(FROZEN_EXECUTOR_NAMES)}, "
                 f"got {self.assigned_executor!r}",
+            )
+        if self.arm_id is not None and self.arm_id not in {"Arm_A", "Arm_B"}:
+            raise ContractError(
+                FailureCode.INVALID_TASK,
+                f"arm_id must be Arm_A or Arm_B, got {self.arm_id!r}",
             )
         if not self.postconditions:
             raise ContractError(
@@ -339,6 +339,7 @@ class Subtask:
                 "parent_task_id": parent.task_id,
                 "subtask_id": self.subtask_id,
                 "subtask_sequence": self.sequence,
+                **({"arm_id": self.arm_id} if self.arm_id is not None else {}),
             },
         )
         task.validate()
@@ -359,6 +360,8 @@ class Subtask:
         }
         if self.assigned_executor is not None:
             result["assigned_executor"] = self.assigned_executor
+        if self.arm_id is not None:
+            result["arm_id"] = self.arm_id
         return result
 
 
@@ -537,12 +540,12 @@ class ActionChunk:
             )
         if (
             not isinstance(self.executor, str)
-            or self.executor not in FROZEN_VLA_EXECUTOR_NAMES
+            or self.executor not in FROZEN_EXECUTOR_NAMES
         ):
             raise ContractError(
                 FailureCode.ACTION_CONTRACT_INVALID,
                 "executor must be one of "
-                f"{sorted(FROZEN_VLA_EXECUTOR_NAMES)}, got {self.executor!r}",
+                f"{sorted(FROZEN_EXECUTOR_NAMES)}, got {self.executor!r}",
             )
         if not self.steps:
             raise ContractError(

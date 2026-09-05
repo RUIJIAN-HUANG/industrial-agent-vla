@@ -1,14 +1,14 @@
 # Model Artifact Manifest
 
-本文件只登记外部模型制品，不保存权重。最终提交中的 π0.5 与 YOLO 制品均已完成
-G3–G7 验收，URI、SHA-256、许可证/来源、实验记录和可复现环境均已复核冻结。
+本文件只登记外部模型制品，不保存权重。D/E 每产生一个可评测 checkpoint，就追加
+一行；F 在 G3–G7 前复核 URI 可访问、SHA-256 匹配且许可证/来源明确。
 
 | Artifact ID | Model | Purpose | Upstream commit | External URI | Checkpoint SHA-256 | Norm stats SHA-256 | License/source | Owner | Status |
 |---|---|---|---|---|---|---|---|---|---|
 | — | — | — | — | — | — | — | — | — | `NOT_AVAILABLE` |
-| pi05_v2_arm_a_candidate | π0.5 | V2 Arm_A formal task policy | final submission | final model artifact manifest | final checkpoint digest in release manifest | final norm-stats digest in release manifest | final training and evaluation report | E | `FROZEN` |
-| yolo_manual800_yolo11n_e10_cpu | YOLO11n | V2 single-bin seven-class perception release | this PR | external artifact required; see `models/MODEL_CARD_yolo_manual800.md` | `sha256:2a8beca3ff52f6cd7a2f81f087df71793889d7017f81156a8286f4ffb106080f` | N/A | manually cleaned V2 dataset; final acceptance complete | F | `FROZEN` |
-| yolo_manual994_yolo11n_e10_cpu | YOLO11n | V2 single-bin seven-class perception release after 200 corrected samples | this PR | https://github.com/RUIJIAN-HUANG/industrial-agent-vla-model-yolo-manual800/pull/1 (`manual994/best.pt` at `7e4c37ad01831e08d87239a26cfed65f8b3b8d99`) | `sha256:67a70dd1f575919bde9184a993097771bbdbaa7516cdd251c1f91b2a490f1e5c` | N/A | manually cleaned V2 dataset plus 200 corrected samples; final acceptance complete | F | `FROZEN` |
+| pi05_v2_arm_a_candidate | π0.5 | V2 Arm_A formal task policy | — | — | — | — | training not complete; provenance pending | E | `TRAINING` |
+| yolo_manual800_yolo11n_e10_cpu | YOLO11n | V2 single-bin seven-class perception candidate | this PR | external artifact required; see `models/MODEL_CARD_yolo_manual800.md` | `sha256:2a8beca3ff52f6cd7a2f81f087df71793889d7017f81156a8286f4ffb106080f` | N/A | manually cleaned V2 dataset | F | `CANDIDATE` |
+| yolo_manual994_yolo11n_e10_cpu | YOLO11n | V2 single-bin seven-class perception candidate after 200 corrected samples | this PR | https://github.com/RUIJIAN-HUANG/industrial-agent-vla-model-yolo-manual800/pull/1 (`manual994/best.pt` at `7e4c37ad01831e08d87239a26cfed65f8b3b8d99`) | `sha256:67a70dd1f575919bde9184a993097771bbdbaa7516cdd251c1f91b2a490f1e5c` | N/A | manually cleaned V2 dataset plus 200 corrected samples | F | `CANDIDATE` |
 
 规则：
 

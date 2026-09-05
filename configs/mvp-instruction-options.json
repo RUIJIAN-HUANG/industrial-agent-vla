@@ -4,13 +4,13 @@
   "options": [
     {
       "task_id": "P01_TO_S11",
-      "display_instruction": "请将轴件 P01 放置到料箱的 S11 格子中。",
-      "canonical_instruction": "请将轴件 P01 放置到料箱的 S11 格子中。"
+      "display_instruction": "把P01放到S11中",
+      "canonical_instruction": "把P01放到S11中"
     },
     {
       "task_id": "W01_TO_S14",
-      "display_instruction": "请将扳手 W01 放置到料箱的 S14 格子中。",
-      "canonical_instruction": "请将扳手 W01 放置到料箱的 S14 格子中。"
+      "display_instruction": "把W01放到S14中",
+      "canonical_instruction": "把W01放到S14中"
     },
     {
       "task_id": "P03_UPRIGHT_TO_S12",
@@ -20,7 +20,7 @@
     {
       "task_id": "BIN01_TO_FINISHED01",
       "display_instruction": "请将料箱 Bin_01 搬运到成品区 FINISHED_01。",
-      "canonical_instruction": "请将料箱 Bin_01 搬运到成品区 FINISHED_01。"
+      "canonical_instruction": "把Bin_01搬到FINISHED_01"
     },
     {
       "task_id": "PACK_ALL_AND_FINISH",

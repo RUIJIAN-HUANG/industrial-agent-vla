@@ -9,11 +9,11 @@
   保留像素审计样例。
 - §3.3.1 Para185：模型返回动作块后，适配器裁维、加
   space_id/frame/control_hz/checkpoint_sha；反归一化由 openpi output_transform 在
-  policy.infer 内完成（用 compute_norm_stats 生成的本项目自有统计，满足 Para186 不沿用 OpenVLA），
+  policy.infer 内完成（用 compute_norm_stats 生成的本项目自有统计），
   适配器不再二次反归一化。
 - §3.3.1 Para186：失败切换时清空动作队列与客户端缓存，重新传当前图像。
 - Table 21 Row3（§3.3）：需要 LoRA 时必须走 JAX 路径。
-- Table 69 Row7 / 附录B：单步平移 ≤2cm、旋转 ≤5°，超限截断并报警（D5 实测前用候选值）。
+- 方案书参数指南 safety.axis_abs_limits：单步平移 ≤5cm；本地服务与 Safety Gateway 使用同一正式平移限幅。
 - §7.5：image_pipeline 像素审计、contract 动作越界拒绝。
 
 本文件只含业务逻辑：预处理委托 openpi transform、动作裁维/限幅/包装、失败切换、健康检查。
@@ -45,6 +45,11 @@ logger.setLevel(logging.INFO)
 
 
 from services.pi05.src.action import CanonicalActionChunk
+from services.pi05.src.action_audit import (
+    ActionAudit,
+    array_payload,
+    observation_context,
+)
 from services.pi05.src.base import BaseExecutor
 from services.pi05.src.observation import ObsPacket
 
@@ -86,13 +91,10 @@ from industrial_agent.executor import (  # type: ignore
 from industrial_agent.sync_contract import MODEL_INFERENCE_HZ
 
 # ---------------------------------------------------------------------------
-# 安全限幅常量（方案书 Table 69 Row7 / 附录B；D5 实测前用候选值）
+# 安全限幅常量（与正式 V2 SafetyPolicy 的前三个平移轴一致）
 # ---------------------------------------------------------------------------
-MAX_TRANSLATION_M = 0.02  # 单步平移 ≤ 2cm
+MAX_TRANSLATION_M = 0.05  # 单步平移 ≤ 5cm
 MAX_ROTATION_RAD = 0.0873  # 单步旋转 ≤ 5° ≈ 0.0873 rad
-GRIPPER_OPEN = 1.0
-GRIPPER_CLOSE = 0.0
-
 ACTION_DIM = 7  # [dx,dy,dz,dax,day,daz,gripper]
 
 
@@ -239,6 +241,7 @@ class Pi05Executor(BaseExecutor):
         self._last_latency_ms: int | None = None
         self._last_truncation_count: int = 0
         self._state_lock = threading.Lock()  # 保护 _pending_chunk 并发读写
+        self._audit = ActionAudit()
 
         # ---- 初始化 ----
         if self.mode == "real":
@@ -285,7 +288,7 @@ class Pi05Executor(BaseExecutor):
         """记录本项目 norm_stats 的 SHA（方案书 §7.2：日志定位唯一统计资产）。
 
         反归一化由 openpi output_transform 在 policy.infer 内完成，使用 compute_norm_stats
-        生成的本项目自有统计（满足 §3.3.1 Para186 不沿用 OpenVLA）；适配器不再二次反归一化，
+        生成的本项目自有统计；适配器不再二次反归一化，
         此处只读取 SHA 用于追溯。
         """
         path = self.norm_stats_path
@@ -356,7 +359,7 @@ class Pi05Executor(BaseExecutor):
             )
         if not np.all(np.isfinite(state_7d)):
             raise ValueError("observation/state contains NaN or Infinity")
-        return {
+        example = {
             "observation/image": _prep_image(obs.rgb_front),
             "observation/state": state_7d,
             "prompt": obs.instruction,
@@ -367,6 +370,18 @@ class Pi05Executor(BaseExecutor):
             "timestamp_ns": obs.timestamp_ns,
             "runtime_flags": obs.runtime_flags,
         }
+        self._audit.emit(
+            "input_observation",
+            context=observation_context(obs),
+            prompt=obs.instruction,
+            state=array_payload(state_7d),
+            image={
+                "sha256": _image_checksum(example["observation/image"]),
+                "shape": list(example["observation/image"].shape),
+                "dtype": str(example["observation/image"].dtype),
+            },
+        )
+        return example
 
     def _pixel_audit_if_test(self, obs: ObsPacket) -> None:
         """若传入固定测试图，校验预处理未破坏 RGB/方向/dtype（方案书 §7.5 image_pipeline）。"""
@@ -401,10 +416,10 @@ class Pi05Executor(BaseExecutor):
 
     # ===================== 安全限幅 =====================
     def _clip_actions(self, actions: np.ndarray) -> np.ndarray:
-        """安全限幅（方案书 Table 69 Row7 / 附录B）。
+        """安全限幅（与正式 V2 SafetyPolicy 对齐）。
 
-        - 平移前3维 |·|≤0.02m，旋转3维 |·|≤0.0873rad，超限截断并 WARNING。
-        - 夹爪第7维仅允许 0.0/1.0，四舍五入。
+        - 平移前3维 |·|≤0.05m，旋转3维 |·|≤0.0873rad，超限截断并 WARNING。
+        - 夹爪第7维保留 [-1,1] 连续输出，由 Isaac 在 0.35/0.65 滞环后离散化。
         - NaN/Inf 直接 raise ValueError，不下发（方案书 §3.4 协议不变量）。
         - 记录被截断的步骤数。
         """
@@ -454,24 +469,23 @@ class Pi05Executor(BaseExecutor):
         clipped[:, 0:3] = trans_clipped
         clipped[:, 3:6] = rot_clipped
 
-        # 夹爪：四舍五入到 0/1（>=0.5 为开）
+        # 夹爪：只做契约范围限幅。必须保留连续值，让有状态 Isaac 边界
+        # 使用 0.35/0.65 滞环，避免模型输出在 0.5 附近造成开关抖动。
         gripper = clipped[:, 6]
-        rounded = np.where(gripper >= 0.5, GRIPPER_OPEN, GRIPPER_CLOSE).astype(
-            np.float32
-        )
-        diff_grip = np.abs(gripper - rounded)
+        gripper_clipped = np.clip(gripper, -1.0, 1.0)
+        diff_grip = np.abs(gripper - gripper_clipped)
         grip_exceeded = diff_grip > 1e-9
         trunc_count += int(grip_exceeded.sum())
 
         if grip_exceeded.any() and logger.isEnabledFor(logging.WARNING):
             for i in np.argwhere(grip_exceeded).flat:
                 logger.warning(
-                    "夹爪[step=%d,gripper] %.3f -> %.1f (仅允许 0/1)",
+                    "截断[step=%d,gripper] %.3f -> %.3f (限幅[-1,1])",
                     int(i),
                     float(gripper[i]),
-                    float(rounded[i]),
+                    float(gripper_clipped[i]),
                 )
-        clipped[:, 6] = rounded
+        clipped[:, 6] = gripper_clipped
 
         self._last_truncation_count = trunc_count
         return clipped
@@ -528,7 +542,24 @@ class Pi05Executor(BaseExecutor):
         actions_7 = raw
         # 反归一化由 openpi output_transform 在 policy.infer 内完成（用本项目 compute_norm_stats，
         # 满足 §3.3.1 Para185/186），适配器不再二次反归一化。
+        self._audit.emit(
+            "policy_return_physical",
+            context=observation_context(obs),
+            actions=array_payload(raw),
+        )
+        actions_before_clip = np.array(actions_7, copy=True)
         actions_7 = self._clip_actions(actions_7)  # 安全限幅
+        clip_delta = np.abs(actions_before_clip - actions_7) > 1e-9
+        self._audit.emit(
+            "clip_actions",
+            context=observation_context(obs),
+            raw_actions=array_payload(actions_before_clip),
+            clipped_actions=array_payload(actions_7),
+            clipped_dimensions=[
+                DIM_NAMES[int(column)]
+                for column in np.flatnonzero(np.any(clip_delta, axis=0))
+            ],
+        )
         first_action = np.ascontiguousarray(actions_7[:1])
 
         latency_ms = int((time.time() - t0) * 1000)
@@ -549,6 +580,12 @@ class Pi05Executor(BaseExecutor):
             latency_ms,
             self.mode,
             self._last_truncation_count,
+        )
+        self._audit.emit(
+            "published_first_action",
+            context=observation_context(obs),
+            actions=array_payload(first_action),
+            truncation_count=self._last_truncation_count,
         )
 
         return CanonicalActionChunk(
@@ -655,6 +692,7 @@ class Pi05Executor(BaseExecutor):
             "last_latency_ms": self._last_latency_ms,
             "openpi_available": OPENPI_AVAILABLE,
             "ws_available": WS_CLIENT_AVAILABLE,
+            "audit_degraded": bool(getattr(self._policy, "audit_degraded", False)),
         }
 
     # ===================== 冻结契约叠加层（体系B 对齐）=====================
@@ -807,7 +845,7 @@ if __name__ == "__main__":
     print("out:", clipped[0])
     assert abs(clipped[0, 0]) <= np.float32(MAX_TRANSLATION_M)
     assert abs(clipped[0, 3]) <= np.float32(MAX_ROTATION_RAD)
-    assert clipped[0, 6] in (0.0, 1.0)
+    assert clipped[0, 6] == np.float32(0.5)
 
     print("\n=== NaN rejection test ===")
     try:

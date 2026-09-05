@@ -1,7 +1,7 @@
 # W01_TO_S14 task contract
 
 - Task ID: `W01_TO_S14`
-- Canonical instruction: `请将扳手 W01 放置到料箱的 S14 格子中。`
+- Canonical instruction: `把W01放到S14中`
 - Active arm: `Arm_A`
 - Target part and slot: `W01` and `S14`
 

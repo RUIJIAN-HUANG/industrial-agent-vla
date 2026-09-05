@@ -39,6 +39,38 @@ def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
     temporary.replace(path)
 
 
+def _handoff_precondition_failures(
+    placement: dict[str, Any],
+    arm_a: dict[str, Any],
+) -> tuple[str, ...]:
+    """Return actionable reasons why a Bin_01 handoff cannot proceed yet."""
+
+    failures: list[str] = []
+    if not bool(placement.get("pass")):
+        failures.append("PLACE BIN_01 INSIDE HANDOFF_CENTER")
+    if not bool(arm_a.get("gripper_open")):
+        failures.append("OPEN ARM_A GRIPPER WITH G")
+    if not bool(arm_a.get("retreated")):
+        failures.append("RETREAT ARM_A OUTSIDE GREEN ZONE")
+    return tuple(failures)
+
+
+def _completion_precondition_failures(
+    placement: dict[str, Any],
+    arm_b: dict[str, Any],
+) -> tuple[str, ...]:
+    """Return actionable reasons why Bin_01 completion cannot proceed yet."""
+
+    failures: list[str] = []
+    if not bool(placement.get("pass")):
+        failures.append("PLACE BIN_01 INSIDE FINISHED_01")
+    if not bool(arm_b.get("gripper_open")):
+        failures.append("OPEN ARM_B GRIPPER WITH G")
+    if not bool(arm_b.get("retreated")):
+        failures.append("RETREAT ARM_B OUTSIDE FINISHED_01 ZONE")
+    return tuple(failures)
+
+
 def _replay_task_actions_from_rows(rows: list[Any]) -> list[Any]:
     """Convert validated rows while removing the frozen terminal hold suffix."""
 
@@ -83,7 +115,7 @@ def _load_replay_task_actions(
     *,
     expected_scene_config_sha256: str,
     expected_task_id: str,
-) -> tuple[str, list[Any]]:
+) -> tuple[str, list[Any], list[str]]:
     """Load validated task actions, excluding the frozen terminal hold suffix."""
 
     from scripts.pi05.canonical_v2 import CanonicalV2Reader
@@ -99,8 +131,28 @@ def _load_replay_task_actions(
             expected_scene_config_sha256=expected_scene_config_sha256,
         )
         rows = list(reader.iter_action_7d())
+        stored_arm_ids = [
+            value.decode("utf-8") if isinstance(value, bytes) else str(value)
+            for value in reader.h5["actions/arm_id"][:]
+        ]
         source_episode_id = reader.episode_id
-    return source_episode_id, _replay_task_actions_from_rows(rows)
+    actions = _replay_task_actions_from_rows(rows)
+    arm_ids = stored_arm_ids[: len(actions)]
+    if len(stored_arm_ids) != len(rows) or len(arm_ids) != len(actions):
+        raise ValueError("--replay-episode action identity count is inconsistent")
+    if expected_task_id == "BIN01_TO_FINISHED01":
+        if "Arm_A" not in arm_ids or "Arm_B" not in arm_ids:
+            raise ValueError(
+                "--replay-episode BIN01_TO_FINISHED01 requires both Arm_A and Arm_B"
+            )
+        first_b = arm_ids.index("Arm_B")
+        if any(arm_id != "Arm_A" for arm_id in arm_ids[:first_b]) or any(
+            arm_id != "Arm_B" for arm_id in arm_ids[first_b:]
+        ):
+            raise ValueError(
+                "--replay-episode dual-arm actions must be ordered Arm_A then Arm_B"
+            )
+    return source_episode_id, actions, arm_ids
 
 
 def _diversify_replay_actions(
@@ -112,6 +164,7 @@ def _diversify_replay_actions(
     lift_mm: float | None = None,
     final_y_offset_mm: float = 0.0,
     final_z_offset_mm: float = 0.0,
+    arm_ids: list[str] | None = None,
 ) -> list[Any]:
     """Apply a bounded, smooth deterministic variation to replay actions.
 
@@ -123,6 +176,39 @@ def _diversify_replay_actions(
         return list(actions)
     if profile not in {"diverse_low", "approach_curve"}:
         raise ValueError(f"unsupported trajectory profile: {profile}")
+    if arm_ids is not None:
+        if len(arm_ids) != len(actions):
+            raise ValueError("arm_ids must align one-to-one with replay actions")
+        boundaries = [
+            index
+            for index in range(1, len(arm_ids))
+            if arm_ids[index] != arm_ids[index - 1]
+        ]
+        if boundaries:
+            if len(boundaries) != 1 or set(arm_ids) != {"Arm_A", "Arm_B"}:
+                raise ValueError(
+                    "dual-arm replay requires exactly one Arm_A-to-Arm_B transition"
+                )
+            split = boundaries[0]
+            if arm_ids[0] != "Arm_A" or arm_ids[split] != "Arm_B":
+                raise ValueError("dual-arm replay must be ordered Arm_A then Arm_B")
+            arm_a_actions = _diversify_replay_actions(
+                actions[:split],
+                profile=profile,
+                seed=seed,
+                variant=variant,
+                lift_mm=lift_mm,
+            )
+            arm_b_actions = _diversify_replay_actions(
+                actions[split:],
+                profile=profile,
+                seed=seed + 1,
+                variant=variant,
+                lift_mm=lift_mm,
+                final_y_offset_mm=final_y_offset_mm,
+                final_z_offset_mm=final_z_offset_mm,
+            )
+            return arm_a_actions + arm_b_actions
     if len(actions) < 8:
         raise ValueError(f"{profile} requires at least eight task actions")
 
@@ -421,6 +507,89 @@ def _collect_w01_terminal_success(
     return result, report_path, action_count
 
 
+def _collect_bin01_terminal_success(
+    *,
+    bridge: Any,
+    controller: Any,
+    probe: Any,
+    config: dict[str, Any],
+    artifact_dir: Path,
+    task_id: str,
+    episode_id: str,
+    action_count: int,
+    max_actions: int | None = None,
+) -> tuple[Any, Path, int]:
+    """Hold the released bin for one second and verify FINISHED_01."""
+
+    if max_actions is not None and action_count + 10 > max_actions:
+        raise RuntimeError(
+            "terminal hold actions exceed the --max-actions safety limit"
+        )
+    from industrial_agent.contracts import ActionStep
+    from industrial_agent.sync_contract import FROZEN_MULTI_RATE
+    from simulation.v2_terminal_success import evaluate_bin01_terminal_success
+
+    bin_path = "/World/Bins/Bin_01"
+    hold_action = ActionStep.from_sequence(
+        (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0), duration_ms=100
+    )
+    positions = [probe.world_position(bin_path)]
+    timestamps_s = [float(controller.physics_tick_index) / FROZEN_MULTI_RATE.physics_hz]
+    vote_reports: list[dict[str, Any]] = []
+    for step in range(1, 11):
+        _record_and_execute_formal_action(
+            bridge=bridge,
+            controller=controller,
+            action=hold_action,
+            arm_id="Arm_B",
+            task_id=task_id,
+            episode_id=episode_id,
+            action_index=action_count,
+        )
+        action_count += 1
+        physics_tick = int(controller.physics_tick_index)
+        positions.append(probe.world_position(bin_path))
+        timestamps_s.append(float(physics_tick) / FROZEN_MULTI_RATE.physics_hz)
+        if step not in {1, 5, 10}:
+            continue
+        placement = probe.bin01_in_finished01(
+            bin_path=bin_path,
+            stations=config["stations"],
+            bin_config=config["bin"],
+        )
+        vote_reports.append(
+            {
+                "observation_id": f"physics-{physics_tick}",
+                "timestamp_s": timestamps_s[-1],
+                "physics_tick": physics_tick,
+                "pass": bool(placement["pass"]),
+                "placement": placement,
+            }
+        )
+
+    result = evaluate_bin01_terminal_success(
+        vote_reports=vote_reports,
+        positions_world=positions,
+        timestamps_s=timestamps_s,
+    )
+    payload = result.to_dict()
+    payload.update(
+        {
+            "scene_id": config["scene_id"],
+            "task_id": task_id,
+            "bin_path": bin_path,
+            "station_id": "FINISHED_01",
+            "position_samples_world": positions,
+            "timestamp_samples_s": timestamps_s,
+            "vote_reports": vote_reports,
+            "isolation": "offline_gt_only",
+        }
+    )
+    report_path = artifact_dir / "offline_gt" / "bin01_terminal_success.json"
+    _write_json_atomic(report_path, payload)
+    return result, report_path, action_count
+
+
 def _record_and_execute_formal_action(
     *,
     bridge,
@@ -430,6 +599,7 @@ def _record_and_execute_formal_action(
     task_id: str,
     episode_id: str,
     action_index: int,
+    bin_grasp_manager: Any | None = None,
 ) -> None:
     """Record one 100 ms command and execute its real 12 physics ticks."""
     tick = controller.physics_tick_index
@@ -440,7 +610,22 @@ def _record_and_execute_formal_action(
         chunk_id=f"{episode_id}-{action_index:06d}",
         physics_tick=tick,
     )
-    controller.execute_action(action, arm_id=arm_id)
+    if bin_grasp_manager is not None:
+        bin_grasp_manager.before_action(action, arm_id=arm_id)
+    try:
+        controller.execute_action(action, arm_id=arm_id)
+    except BaseException as action_error:
+        if bin_grasp_manager is not None:
+            try:
+                bin_grasp_manager.after_action(action, arm_id=arm_id)
+            except BaseException as grasp_error:
+                action_error.add_note(
+                    "bin grasp state refresh also failed after the action error: "
+                    f"{grasp_error}"
+                )
+        raise
+    if bin_grasp_manager is not None:
+        bin_grasp_manager.after_action(action, arm_id=arm_id)
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -549,12 +734,14 @@ def main() -> int:
     bridge = None
     machine = None
     offline_gt_probe = None
+    bin_grasp_manager = None
     terminal_hold_requested = False
     terminal_success_report = None
     terminal_success_path: Path | None = None
     action_count = 0
     replay_source_episode_id: str | None = None
     replay_actions: list[Any] | None = None
+    replay_arm_ids: list[str] | None = None
     phase = "launch"
     episode_path: Path | None = None
     try:
@@ -566,6 +753,7 @@ def main() -> int:
         from simulation.offline_gt import OfflineGtProbe
         from simulation.rgb_cas_bridge import IsaacRgbCasPublisher
         from simulation.v2_collection_state import (
+            Bin01ToFinished01CollectionStateMachine,
             EpisodeOutcome,
             P01ToS11CollectionStateMachine,
             V2CollectionContract,
@@ -577,16 +765,38 @@ def main() -> int:
         require_valid_config(config)
         contract = V2CollectionContract.from_config(config)
         task_profiles = {
-            "P01_TO_S11": (P01ToS11CollectionStateMachine, "P01", "S11"),
-            "W01_TO_S14": (W01ToS14CollectionStateMachine, "W01", "S14"),
+            "P01_TO_S11": (
+                P01ToS11CollectionStateMachine,
+                "P01",
+                "S11",
+                "Arm_A",
+            ),
+            "W01_TO_S14": (
+                W01ToS14CollectionStateMachine,
+                "W01",
+                "S14",
+                "Arm_A",
+            ),
+            "BIN01_TO_FINISHED01": (
+                Bin01ToFinished01CollectionStateMachine,
+                None,
+                "FINISHED_01",
+                "Arm_A",
+            ),
         }
-        machine_type, task_part_id, task_slot_id = task_profiles[preflight.task_id]
+        machine_type, task_part_id, task_slot_id, task_arm_id = task_profiles[
+            preflight.task_id
+        ]
         machine = machine_type(contract)
 
         if args.replay_episode is not None:
             phase = "load_replay_episode"
             replay_path = args.replay_episode.expanduser().resolve()
-            replay_source_episode_id, replay_actions = _load_replay_task_actions(
+            (
+                replay_source_episode_id,
+                replay_actions,
+                replay_arm_ids,
+            ) = _load_replay_task_actions(
                 replay_path,
                 expected_scene_config_sha256=preflight.scene_config_sha256,
                 expected_task_id=preflight.task_id,
@@ -599,6 +809,7 @@ def main() -> int:
                 lift_mm=args.lift_mm,
                 final_y_offset_mm=args.final_y_offset_mm,
                 final_z_offset_mm=args.final_z_offset_mm,
+                arm_ids=replay_arm_ids,
             )
             if len(replay_actions) + TERMINAL_HOLD_ACTION_COUNT > args.max_actions:
                 raise RuntimeError(
@@ -638,7 +849,10 @@ def main() -> int:
         simulation_app = isaac_compat.launch_simulation_app(headless=False)
         phase = "build_scene"
         import single_bin_scene_v2_builder
-        from isaac_franka_controller import IsaacSimFrankaController
+        from isaac_franka_controller import (
+            CartesianTrackingRejected,
+            IsaacSimFrankaController,
+        )
         from isaacsim.core.api import World
         from isaacsim.core.prims import SingleArticulation
 
@@ -686,6 +900,15 @@ def main() -> int:
             ),
             ik_backend=args.ik_backend,
         )
+        if preflight.task_id == "BIN01_TO_FINISHED01":
+            from simulation.bin_carry_grasp import (
+                BinCarryGraspManager,
+                UsdFixedJointBinCarryBackend,
+            )
+
+            bin_grasp_manager = BinCarryGraspManager(
+                UsdFixedJointBinCarryBackend(stage=stage, controller=controller)
+            )
         image_cas, recorder = create_recorder(preflight)
         publisher = IsaacRgbCasPublisher.from_scene_config(image_cas, config)
         rgb_pipeline = IsaacRgbObservationPipeline(
@@ -700,14 +923,39 @@ def main() -> int:
         )
         bridge.record_initial(physics_tick=0)
         controller.set_tick_observer(bridge.observe_physics_tick)
-        active_arm = "Arm_A"
+        active_arm = task_arm_id
         if replay_actions is not None:
+            assert replay_arm_ids is not None
             phase = "replay_actions"
             print(
                 f"V2 REPLAY READY source={replay_source_episode_id} "
                 f"task_actions={len(replay_actions)}"
             )
-            for action in replay_actions:
+            for action, replay_arm_id in zip(replay_actions, replay_arm_ids):
+                if replay_arm_id != active_arm:
+                    if not (
+                        preflight.task_id == "BIN01_TO_FINISHED01"
+                        and active_arm == "Arm_A"
+                        and replay_arm_id == "Arm_B"
+                    ):
+                        raise RuntimeError(
+                            "invalid replay arm transition "
+                            f"{active_arm}->{replay_arm_id}"
+                        )
+                    placement = offline_gt_probe.bin01_in_handoff_center(
+                        bin_path="/World/Bins/Bin_01",
+                        stations=config["stations"],
+                        bin_config=config["bin"],
+                    )
+                    arm_a = _arm_readback(controller, arms, config, "Arm_A")
+                    machine.enter_handoff_verify(
+                        bin_at_handoff_center=bool(placement["pass"]),
+                        bin_stable=True,
+                        arm_a_gripper_open=arm_a["gripper_open"],
+                        arm_a_clear=arm_a["retreated"],
+                    )
+                    machine.activate_b_only()
+                    active_arm = "Arm_B"
                 machine.require_arm_action(active_arm)
                 rejection = controller.action_rejection_reason(
                     action,
@@ -725,19 +973,37 @@ def main() -> int:
                     task_id=preflight.task_id,
                     episode_id=preflight.episode_id,
                     action_index=action_count,
+                    bin_grasp_manager=bin_grasp_manager,
                 )
                 action_count += 1
-                print(f"REPLAY ACTION {action_count}/{len(replay_actions)} Arm_A")
-            machine.record_part_placement(
-                part_id=task_part_id,
-                slot_id=contract.part_to_slot[task_part_id],
-                stable=True,
-            )
-            arm_a = _arm_readback(controller, arms, config, "Arm_A")
-            machine.complete(
-                arm_a_gripper_open=arm_a["gripper_open"],
-                arm_a_clear=arm_a["retreated"],
-            )
+                print(
+                    f"REPLAY ACTION {action_count}/{len(replay_actions)} {active_arm}"
+                )
+            if preflight.task_id == "BIN01_TO_FINISHED01":
+                placement = offline_gt_probe.bin01_in_finished01(
+                    bin_path="/World/Bins/Bin_01",
+                    stations=config["stations"],
+                    bin_config=config["bin"],
+                )
+                arm_b = _arm_readback(controller, arms, config, "Arm_B")
+                machine.complete(
+                    bin_at_finished=bool(placement["pass"]),
+                    bin_stable=True,
+                    arm_b_gripper_open=arm_b["gripper_open"],
+                    arm_b_clear=arm_b["retreated"],
+                )
+            else:
+                assert task_part_id is not None
+                machine.record_part_placement(
+                    part_id=task_part_id,
+                    slot_id=contract.part_to_slot[task_part_id],
+                    stable=True,
+                )
+                arm_a = _arm_readback(controller, arms, config, "Arm_A")
+                machine.complete(
+                    arm_a_gripper_open=arm_a["gripper_open"],
+                    arm_a_clear=arm_a["retreated"],
+                )
             terminal_hold_requested = True
             print(f"REPLAY COMPLETED {preflight.task_id}; starting terminal validation")
         else:
@@ -757,6 +1023,24 @@ def main() -> int:
             status_window = ui.Window(
                 "V2 Canonical Keyboard Collection", width=760, height=250
             )
+            bin_transport_task = preflight.task_id == "BIN01_TO_FINISHED01"
+            target_label = (
+                "Bin_01 target: FINISHED_01"
+                if bin_transport_task
+                else f"{task_part_id} target: {task_slot_id}"
+            )
+            completion_label = (
+                "V verify HANDOFF_CENTER | B activate Arm_B | C confirm FINISHED_01"
+                if bin_transport_task
+                else f"Z confirm {task_part_id} in {task_slot_id} | "
+                f"C complete {task_part_id} task"
+            )
+            workflow_label = (
+                "Start Arm_A | V verify handoff | B switch to Arm_B | "
+                "P checkpoint | X safe-stop"
+                if bin_transport_task
+                else "P checkpoint | X safe-stop | V/B disabled for this task"
+            )
             with status_window.frame:
                 with ui.VStack(spacing=5):
                     ui.Label(
@@ -768,18 +1052,17 @@ def main() -> int:
                         f"({args.translation_step_m * 1000:.0f} mm / "
                         f"{args.fine_translation_step_m * 1000:.0f} mm)"
                     )
-                    ui.Label(f"{task_part_id} target: {task_slot_id}")
+                    ui.Label(target_label)
                     ui.Label(
                         f"IK backend: {controller.ik_backend.upper()} + "
                         "null-space posture"
                     )
-                    ui.Label(
-                        f"Z confirm {task_part_id} in {task_slot_id} | "
-                        f"C complete {task_part_id} task"
-                    )
-                    ui.Label("P checkpoint | X safe-stop | V/B disabled for this task")
+                    ui.Label(completion_label)
+                    ui.Label(workflow_label)
                     ui.Label("Tap keys once. Do not hold. Formal actions are recorded.")
-                    status_label = ui.Label(f"READY | A_ONLY | next={task_part_id}")
+                    status_label = ui.Label(
+                        f"READY | {machine.token.value} | arm={active_arm}"
+                    )
 
             print("V2 canonical keyboard collection READY")
             print(mapper.help_text())
@@ -823,6 +1106,11 @@ def main() -> int:
                         )
                         continue
                     if command.kind == "part_placed":
+                        if bin_transport_task:
+                            raise RuntimeError(
+                                "BIN01_TO_FINISHED01 does not use Z; use V then B "
+                                "for handoff, and C only after Arm_B finishes"
+                            )
                         part_id = machine.next_part_id
                         if part_id is None:
                             raise RuntimeError("all formal parts are already confirmed")
@@ -837,19 +1125,107 @@ def main() -> int:
                         )
                         continue
                     if command.kind == "handoff_verify":
-                        raise RuntimeError(
-                            f"{preflight.task_id} ends before handoff; V is not allowed"
+                        if not bin_transport_task:
+                            raise RuntimeError(
+                                f"{preflight.task_id} ends before handoff; "
+                                "V is not allowed"
+                            )
+                        placement = offline_gt_probe.bin01_in_handoff_center(
+                            bin_path="/World/Bins/Bin_01",
+                            stations=config["stations"],
+                            bin_config=config["bin"],
                         )
-                    if command.kind == "activate_b":
-                        raise RuntimeError(
-                            f"{preflight.task_id} permits Arm_A only; B is not allowed"
-                        )
-                    if command.kind == "complete":
                         arm_a = _arm_readback(controller, arms, config, "Arm_A")
-                        machine.complete(
+                        handoff_report = {
+                            "placement": placement,
+                            "arm_a_gripper_open": arm_a["gripper_open"],
+                            "arm_a_clear": arm_a["retreated"],
+                        }
+                        _write_json_atomic(
+                            artifact_dir / "offline_gt" / "bin01_handoff.json",
+                            handoff_report,
+                        )
+                        handoff_failures = _handoff_precondition_failures(
+                            placement,
+                            arm_a,
+                        )
+                        if handoff_failures:
+                            message = "HANDOFF NOT READY | " + " | ".join(
+                                handoff_failures
+                            )
+                            status_label.text = message + " | THEN PRESS V AGAIN"
+                            print(message)
+                            continue
+                        machine.enter_handoff_verify(
+                            bin_at_handoff_center=bool(placement["pass"]),
+                            bin_stable=True,
                             arm_a_gripper_open=arm_a["gripper_open"],
                             arm_a_clear=arm_a["retreated"],
                         )
+                        active_arm = "NONE"
+                        status_label.text = (
+                            "HANDOFF_VERIFY PASS | both arms locked | press B"
+                        )
+                        print(
+                            "HANDOFF VERIFIED: Bin_01 stable in HANDOFF_CENTER; "
+                            "press B to activate Arm_B"
+                        )
+                        continue
+                    if command.kind == "activate_b":
+                        if not bin_transport_task:
+                            raise RuntimeError(
+                                f"{preflight.task_id} permits Arm_A only; "
+                                "B is not allowed"
+                            )
+                        machine.activate_b_only()
+                        active_arm = "Arm_B"
+                        status_label.text = (
+                            "B_ONLY | arm=Arm_B | continue to FINISHED_01"
+                        )
+                        print("CONTROL SWITCHED: Arm_B is now active")
+                        continue
+                    if command.kind == "complete":
+                        if bin_transport_task:
+                            placement = offline_gt_probe.bin01_in_finished01(
+                                bin_path="/World/Bins/Bin_01",
+                                stations=config["stations"],
+                                bin_config=config["bin"],
+                            )
+                            arm_b = _arm_readback(controller, arms, config, "Arm_B")
+                            completion_report = {
+                                "placement": placement,
+                                "arm_b_gripper_open": arm_b["gripper_open"],
+                                "arm_b_clear": arm_b["retreated"],
+                            }
+                            _write_json_atomic(
+                                artifact_dir
+                                / "offline_gt"
+                                / "bin01_completion_check.json",
+                                completion_report,
+                            )
+                            completion_failures = _completion_precondition_failures(
+                                placement,
+                                arm_b,
+                            )
+                            if completion_failures:
+                                message = "COMPLETION NOT READY | " + " | ".join(
+                                    completion_failures
+                                )
+                                status_label.text = message + " | THEN PRESS C AGAIN"
+                                print(message)
+                                continue
+                            machine.complete(
+                                bin_at_finished=bool(placement["pass"]),
+                                bin_stable=True,
+                                arm_b_gripper_open=arm_b["gripper_open"],
+                                arm_b_clear=arm_b["retreated"],
+                            )
+                        else:
+                            arm_a = _arm_readback(controller, arms, config, "Arm_A")
+                            machine.complete(
+                                arm_a_gripper_open=arm_a["gripper_open"],
+                                arm_a_clear=arm_a["retreated"],
+                            )
                         print(f"HUMAN CONFIRMED {preflight.task_id} COMPLETE")
                         terminal_hold_requested = True
                         running = False
@@ -870,25 +1246,75 @@ def main() -> int:
                             f"REJECTED | {rejection} | actions={action_count}"
                         )
                         continue
+                    tracking_rejection = None
                     for repeat_index in range(repeat_count):
-                        _record_and_execute_formal_action(
-                            bridge=bridge,
-                            controller=controller,
-                            action=command.action,
-                            arm_id=active_arm,
-                            task_id=preflight.task_id,
-                            episode_id=preflight.episode_id,
-                            action_index=action_count,
-                        )
+                        try:
+                            _record_and_execute_formal_action(
+                                bridge=bridge,
+                                controller=controller,
+                                action=command.action,
+                                arm_id=active_arm,
+                                task_id=preflight.task_id,
+                                episode_id=preflight.episode_id,
+                                action_index=action_count,
+                                bin_grasp_manager=bin_grasp_manager,
+                            )
+                        except CartesianTrackingRejected as exc:
+                            # The 100 ms command and its 12 physics ticks have
+                            # already been recorded.  Keep the canonical stream
+                            # contiguous, but let the operator recover from a
+                            # local IK stall instead of aborting the episode.
+                            action_count += 1
+                            tracking_rejection = exc
+                            break
                         action_count += 1
                         if repeat_count > 1:
                             print(
                                 f"GRIPPER SETTLE {repeat_index + 1}/{repeat_count} "
                                 f"actions={action_count}"
                             )
+                    if tracking_rejection is not None:
+                        diagnostic = tracking_rejection.diagnostic
+                        message = (
+                            f"ACTION STALLED: {active_arm} made no useful progress "
+                            f"({diagnostic['forward_progress_m'] * 1000.0:.2f} mm); "
+                            "the bin grasp is preserved. Choose another direction "
+                            "or press F for fine mode"
+                        )
+                        print(message)
+                        status_label.text = (
+                            f"STALLED | arm={active_arm} | grasp preserved | "
+                            f"actions={action_count}"
+                        )
+                        continue
+                    grasp_status = ""
+                    if bin_grasp_manager is not None and command.key == "g":
+                        gripper_open = float(command.action.values[6]) >= 0.5
+                        if gripper_open:
+                            grasp_status = " | BIN GRASP RELEASED"
+                            print("BIN GRASP RELEASED")
+                        elif bin_grasp_manager.attached_arm == active_arm:
+                            grasp_status = " | BIN GRASP LOCKED"
+                            print(f"BIN GRASP LOCKED: {active_arm}")
+                        else:
+                            distance = bin_grasp_manager.diagnostics()[
+                                "last_attach_distance_m"
+                            ]
+                            distance_text = (
+                                "unknown"
+                                if distance is None
+                                else f"{float(distance) * 1000.0:.1f} mm"
+                            )
+                            grasp_status = " | GRASP NOT LOCKED"
+                            print(
+                                "GRASP NOT LOCKED: align the gripper with "
+                                f"BIN_CARRY_TCP (distance={distance_text}), "
+                                "open with G, reposition, then close with G"
+                            )
                     status_label.text = (
                         f"{machine.token.value} | arm={active_arm} | "
                         f"next={machine.next_part_id} | actions={action_count}"
+                        f"{grasp_status}"
                     )
                     print(f"ACTION {action_count} {active_arm}: {command.description}")
                 except BaseException:
@@ -897,11 +1323,12 @@ def main() -> int:
 
         if terminal_hold_requested and machine.outcome is EpisodeOutcome.SUCCEEDED:
             phase = "terminal_hold_offline_gt"
-            terminal_collector = (
-                _collect_p01_terminal_success
-                if preflight.task_id == "P01_TO_S11"
-                else _collect_w01_terminal_success
-            )
+            terminal_collectors = {
+                "P01_TO_S11": _collect_p01_terminal_success,
+                "W01_TO_S14": _collect_w01_terminal_success,
+                "BIN01_TO_FINISHED01": _collect_bin01_terminal_success,
+            }
+            terminal_collector = terminal_collectors[preflight.task_id]
             terminal_success_report, terminal_success_path, action_count = (
                 terminal_collector(
                     bridge=bridge,
@@ -968,6 +1395,11 @@ def main() -> int:
                     if terminal_success_report is not None
                     else None
                 ),
+                "bin_grasp": (
+                    bin_grasp_manager.diagnostics()
+                    if bin_grasp_manager is not None
+                    else None
+                ),
             }
         )
         return 0
@@ -996,6 +1428,12 @@ def main() -> int:
         )
         return 1
     finally:
+        if bin_grasp_manager is not None:
+            try:
+                result.setdefault("bin_grasp", bin_grasp_manager.diagnostics())
+                bin_grasp_manager.detach()
+            except BaseException as grasp_exc:
+                result.setdefault("bin_grasp_cleanup_error", repr(grasp_exc))
         if terminal_success_path is not None:
             result.setdefault("offline_gt_path", str(terminal_success_path))
         if terminal_success_report is not None:

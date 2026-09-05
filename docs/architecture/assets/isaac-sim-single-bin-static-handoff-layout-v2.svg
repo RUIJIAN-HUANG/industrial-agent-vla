@@ -34,7 +34,7 @@
 
   <rect width="1600" height="1000" fill="url(#bg)"/>
   <text x="80" y="58" class="title">Isaac Sim V2 工业场景｜双臂八零件 + 2×4 单箱 + 中央固定交接位</text>
-  <text x="80" y="91" class="subtitle">Arm A / π0.5 装箱并交接 → HANDOFF_VERIFY → Arm B / OpenVLA-OFT 搬运到 FINISHED_01</text>
+  <text x="80" y="91" class="subtitle">Arm A / π0.5 装箱并交接 → HANDOFF_VERIFY → Arm B / π0.5 搬运到 FINISHED_01</text>
 
   <!-- Camera coverage -->
   <path d="M390 130 L115 205 L115 815 L790 815 L790 205 Z" fill="#2563eb" opacity="0.035" stroke="#2563eb" stroke-width="2" stroke-dasharray="9 8"/>
@@ -64,7 +64,7 @@
   <rect x="730" y="205" width="180" height="625" rx="16" fill="#dcfce7" stroke="#16a34a" stroke-width="3" stroke-dasharray="11 7"/>
 
   <text x="140" y="245" class="section" fill="#1d4ed8">WS_A｜π0.5 + Arm A（装箱与交接）</text>
-  <text x="955" y="245" class="section" fill="#c2410c">WS_B｜OpenVLA-OFT + Arm B（搬运）</text>
+  <text x="955" y="245" class="section" fill="#c2410c">WS_B｜π0.5 + Arm B（搬运）</text>
   <text x="820" y="243" class="label" text-anchor="middle" fill="#166534">共享交接区</text>
   <text x="820" y="265" class="tiny" text-anchor="middle">单臂互斥进入</text>
 
@@ -174,7 +174,7 @@
     <path d="M1095 650 Q1015 585 896 520" fill="none" stroke="#334155" stroke-width="18" stroke-linecap="round"/>
     <circle cx="896" cy="520" r="16" fill="#475569"/>
     <text x="1095" y="794" class="label" text-anchor="middle">Arm_B BASE</text>
-    <text x="1095" y="816" class="tiny" text-anchor="middle">(0.50, -0.30) · OpenVLA-OFT</text>
+    <text x="1095" y="816" class="tiny" text-anchor="middle">(0.50, -0.30) · π0.5</text>
   </g>
 
   <!-- Workflow arrows -->

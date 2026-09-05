@@ -16,13 +16,27 @@ from jsonschema import Draft202012Validator, FormatChecker
 CANONICAL_SCHEMA_VERSION = "2.0"
 EXPECTED_SCENE_ID = "single_bin_manual_industrial_v2"
 EXPECTED_TASK_ID = "P01_TO_S11"
-EXPECTED_INSTRUCTION = "请将轴件 P01 放置到料箱的 S11 格子中。"
+EXPECTED_INSTRUCTION = "把P01放到S11中"
 EXPECTED_TASK_INSTRUCTIONS = {
     EXPECTED_TASK_ID: EXPECTED_INSTRUCTION,
-    "W01_TO_S14": "请将扳手 W01 放置到料箱的 S14 格子中。",
+    "W01_TO_S14": "把W01放到S14中",
+    "BIN01_TO_FINISHED01": "把Bin_01搬到FINISHED_01",
 }
 EXPECTED_ARM_ID = "Arm_A"
 EXPECTED_EXECUTOR = "pi05"
+EXPECTED_TASK_ACTION_IDENTITIES = {
+    "P01_TO_S11": frozenset({("Arm_A", "pi05")}),
+    "W01_TO_S14": frozenset({("Arm_A", "pi05")}),
+    "BIN01_TO_FINISHED01": frozenset({("Arm_A", "pi05"), ("Arm_B", "pi05")}),
+}
+LEGACY_BIN01_ACTION_IDENTITIES = frozenset(
+    {("Arm_A", "pi05"), ("Arm_B", "openvla_oft")}
+)
+EXPECTED_TASK_CAMERA_IDS = {
+    "P01_TO_S11": "CAM_A_TOP",
+    "W01_TO_S14": "CAM_A_TOP",
+    "BIN01_TO_FINISHED01": "CAM_B_TOP",
+}
 EXPECTED_CAMERA_IDS = ("CAM_A_TOP", "CAM_HANDOFF", "CAM_B_TOP")
 EXPECTED_ARM_IDS = ("Arm_A", "Arm_B")
 STATE_DIM = 7
@@ -107,6 +121,7 @@ class CanonicalV2Reader:
         episode_dir: str | Path,
         *,
         schema_path: str | Path = SCHEMA_PATH,
+        allow_legacy_bin01_source: bool = False,
     ) -> None:
         root = Path(episode_dir)
         provisional_id = root.name or "<unknown>"
@@ -118,6 +133,7 @@ class CanonicalV2Reader:
             )
         self.episode_path = root.resolve()
         self._h5: h5py.File | None = None
+        self.allow_legacy_bin01_source = allow_legacy_bin01_source
 
         structure_path = self.episode_path / "structure.json"
         hdf5_path = self.episode_path / "episode.h5"
@@ -392,18 +408,49 @@ class CanonicalV2Reader:
         valid_count = int(self.manifest["streams"]["actions"]["valid_count"])
         if valid_count != count or valid_count != int(np.count_nonzero(valid_mask)):
             self._fail("valid_count must equal count", "actions.valid_count")
-        identities = {
-            "arm_id": EXPECTED_ARM_ID,
-            "executor": EXPECTED_EXECUTOR,
-            "subtask_id": str(self.manifest["metadata"]["task_id"]),
+        task_id = str(self.manifest["metadata"]["task_id"])
+        arm_ids = _decoded_strings(group["arm_id"])
+        executors = _decoded_strings(group["executor"])
+        allowed_identity_sets = [EXPECTED_TASK_ACTION_IDENTITIES[task_id]]
+        if task_id == "BIN01_TO_FINISHED01" and self.allow_legacy_bin01_source:
+            allowed_identity_sets.append(LEGACY_BIN01_ACTION_IDENTITIES)
+        allowed_arms = {
+            arm_id for identities in allowed_identity_sets for arm_id, _ in identities
         }
-        for field, expected in identities.items():
-            values_text = _decoded_strings(group[field])
-            if any(value != expected for value in values_text):
+        if any(arm_id not in allowed_arms for arm_id in arm_ids):
+            self._fail(
+                "action arm_id is not allowed for this task",
+                "actions.arm_id",
+            )
+        actual_identities = set(zip(arm_ids, executors, strict=True))
+        if not any(
+            actual_identities.issubset(allowed_identities)
+            for allowed_identities in allowed_identity_sets
+        ):
+            self._fail(
+                "action executor does not match its arm_id",
+                "actions.executor",
+            )
+        if task_id == "BIN01_TO_FINISHED01":
+            if "Arm_A" not in arm_ids or "Arm_B" not in arm_ids:
                 self._fail(
-                    f"every value must equal {expected!r}",
-                    f"actions.{field}",
+                    "dual-arm task requires both Arm_A and Arm_B actions",
+                    "actions.arm_id",
                 )
+            first_b = arm_ids.index("Arm_B")
+            if any(arm_id != "Arm_A" for arm_id in arm_ids[:first_b]) or any(
+                arm_id != "Arm_B" for arm_id in arm_ids[first_b:]
+            ):
+                self._fail(
+                    "dual-arm actions must be ordered Arm_A then Arm_B",
+                    "actions.arm_id",
+                )
+        subtask_ids = _decoded_strings(group["subtask_id"])
+        if any(value != task_id for value in subtask_ids):
+            self._fail(
+                f"every value must equal {task_id!r}",
+                "actions.subtask_id",
+            )
 
     def iter_action_7d(self) -> Iterator[np.ndarray]:
         """Yield defensive copies of validated V2 action rows."""
@@ -450,7 +497,10 @@ __all__ = [
     "EXPECTED_INSTRUCTION",
     "EXPECTED_SCENE_ID",
     "EXPECTED_TASK_ID",
+    "EXPECTED_TASK_ACTION_IDENTITIES",
+    "EXPECTED_TASK_CAMERA_IDS",
     "EXPECTED_TASK_INSTRUCTIONS",
+    "LEGACY_BIN01_ACTION_IDENTITIES",
     "STATE_DIM",
     "CanonicalV2Error",
     "CanonicalV2Reader",

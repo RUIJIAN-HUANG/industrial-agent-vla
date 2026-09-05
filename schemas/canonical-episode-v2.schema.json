@@ -103,10 +103,10 @@
           "const": "single_bin_manual_industrial_v2"
         },
         "task_id": {
-          "enum": ["P01_TO_S11", "W01_TO_S14"]
+          "enum": ["P01_TO_S11", "W01_TO_S14", "BIN01_TO_FINISHED01"]
         },
         "instruction": {
-          "enum": ["请将轴件 P01 放置到料箱的 S11 格子中。", "请将扳手 W01 放置到料箱的 S14 格子中。"]
+          "enum": ["把P01放到S11中", "把W01放到S14中", "把Bin_01搬到FINISHED_01"]
         },
         "scene_seed": {
           "type": "integer",
@@ -156,13 +156,19 @@
             {
               "properties": {
                 "task_id": {"const": "P01_TO_S11"},
-                "instruction": {"const": "请将轴件 P01 放置到料箱的 S11 格子中。"}
+                "instruction": {"const": "把P01放到S11中"}
               }
             },
             {
               "properties": {
                 "task_id": {"const": "W01_TO_S14"},
-                "instruction": {"const": "请将扳手 W01 放置到料箱的 S14 格子中。"}
+                "instruction": {"const": "把W01放到S14中"}
+              }
+            },
+            {
+              "properties": {
+                "task_id": {"const": "BIN01_TO_FINISHED01"},
+                "instruction": {"const": "把Bin_01搬到FINISHED_01"}
               }
             }
           ]

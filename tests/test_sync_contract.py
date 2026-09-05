@@ -4,10 +4,14 @@ import unittest
 
 from industrial_agent.sync_contract import (
     FROZEN_MULTI_RATE,
+    GRIPPER_CLOSE_COMMAND_MAX,
+    GRIPPER_OPEN_COMMAND_MIN,
     STATE_7D_ORDER,
+    canonical_observed_state_7d,
     canonical_state_7d,
     canonical_state_7d_from_opening,
     normalize_gripper_opening,
+    resolve_gripper_command,
 )
 
 
@@ -51,6 +55,37 @@ class FrozenStateContractTests(unittest.TestCase):
             canonical_state_7d_from_opening([0.0] * 6, True)
         with self.assertRaisesRegex(ValueError, r"within \[0,1\]"):
             canonical_state_7d_from_opening([0.0] * 6, 1.01)
+
+    def test_observed_state_preserves_continuous_gripper_measurement(self) -> None:
+        pose = [0.4, 0.1, 0.5, 0.01, -0.02, 0.03]
+        self.assertEqual(
+            canonical_observed_state_7d(pose, [*pose, 0.375], False),
+            [*pose, 0.375],
+        )
+
+    def test_observed_state_rejects_cross_field_pose_mismatch(self) -> None:
+        pose = [0.4, 0.1, 0.5, 0.01, -0.02, 0.03]
+        with self.assertRaisesRegex(ValueError, "does not match tcp_pose"):
+            canonical_observed_state_7d(
+                pose,
+                [0.41, *pose[1:], 0.375],
+                False,
+            )
+
+    def test_observed_state_rejects_cross_field_gripper_mismatch(self) -> None:
+        pose = [0.4, 0.1, 0.5, 0.01, -0.02, 0.03]
+        with self.assertRaisesRegex(ValueError, "does not match gripper_open"):
+            canonical_observed_state_7d(pose, [*pose, 0.75], False)
+
+    def test_gripper_command_hysteresis_switches_only_at_outer_thresholds(self) -> None:
+        self.assertFalse(resolve_gripper_command(GRIPPER_CLOSE_COMMAND_MAX, True))
+        self.assertTrue(resolve_gripper_command(GRIPPER_OPEN_COMMAND_MIN, False))
+        self.assertTrue(resolve_gripper_command(0.5, True))
+        self.assertFalse(resolve_gripper_command(0.5, False))
+
+    def test_gripper_command_hysteresis_rejects_uninitialized_deadband(self) -> None:
+        with self.assertRaisesRegex(ValueError, "requires a previous command"):
+            resolve_gripper_command(0.5, None)
 
 
 class FrozenMultiRateContractTests(unittest.TestCase):

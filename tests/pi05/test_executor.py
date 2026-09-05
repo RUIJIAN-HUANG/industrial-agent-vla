@@ -4,7 +4,7 @@
 方案书出处：
   - §3.3.1 Para185/186：norm stats / 反归一化由 openpi 在 policy.infer 内部完成，
     适配器不再二次反归一化；失败切换清空动作队列与客户端缓存。
-  - Table 69 Row7 / 附录B：单步平移 ≤2cm、旋转 ≤5°（≈0.0873rad），超限截断并报警。
+  - 正式 V2 SafetyPolicy：单步平移 ≤5cm、旋转 ≤5°（≈0.0873rad），超限截断并报警。
   - §7.5 image_pipeline：固定像素校验图 RGB/尺寸/裁剪/方向 checksum 正确。
   - §3.4：ObsPacket / CanonicalActionChunk 协议不变量，越界动作拒绝下发。
 
@@ -452,7 +452,7 @@ def test_norm_stats_no_double_denormalization(clean_pi05_env, monkeypatch, tmp_p
     raw_state = np.arange(7, dtype=np.float32)
     captured: dict = {}
 
-    # 模拟 openpi output_transform 已反归一化的物理动作（均在安全限幅内，仅夹爪需取整）
+    # 模拟 openpi output_transform 已反归一化的物理动作（均在安全限幅内）
     openpi_actions = np.repeat(
         np.array(
             [[0.01, -0.01, 0.005, 0.01, -0.01, 0.005, 0.499]],
@@ -481,9 +481,8 @@ def test_norm_stats_no_double_denormalization(clean_pi05_env, monkeypatch, tmp_p
     np.testing.assert_array_equal(captured["state_passed"], raw_state)
 
     # 2) 反归一化由 openpi 完成：适配器直接使用已反归一化输出，未再乘 std 加 mean
-    #    期望 = openpi 输出经限幅/取整（夹爪 0.499 < 0.5 -> 0.0），平移/旋转均在限幅内不截断
+    #    夹爪连续输出必须保留到 Isaac 的有状态滞环边界，不能在服务端按 0.5 取整。
     expected = openpi_actions[:1].copy()
-    expected[:, 6] = 0.0
     np.testing.assert_allclose(chunk.actions, expected)
 
     # 3) 显式确认不出现双重反归一化：若误做 (out * std + mean)，结果会与本输出明显不同
@@ -495,30 +494,41 @@ def test_norm_stats_no_double_denormalization(clean_pi05_env, monkeypatch, tmp_p
 # 用例 5：安全限幅
 # ---------------------------------------------------------------------------
 def test_safety_clamping(mock_executor, caplog):
-    """用例5：平移>2cm、旋转>5° 被截断到安全阈值并触发报警（方案书 Table 69 Row7 / 附录B）。"""
-    # 构造超限动作：平移 0.05m(>0.02)、旋转 0.2rad(>0.0873)、夹爪 0.3(非 0/1)
+    """用例5：平移>5cm、旋转>5° 被截断到安全阈值并触发报警。"""
+    # 构造超限动作；夹爪连续值位于合法范围内，必须原样保留。
     actions = np.array(
         [
-            [0.05, -0.05, 0.001, 0.20, -0.20, 0.000, 0.30],
-            [-0.03, 0.04, -0.001, -0.10, 0.15, 0.050, 0.70],
+            [0.08, -0.08, 0.001, 0.20, -0.20, 0.000, 0.30],
+            [-0.06, 0.07, -0.001, -0.10, 0.15, 0.050, 0.70],
         ],
         dtype=np.float32,
     )
     with caplog.at_level("WARNING", logger="pi05_executor"):
         clipped = mock_executor._clip_actions(actions)
 
-    # 平移截断到 [-0.02, 0.02]（米）
+    # 平移截断到 [-0.05, 0.05]（米）
     assert np.all(clipped[:, 0:3] >= -MAX_TRANSLATION_M)
     assert np.all(clipped[:, 0:3] <= MAX_TRANSLATION_M)
+    np.testing.assert_allclose(clipped[0, 0:2], [0.05, -0.05])
+    np.testing.assert_allclose(clipped[1, 0:2], [-0.05, 0.05])
     # 旋转截断到 [-0.0873, 0.0873]（弧度 ≈ 5°）
     assert np.all(clipped[:, 3:6] >= -MAX_ROTATION_RAD)
     assert np.all(clipped[:, 3:6] <= MAX_ROTATION_RAD)
-    # 夹爪仅允许 0.0 / 1.0
-    assert set(np.unique(clipped[:, 6])).issubset({0.0, 1.0})
+    np.testing.assert_allclose(clipped[:, 6], [0.3, 0.7])
     # 截断计数 > 0
     assert mock_executor._last_truncation_count > 0
     # 截断时触发报警日志
     assert any("截断" in r.message for r in caplog.records)
+
+
+def test_gripper_safety_clipping_preserves_deadband_and_limits_only_range(
+    mock_executor,
+):
+    actions = np.zeros((3, 7), dtype=np.float32)
+    actions[:, 6] = [0.5, -1.2, 1.2]
+    clipped = mock_executor._clip_actions(actions)
+    np.testing.assert_allclose(clipped[:, 6], [0.5, -1.0, 1.0])
+    assert mock_executor._last_truncation_count == 2
 
 
 def test_safety_clamping_boundary(mock_executor):

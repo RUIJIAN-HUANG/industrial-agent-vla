@@ -47,7 +47,7 @@ _ROBOTS = {
     "Arm_B": {
         "position_m": [0.5, -0.3, 0.75],
         "rpy_deg": [0.0, 0.0, 90.0],
-        "executor": "openvla_oft",
+        "executor": "pi05",
         "role": "bin_transport",
         "home": {
             "arm_joint_positions_rad": [
@@ -142,7 +142,7 @@ _CAMERAS = {
     "CAM_B_TOP": {
         "position_m": [0.6, -0.18, 1.45],
         "look_at_m": [0.48, 0.18, 0.75],
-        "consumers": ["openvla_oft", "yolo"],
+        "consumers": ["pi05", "yolo"],
     },
 }
 _BIN_BUILD_PARAMETERS = {

@@ -6,7 +6,7 @@ process.  A factory may return either an ``ExecutionEnvironment`` or an
 ``EnvironmentHost`` that pumps an owner-thread runtime such as Isaac Sim.
 
 模块说明:
-    这是生产环境下"固定四 Agent 监督器"(Supervisor)的组装入口。
+    这是生产环境下三 Agent 运行时（总控、YOLO、π0.5）的组装入口。
     平台相关的环境(如 Isaac Sim)通过工厂函数注入,因此本模块不会
     把模拟器/模型权重等依赖导入 Supervisor 进程。工厂返回的是
     ``ExecutionEnvironment`` 或包装了平台主线程运行时(如 Isaac Sim)
@@ -33,7 +33,7 @@ from .environment import ExecutionEnvironment, SafeStopReceipt
 from .errors import AgentError
 from .executor import EXECUTOR_CONFIG_FIELDS, Pi05Adapter, ProcessTransport
 from .http_transport import BoundedHTTPTransport, HTTPTransportError
-from .orchestrator import RunResult
+from .run_result import RunResult
 from .v2_supervisor import V2Supervisor
 
 
@@ -150,7 +150,7 @@ def build_supervisor(
     *,
     transport_factory: (Callable[[str, str], ProcessTransport] | None) = None,
 ) -> V2Supervisor:
-    """Wire the only formal runtime: V2 π0.5/Arm_A.
+    """Wire the only formal runtime: V2 Supervisor + YOLO + π0.5.
 
     V1 is intentionally rejected here. Historical V1 classes remain importable
     for archived regression tests but cannot be composed by the production

@@ -56,6 +56,7 @@ class SourceEpisode:
     scene_config_sha256: str
     hdf5_sha256: str
     actions: tuple[Any, ...]
+    arm_ids: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -155,6 +156,13 @@ def load_source_episode(
             )
         rows = list(reader.iter_action_7d())
         actions = tuple(_replay_task_actions_from_rows(rows))
+        stored_arm_ids = tuple(
+            value.decode("utf-8") if isinstance(value, bytes) else str(value)
+            for value in reader.h5["actions/arm_id"][:]
+        )
+        arm_ids = stored_arm_ids[: len(actions)]
+        if len(stored_arm_ids) != len(rows):
+            raise ReplayBatchError("source action identity count is inconsistent")
         return SourceEpisode(
             path=path,
             episode_id=reader.episode_id,
@@ -163,6 +171,7 @@ def load_source_episode(
             scene_config_sha256=actual_scene_sha,
             hdf5_sha256=str(reader.manifest["storage"]["sha256"]),
             actions=actions,
+            arm_ids=arm_ids,
         )
 
 
@@ -410,6 +419,7 @@ def generate_batch(
             lift_mm=spec.lift_mm,
             final_y_offset_mm=spec.final_y_offset_mm,
             final_z_offset_mm=spec.final_z_offset_mm,
+            arm_ids=list(source.arm_ids),
         )
         varied_sha = action_sha256(varied_actions)
         if varied_sha in seen_hashes:

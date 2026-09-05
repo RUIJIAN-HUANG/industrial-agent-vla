@@ -10,7 +10,6 @@ import numpy as np
 from industrial_agent.errors import FailureCode, ImageCasError
 from industrial_agent.image_cas import ImageCas, ImageCasConfig
 from industrial_agent.service_images import CasRequestImageResolver
-from services.openvla_oft import build_v1_infer_handler as build_openvla_handler
 from services.pi05 import build_v1_infer_handler as build_pi05_handler
 from services.yolo import build_v1_detect_handler as build_yolo_handler
 
@@ -62,18 +61,6 @@ class ProductionServiceHandlerTests(unittest.TestCase):
                 ],
             ),
             (
-                build_openvla_handler,
-                {
-                    "executor": "openvla_oft",
-                    "model_input": {
-                        "task_description": "transport",
-                        "full_image": self.reference("CAM_B_TOP"),
-                        "wrist_image": None,
-                    },
-                },
-                lambda request: request["model_input"]["full_image"],
-            ),
-            (
                 build_yolo_handler,
                 {
                     "detector": "yolo",
@@ -121,17 +108,6 @@ class ProductionServiceHandlerTests(unittest.TestCase):
                 },
             ),
             (
-                build_openvla_handler,
-                {
-                    "executor": "openvla_oft",
-                    "model_input": {
-                        "task_description": "transport",
-                        "full_image": missing("CAM_B_TOP"),
-                        "wrist_image": None,
-                    },
-                },
-            ),
-            (
                 build_yolo_handler,
                 {
                     "detector": "yolo",
@@ -156,7 +132,7 @@ class ProductionServiceHandlerTests(unittest.TestCase):
         with self.assertRaises(ImageCasError) as caught:
             handler.handle(
                 {
-                    "executor": "openvla_oft",
+                    "executor": "retired",
                     "model_input": {},
                 }
             )

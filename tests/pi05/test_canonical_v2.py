@@ -113,7 +113,7 @@ def test_canonical_v2_reader_rejects_invalid_values_and_padding(
     ("field", "value"),
     [
         ("arm_id", "Arm_B"),
-        ("executor", "openvla_oft"),
+        ("executor", "retired_executor"),
         ("subtask_id", "P02_TO_S21"),
     ],
 )

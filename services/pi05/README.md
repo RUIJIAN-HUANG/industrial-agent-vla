@@ -6,9 +6,10 @@
 负责人：E。V2 正式演示必须显式设置 `PI05_TASK_PROFILE_VERSION=v2`；未设置或
 设置为 `v1` 时服务拒绝启动。
 
-冻结定位：π0.5 是 Arm_A 的唯一 VLA。V2 模式下它接收 V2 task_id 对应的
-精确用户指令、`CAM_A_TOP` 完整图像和 Arm_A 状态，完成当前正式支持的
-`P01_TO_S11` 或 `W01_TO_S14` 单件装箱任务。
+冻结定位：π0.5 是两只机械臂共用的唯一 VLA。V2 模式下它接收 V2 task_id 对应的
+精确用户指令、当前控制臂的完整图像和当前控制臂状态，完成当前正式支持的
+`P01_TO_S11`、`W01_TO_S14` 单件装箱任务，以及 `BIN01_TO_FINISHED01` 的
+Arm_A→Arm_B 串行交接搬运任务。
 YOLO DetectionPacket 不是推理前置条件。π0.5 必须针对这一固定角色完成工业
 场景微调并提供 base/tuned 同协议对照。
 
@@ -21,11 +22,11 @@ YOLO DetectionPacket 不是推理前置条件。π0.5 必须针对这一固定�
 - `/health`、`/v1/infer`、`/v1/cancel` 的超时、错误码和幂等语义；
 - 与 `schemas/executor-*.schema.json`、`action-chunk.schema.json` 的契约测试。
 - 工业微调的数据/配置/checkpoint SHA、base/tuned 成功率与失败分布。
-- 服务只能输出 `arm_id=Arm_A` 的动作；收到 Arm_B 请求必须拒绝。
-- 恢复时必须使用 Arm_A 的新鲜观测重新推理，禁止请求 OpenVLA 接管。
+- 服务按请求中的 `arm_id` 输出 Arm_A 或 Arm_B 的动作。
+- 恢复时必须使用当前控制臂的新鲜观测重新推理；Arm_B 也由同一个 π0.5 服务接管，禁止模型切换。
 - 服务入口必须调用
   `industrial_agent.service_images.CasRequestImageResolver.resolve_vla_request()`
-  将 `CAM_A_TOP` 引用解析为真实 RGB；冻结场景的 `wrist_image` 必须为
+  将对应顶部相机引用解析为真实 RGB；冻结场景的 `wrist_image` 必须为
   `null`。Real 模式缺图、坏 SHA 或解码失败时必须 fail-closed，禁止使用零图、
   placeholder 或自动降级 Mock。
 
@@ -33,9 +34,9 @@ YOLO DetectionPacket 不是推理前置条件。π0.5 必须针对这一固定�
 
 V2 固定 `canonical_schema_version=2.0`、场景
 `single_bin_manual_industrial_v2`、任务 `P01_TO_S11` 和训练指令
-`请将轴件 P01 放置到料箱的 S11 格子中。`。`scripts/pi05/canonical_v2.py` 在读取时复核 JSON Schema、
+`把P01放到S11中`。`scripts/pi05/canonical_v2.py` 在读取时复核 JSON Schema、
 HDF5 SHA、三相机/双臂 Stream、有限 `float32[N,7]` state/action、无 padding 和
-Arm_A/`pi05` 身份。
+当前控制臂/`pi05` 身份。
 
 不依赖 LeRobot 的只读 Preflight：
 
@@ -80,6 +81,46 @@ python scripts\pi05\compute_norm_stats.py `
 `POST /v1/infer` 强制入口核心：它先解析并校验 CAS，再把只读 RGB 数组替换进
 `model_input` 后调用注入的 π0.5 backend。HTTP/WebSocket 外壳不得绕过该 handler。
 
+## 多 GPU 推理
+
+生产镜像入口是 [`serve_multi_gpu.py`](serve_multi_gpu.py)。它按
+`PI05_GPU_IDS` 启动一个独立进程/策略实例，并在公共端口上做稳定路由：同一
+`episode_id`/`task_id` 始终落到同一个 worker，不同 episode 分摊到不同 GPU。
+每个 worker 都会设置自己的 `CUDA_VISIBLE_DEVICES`，不会把“多张可见卡”误报成
+单进程模型并行。
+
+```bash
+PI05_GPU_IDS=0,1 \
+PI05_SERVICE_MODE=real PI05_TASK_PROFILE_VERSION=v2 \
+python -m services.pi05.serve_multi_gpu
+```
+
+`/health` 会汇总所有 worker；只有全部 worker ready 时才返回 `status=ready`。
+单卡仍可使用 `PI05_GPU_ID=0` 作为兼容配置。训练的 `fsdp_devices` 和推理的
+worker 数是两个独立参数：前者用于单进程模型分片，后者用于多进程推理吞吐。
+
+## 推理链路审计（只读、默认关闭）
+
+排查模型输出时可临时打开审计，不改变模型、动作限幅或 HTTP 契约：
+
+```bash
+PI05_ACTION_AUDIT=1 \
+PI05_ACTION_AUDIT_PATH=/mnt/d/industrial-agent-vla-e/logs/pi05-action-audit.jsonl \
+PI05_SERVICE_MODE=real PI05_TASK_PROFILE_VERSION=v2 \
+python -m services.pi05.src.openpi_service
+```
+
+每个服务进程会实际写入带 PID 的文件，例如
+`pi05-action-audit.pid-12345.jsonl`；多卡 worker 不会共享同一个 JSONL 文件。
+如果目录或文件不可写，审计会记录 warning 并自动关闭，PI05 服务仍会继续启动和推理。
+
+审计文件按 `request_id + step_id` 关联 HTTP 请求、解码后的图像/state、模型原始
+归一化动作、官方反归一化动作、PI05 裁剪前后动作和 HTTP 返回动作；失败请求会以
+`http_error` 终止事件记录状态码、错误码与失败阶段。图像只记录字节 SHA-256、shape
+和 dtype，不保存像素。如果当前 OpenPI 版本不再提供可包装的输出转换钩子，审计会
+写入 `audit_unavailable`，同时 `/health` 的执行器信息中 `audit_degraded=true`。审计
+写入失败不会改变推理结果；完成排查后取消 `PI05_ACTION_AUDIT` 即恢复默认行为。
+
 ## 历史 Canonical v1 数据 Gate（禁止用于正式训练）
 
 以下内容仅用于验证旧数据可读性。`scripts/pi05/canonical_v1.py` 是角色 E 的薄适配层，底层强制复用主线
@@ -88,10 +129,10 @@ python scripts\pi05\compute_norm_stats.py `
 Registry；不得复制 Reader 或另建 Canonical 格式。旧的
 `meta.json + steps.jsonl`、`steps.parquet`、`steps.hdf5` 和 `front_rgb` 均不接受。
 
-每个 `valid_mask=true` 的 Arm_A/`pi05` 动作以自身 `physics_tick` 为锚点，必须
-精确找到同 tick 的 Arm_A 状态和 `CAM_A_TOP` 帧；缺失、fallback、Arm_B 混入、
+每个 `valid_mask=true` 的当前控制臂/`pi05` 动作以自身 `physics_tick` 为锚点，必须
+精确找到同 tick 的对应机械臂状态和对应顶部相机帧；缺失、fallback、错误机械臂混入、
 7D 维度错误、NaN/Inf、时间戳/sequence_id/SHA/Split 不合法均 fail-closed。
-Episode 指令必须与 `single_bin_pack_handoff_v1` 的 Arm_A 冻结原文逐字一致，动作
+Episode 指令必须与对应任务的冻结原文逐字一致，动作
 必须属于 `S01_ARM_A_PACK_HANDOFF`；非 `SUCCEEDED` Episode 保留作 QA 证据，但
 不得进入 LeRobot 模仿数据或 norm stats。
 不同频率流不要求逐行同 tick。转换阶段保留原始 1280×720 RGB，不执行
@@ -169,7 +210,7 @@ git diff --check
 上述 synthetic Gate 全部通过、且 action horizon 仍保持显式未冻结哨兵时，可以按
 Issue #15 合并；不得把 synthetic PASS 描述成真实 Isaac 数据或完整训练验收。
 
-后续正式发布 Gate 必须使用 5 条真实 Arm_A Isaac
+后续正式发布 Gate 必须使用真实 Isaac 双臂
 Golden Episode，完成关闭/重开/全量遍历并至少抽查 10 条来源映射。正式
 norm-stats 只能读取同一已验证 Split Registry 的 Train Split，并必须使用真实
 `openpi.shared.normalize`；Loader 会按每个 `canonical_episode_id` 重新查询 Registry，

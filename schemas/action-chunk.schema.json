@@ -30,10 +30,7 @@
       "minLength": 1
     },
     "executor": {
-      "enum": [
-        "openvla_oft",
-        "pi05"
-      ]
+      "const": "pi05"
     },
     "action_space": {
       "const": "ee_delta_pose_gripper"
@@ -95,7 +92,7 @@
                 "type": "number",
                 "minimum": -1,
                 "maximum": 1,
-                "description": "normalized gripper command; hardware boundary maps values >= 0.5 to open and values < 0.5 to closed"
+                "description": "normalized gripper command; hardware boundary closes at values <= 0.35, opens at values >= 0.65, and retains the previous command inside the deadband"
               }
             ],
             "items": false

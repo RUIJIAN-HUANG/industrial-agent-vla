@@ -85,9 +85,12 @@
             }
           },
           "assigned_executor": {
+            "const": "pi05"
+          },
+          "arm_id": {
             "enum": [
-              "openvla_oft",
-              "pi05"
+              "Arm_A",
+              "Arm_B"
             ]
           },
           "repeat_until_postcondition": {

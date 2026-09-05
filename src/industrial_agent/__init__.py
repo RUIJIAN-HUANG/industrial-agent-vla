@@ -47,12 +47,7 @@ from .isaac_runtime import (
     IsaacGateTimeoutError,
     IsaacMainThreadGate,
 )
-from .lifecycle import (
-    ControlToken,
-    FixedDualVLAPlanner,
-    FixedLifecycle,
-    FixedTaskProfile,
-)
+from .lifecycle import ControlToken, FixedTaskProfile
 from .v2_task_profile import (
     V2_FORMAL_TASK_IDS,
     V2_PROFILE_ID,
@@ -64,7 +59,7 @@ from .v2_task_profile import (
 )
 from .v2_observation import V2_OBSERVATION_VERSION, V2ObservationGateway
 from .v2_supervisor import V2Supervisor, V2TaskPlanner
-from .orchestrator import IndustrialAgent, RunResult
+from .run_result import RunResult
 from .perception import (
     DETECTION_CONTRACT_VERSION,
     CocoExportManifest,
@@ -118,13 +113,10 @@ __all__ = [
     "DetectionEvidenceSink",
     "DetectionPacket",
     "DurableCommandIdLedger",
-    "FixedDualVLAPlanner",
-    "FixedLifecycle",
     "FixedTaskProfile",
     "ImageCas",
     "ImageCasConfig",
     "ImageReference",
-    "IndustrialAgent",
     "InstructionOption",
     "IsaacExecutionEnvironment",
     "IsaacFrankaController",

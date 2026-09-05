@@ -8,7 +8,6 @@ from jsonschema import Draft202012Validator, ValidationError
 
 from industrial_agent.contracts import (
     ACTION_CONTRACT_VERSION,
-    FROZEN_VLA_EXECUTOR_NAMES,
     MAX_ACTION_CHUNK_STEPS,
     PI05_EXECUTOR_NAME,
     ActionChunk,
@@ -51,7 +50,7 @@ class ContractAlignmentTests(unittest.TestCase):
         )
         response = {
             "schema_version": "1.0",
-            "service": "openvla_oft",
+            "service": "pi05",
             "status": "ready",
             "checkpoint_sha": f"sha256:{'a' * 64}",
             "norm_stats_sha": f"sha256:{'b' * 64}",
@@ -87,7 +86,7 @@ class ContractAlignmentTests(unittest.TestCase):
         self,
     ) -> None:
         raw = self._task().to_dict()
-        raw["preferred_executor"] = "openvla_oft"
+        raw["preferred_executor"] = "retired_executor"
         with self.assertRaises(ContractError) as caught:
             TaskSchema.from_dict(raw)
         self.assertEqual(caught.exception.code, FailureCode.INVALID_TASK)
@@ -133,10 +132,7 @@ class ContractAlignmentTests(unittest.TestCase):
             )
         )
         properties = schema["properties"]
-        self.assertEqual(
-            frozenset(properties["executor"]["enum"]),
-            FROZEN_VLA_EXECUTOR_NAMES,
-        )
+        self.assertEqual(properties["executor"]["const"], PI05_EXECUTOR_NAME)
         self.assertEqual(
             properties["steps"]["maxItems"],
             MAX_ACTION_CHUNK_STEPS,

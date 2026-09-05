@@ -12,7 +12,7 @@ from collections.abc import Callable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 import logging
-from threading import Lock
+from threading import Event, Lock
 from typing import Any, TYPE_CHECKING
 
 from industrial_agent.contracts import ActionChunk, ActionStep, TaskSchema
@@ -22,7 +22,7 @@ from industrial_agent.executor import (
     Executor,
     ProcessTransport,
 )
-from industrial_agent.orchestrator import RunResult
+from industrial_agent.run_result import RunResult
 from industrial_agent.supervisor_main import build_supervisor
 from industrial_agent.v2_supervisor import V2Supervisor
 
@@ -176,9 +176,15 @@ def _execution_success_result(raw_result: Mapping[str, Any]) -> dict[str, Any]:
 class _RecordingExecutor:
     """Delegate π0.5 calls while retaining the chunk for command auditing."""
 
-    def __init__(self, delegate: Executor, recorder: _ActionRecorder) -> None:
+    def __init__(
+        self,
+        delegate: Executor,
+        recorder: _ActionRecorder,
+        stop_event: Event | None = None,
+    ) -> None:
         self._delegate = delegate
         self._recorder = recorder
+        self._stop_event = stop_event
         self.descriptor = delegate.descriptor
 
     def health(self) -> bool:
@@ -190,7 +196,13 @@ class _RecordingExecutor:
         observation: Any,
         context: ExecutionContext,
     ) -> ActionChunk:
+        if self._stop_event is not None and self._stop_event.is_set():
+            self._delegate.cancel(task.task_id, "operator safe-stop requested")
+            raise RuntimeError("operator safe-stop requested before π0.5 inference")
         chunk = self._delegate.plan(task, observation, context)
+        if self._stop_event is not None and self._stop_event.is_set():
+            self._delegate.cancel(task.task_id, "operator safe-stop requested")
+            raise RuntimeError("operator safe-stop requested during π0.5 inference")
         self._recorder.record_plan(context, chunk)
         return chunk
 
@@ -205,14 +217,18 @@ class _RecordingEnvironment:
         self,
         delegate: ExecutionEnvironment,
         recorder: _ActionRecorder,
+        stop_event: Event | None = None,
     ) -> None:
         self._delegate = delegate
         self._recorder = recorder
+        self._stop_event = stop_event
         self._seen_commands: set[str] = set()
         self._stop_receipt: SafeStopReceipt | None = None
         self._lock = Lock()
 
     def observe(self) -> Mapping[str, Any]:
+        if self._stop_event is not None and self._stop_event.is_set():
+            raise RuntimeError("operator safe-stop requested before observation")
         return self._delegate.observe()
 
     def step(
@@ -225,6 +241,8 @@ class _RecordingEnvironment:
         expected_observation_id: str,
         expected_state_digest: str,
     ) -> Mapping[str, Any]:
+        if self._stop_event is not None and self._stop_event.is_set():
+            raise RuntimeError("operator safe-stop requested before action execution")
         if not isinstance(command_id, str) or not command_id:
             raise ValueError("command_id must be a non-empty string")
         with self._lock:
@@ -320,6 +338,7 @@ def run_supervisor_runtime(
     max_steps: int,
     idle_callback: Callable[[], None] | None = None,
     transport_factory: Callable[[str, str], ProcessTransport] | None = None,
+    stop_event: Event | None = None,
 ) -> SupervisorRuntimeReport:
     """Run the formal V2 Supervisor through the Isaac owner-thread gate.
 
@@ -331,14 +350,22 @@ def run_supervisor_runtime(
 
     runtime_config = with_decision_budget(config, max_steps)
     recorder = _ActionRecorder()
-    recording_environment = _RecordingEnvironment(environment, recorder)
+    recording_environment = _RecordingEnvironment(
+        environment,
+        recorder,
+        stop_event=stop_event,
+    )
 
     try:
         supervisor: V2Supervisor = build_supervisor(
             runtime_config,
             transport_factory=transport_factory,
         )
-        supervisor.executor = _RecordingExecutor(supervisor.executor, recorder)
+        supervisor.executor = _RecordingExecutor(
+            supervisor.executor,
+            recorder,
+            stop_event=stop_event,
+        )
         run_result = gate.run_worker_until_complete(
             lambda: supervisor.run(task, recording_environment),
             idle_callback=idle_callback,
@@ -374,6 +401,7 @@ def run_v2_supervisor_runtime(
     max_steps: int,
     idle_callback: Callable[[], None] | None = None,
     transport_factory: Callable[[str, str], ProcessTransport] | None = None,
+    stop_event: Event | None = None,
 ) -> SupervisorRuntimeReport:
     """Explicit V2-named alias for :func:`run_supervisor_runtime`."""
 
@@ -385,6 +413,7 @@ def run_v2_supervisor_runtime(
         max_steps=max_steps,
         idle_callback=idle_callback,
         transport_factory=transport_factory,
+        stop_event=stop_event,
     )
 
 

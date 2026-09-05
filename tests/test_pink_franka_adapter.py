@@ -9,6 +9,7 @@ import numpy as np
 from simulation.pink_franka_adapter import (
     PinkFrankaAdapter,
     _joint_indices,
+    _resolve_default_franka_urdf,
     _resolve_franka_mesh_root,
     _wxyz_rotation_matrix,
 )
@@ -132,6 +133,69 @@ class PinkFrankaAdapterMathTests(unittest.TestCase):
                 target_orientation_base_wxyz=np.asarray([1.0, 0.0, 0.0, 0.0]),
                 dt_s=0.1,
             )
+
+    def test_virtual_fk_updates_only_pink_configuration(self):
+        class Transform:
+            translation = np.asarray([0.1, 0.2, 0.3])
+            rotation = np.eye(3)
+
+        class Configuration:
+            def __init__(self):
+                self.updated = None
+
+            def update(self, values):
+                self.updated = np.asarray(values, dtype=float).copy()
+
+            def get_transform_frame_to_world(self, frame):
+                self.frame = frame
+                return Transform()
+
+        class Controller:
+            pink_configuration = Configuration()
+            isaac_lab_to_pink_ordering = np.arange(8, -1, -1)
+
+        pink = object.__new__(PinkFrankaAdapter)
+        pink._controllers = {"Arm_B": Controller()}
+        pink._control_frame_names = {"Arm_B": "right_gripper"}
+        pink._controlled_indices = {"Arm_B": list(range(7))}
+
+        position, rotation = pink.control_frame_pose_in_base(
+            arm_id="Arm_B",
+            joint_positions=np.arange(9, dtype=float),
+        )
+
+        np.testing.assert_allclose(position, [0.1, 0.2, 0.3])
+        np.testing.assert_allclose(rotation, np.eye(3))
+        np.testing.assert_allclose(
+            pink._controllers["Arm_B"].pink_configuration.updated,
+            np.arange(8, -1, -1, dtype=float),
+        )
+
+    def test_default_urdf_resolution_does_not_import_lula(self):
+        import unittest.mock
+
+        with TemporaryDirectory() as root:
+            exts = Path(root) / "exts"
+            fake_origin = exts / "isaacsim.core.api" / "isaacsim/core/api/__init__.py"
+            fake_urdf = (
+                exts
+                / "isaacsim.robot_motion.motion_generation"
+                / "motion_policy_configs/franka/lula_franka_gen.urdf"
+            )
+            fake_origin.parent.mkdir(parents=True)
+            fake_origin.touch()
+            fake_urdf.parent.mkdir(parents=True)
+            fake_urdf.touch()
+            spec = unittest.mock.Mock(
+                origin=str(fake_origin), submodule_search_locations=[]
+            )
+            with unittest.mock.patch(
+                "simulation.pink_franka_adapter.importlib.util.find_spec",
+                return_value=spec,
+            ):
+                self.assertTrue(
+                    Path(_resolve_default_franka_urdf()).samefile(fake_urdf)
+                )
 
 
 if __name__ == "__main__":

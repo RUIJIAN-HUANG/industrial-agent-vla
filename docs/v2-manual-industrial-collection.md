@@ -46,15 +46,15 @@ V2 是唯一正式场景。V1 配置与脚本已废除并仅保留为历史回�
 
 | task_id（发送给总控 Agent） | 用户选择的指令 |
 |---|---|
-| `P01_TO_S11` | 请将轴件 P01 放置到料箱的 S11 格子中。 |
-| `W01_TO_S14` | 请将扳手 W01 放置到料箱的 S14 格子中。 |
+| `P01_TO_S11` | 把P01放到S11中 |
+| `W01_TO_S14` | 把W01放到S14中 |
 | `P03_UPRIGHT_TO_S12` | 请将倒立的轴件 P03 翻正后，放置到料箱的 S12 格子中。 |
-| `BIN01_TO_FINISHED01` | 请将料箱 Bin_01 搬运到成品区 FINISHED_01。 |
+| `BIN01_TO_FINISHED01` | 把Bin_01搬到FINISHED_01 |
 | `PACK_ALL_AND_FINISH` | 请将所有零件按指定位置装入料箱 Bin_01，再将料箱 Bin_01 搬运到成品区 FINISHED_01。 |
 
 当前 Canonical V2 正式采集入口和 Episode Schema 已冻结
-`P01_TO_S11` 与 `W01_TO_S14`；其余三条先完成指令冻结，必须在各自任务合同和采集入口完成后，
-才能作为对应任务的正式训练数据采集。不得把它们伪装成 P01 Episode。
+`P01_TO_S11`、`W01_TO_S14` 与 `BIN01_TO_FINISHED01`；其余两条先完成指令冻结，必须在各自任务合同和采集入口完成后，
+才能作为对应任务的正式训练数据采集。不得把它们伪装成其他任务 Episode。
 
 ## 场景组成
 
@@ -121,12 +121,15 @@ V2 是唯一正式场景。V1 配置与脚本已废除并仅保留为历史回�
 python scripts\pi05\convert_openpi_v2.py `
   --data-dir <CANONICAL_V2_ROOT> `
   --split-registry <SPLIT_REGISTRY_JSON> `
+  --include-split train `
   --preflight-only
 ```
 
-每条 Episode 必须包含连续 10 Hz 动作，N 条动作只生成 N−9 个完整 `[10,7]`
-窗口。N<10、缺 tick、padding、NaN/Inf 或错误身份一律拒绝。真实 LeRobot 转换还
-要求在固定训练环境安装 LeRobot；当前普通 CI 环境不包含该依赖。
+每条 Episode 必须包含连续 10 Hz 动作。单臂任务的 N 条动作生成 N−9 个完整
+`[10,7]` 窗口；`BIN01_TO_FINISHED01` 必须先按 Arm_A、Arm_B 的连续动作阶段
+拆分，再在每个阶段内分别应用 N−9，禁止窗口跨越交接点。任一阶段 N<10、缺 tick、
+padding、NaN/Inf 或错误身份一律拒绝。真实 LeRobot 转换还要求在固定训练环境安装
+LeRobot；当前普通 CI 环境不包含该依赖。
 
 ## P01_TO_S11 离线成功门禁
 

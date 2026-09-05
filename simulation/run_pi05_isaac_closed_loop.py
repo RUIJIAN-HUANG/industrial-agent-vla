@@ -6,7 +6,7 @@ components without duplicating their contracts:
     Isaac RGB/CAS observation -> Pi05Adapter -> POST /v1/infer
     -> validated 7-D ActionChunk -> IsaacExecutionEnvironment -> next observation
 
-It is deliberately an evaluation runner, not the frozen four-Agent lifecycle
+It is deliberately an evaluation runner, not the production Supervisor lifecycle
 runner.  It reports a closed-loop pass after the requested action budget is
 completed; task-terminal success is reported only when a detector-backed V2
 task state says ``terminal`` with sufficient evidence. No ground-truth state is added to the online
