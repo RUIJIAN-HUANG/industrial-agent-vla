@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 import types
 import unittest
 from unittest.mock import patch
+from pathlib import Path
 
 from simulation import isaac_compat
 
@@ -37,6 +39,33 @@ class IsaacCompatibilityTests(unittest.TestCase):
                 isaac_compat.SIMPLIFIED_CHINESE_LOCALE_ARG,
             ],
         )
+
+    def test_language_resource_search_accepts_cjk_fonts_and_regions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            font = root / "data" / "fonts" / "NotoSansCJKsc-Regular.otf"
+            region = root / "data" / "regions" / "chinese.txt"
+            font.parent.mkdir(parents=True)
+            region.parent.mkdir(parents=True)
+            font.write_bytes(b"font")
+            region.write_text("中文", encoding="utf-8")
+
+            self.assertEqual(
+                isaac_compat._language_resource_candidates(
+                    (root,),
+                    suffixes=frozenset({".ttf", ".otf"}),
+                    markers=("cjk",),
+                ),
+                (font,),
+            )
+            self.assertEqual(
+                isaac_compat._language_resource_candidates(
+                    (root,),
+                    suffixes=frozenset({".txt"}),
+                    markers=("chinese", "region"),
+                ),
+                (region,),
+            )
 
     def test_version_gate_accepts_isaac_sim_51(self) -> None:
         extension_manager = types.SimpleNamespace(
