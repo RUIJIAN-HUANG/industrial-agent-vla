@@ -1,0 +1,16 @@
+{
+  "perception": {
+    "required": true,
+    "mode": "SHADOW_SCORE",
+    "base_url": "http://127.0.0.1:8103",
+    "evidence_jsonl_path": "artifacts/detection/yolo-evidence.jsonl",
+    "detection_contract_version": "1.0",
+    "checkpoint_sha": "sha256:6bb9d5006e732426458322e7258d3043e367317dfd46ae54920f9605a90b9536",
+    "class_map_sha": "sha256:839fdb76e458f9148959e727d289a29495130ce9c868b10b57adcaab4323ba06",
+    "config_sha": "sha256:f912e17a823bce66092ab730472919c90d024007d1e0cb5a497f54edb24fcff5",
+    "timeout_ms": 5000,
+    "max_attempts": 1,
+    "confidence_threshold": 0.25,
+    "iou_threshold": 0.45
+  }
+}

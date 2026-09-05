@@ -6,6 +6,7 @@
 | Artifact ID | Model | Purpose | Upstream commit | External URI | Checkpoint SHA-256 | Norm stats SHA-256 | License/source | Owner | Status |
 |---|---|---|---|---|---|---|---|---|---|
 | — | — | — | — | — | — | — | — | — | `NOT_AVAILABLE` |
+| `yolo_manual1394_wrench_yolo11n_e5_cpu` | YOLO11n | Wrench-recall-focused V2 perception | Pending merge | [model artifact repository](https://github.com/RUIJIAN-HUANG/industrial-agent-vla-model-yolo-manual800/tree/codex/yolo-manual1394-wrench-artifact/manual1394_wrench) | `sha256:6bb9d5006e732426458322e7258d3043e367317dfd46ae54920f9605a90b9536` | N/A | Human-reviewed internal simulator data | F | `FROZEN` |
 
 规则：
 
