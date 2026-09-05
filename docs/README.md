@@ -6,6 +6,7 @@
 | [`assets/`](assets/) | 冻结架构图和分工图 | 不可静默改变边界 |
 | [`source/`](source/) | 初版 40 天方案 DOCX | 可修订参考 |
 | [`requirements/`](requirements/) | 官方需求、评分、提交物追踪 | A/F 维护 |
+| [`official-test-guide.md`](official-test-guide.md) | 官方测试、Isaac Sim 验收、双模型提交包检查 | F 维护 |
 | [`project-management/`](project-management/) | 看板、每日任务和自动发布规则 | 按仓库证据更新 |
 | [`architecture/`](architecture/) | 总 Agent 与跨进程接口合同 | Schema 优先，变更需评审 |
 
