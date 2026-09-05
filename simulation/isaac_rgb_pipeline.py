@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+import numpy as np
+
 from simulation.rgb_cas_bridge import IsaacRgbCasPublisher
 
 FROZEN_CAMERA_STREAMS = {
@@ -62,6 +64,7 @@ class IsaacRgbObservationPipeline:
         self._publisher = publisher
         self._rt_subframes = int(rt_subframes)
         self._resources: dict[str, tuple[Any, Any]] = {}
+        self._latest_frames: dict[str, np.ndarray] = {}
         camera_config = {
             str(item["id"]): item
             for item in scene_config.get("cameras", [])
@@ -91,15 +94,26 @@ class IsaacRgbObservationPipeline:
         self._rep.orchestrator.step(rt_subframes=self._rt_subframes)
         references: dict[str, Mapping[str, Any]] = {}
         for camera_id, (_, annotator) in self._resources.items():
-            reference = self._publisher.publish(camera_id, annotator.get_data())
+            frame = annotator.get_data()
+            reference = self._publisher.publish(camera_id, frame)
+            self._latest_frames[camera_id] = np.ascontiguousarray(
+                np.asarray(frame)[:, :, :3]
+            ).copy()
             references[camera_id] = reference.to_dict()
         return references
 
     def capture(self, active_arm: str) -> dict[str, Any]:
         return build_camera_payload(self.capture_references(), active_arm)
 
+    def latest_frame(self, camera_id: str) -> np.ndarray | None:
+        """Return a copy of the most recently captured RGB frame."""
+
+        frame = self._latest_frames.get(camera_id)
+        return None if frame is None else frame.copy()
+
     def close(self) -> None:
         resources, self._resources = self._resources, {}
+        self._latest_frames.clear()
         for render_product, annotator in resources.values():
             annotator.detach()
             render_product.destroy()

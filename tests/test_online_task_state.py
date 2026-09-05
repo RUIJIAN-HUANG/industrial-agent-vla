@@ -212,6 +212,32 @@ def test_part_provider_combines_yolo_with_measured_gripper_and_motion_state() ->
     assert state["verification_votes"] == 1
 
 
+def test_provider_exposes_latest_validated_detection_for_ui() -> None:
+    provider, _ = _provider("P01_TO_S11", [("shaft_upright", "S11", 0.9)])
+
+    _update(provider, 1)
+
+    view = provider.latest_detection_view()
+    assert view is not None
+    assert view["observation_id"] == "observation-1"
+    assert view["camera_id"] == "CAM_A_TOP"
+    assert view["detections"][0]["class_name"] == "shaft_upright"
+    assert view["detections"][0]["confidence"] == 0.9
+    assert view["detections"][0]["bbox_xyxy"] == [100.0, 100.0, 140.0, 140.0]
+
+
+def test_provider_clears_latest_detection_when_detector_returns_empty_packet() -> None:
+    provider, _ = _provider("P01_TO_S11", [("shaft_upright", "S11", 0.9), None])
+
+    _update(provider, 1)
+    _update(provider, 2)
+
+    view = provider.latest_detection_view()
+    assert view is not None
+    assert view["observation_id"] == "observation-2"
+    assert view["detections"] == []
+
+
 def test_provider_rejects_replayed_observation_id() -> None:
     provider, yolo = _provider("P01_TO_S11", [None])
     _update(provider, 1)

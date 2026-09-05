@@ -95,6 +95,7 @@ class OnlineTaskStateProvider:
         self._verification_votes = 0
         self._token = "A_ONLY"
         self._last_error: str | None = None
+        self._last_detection_packet: DetectionPacket | None = None
 
     def __call__(self) -> Mapping[str, Any]:
         return self.snapshot()
@@ -136,6 +137,7 @@ class OnlineTaskStateProvider:
                 return self._snapshot_unlocked()
 
             target_id = self._current_target_id()
+            self._last_detection_packet = None
             try:
                 confidence = self._visual_confidence(
                     observation_id=observation_id,
@@ -156,6 +158,25 @@ class OnlineTaskStateProvider:
                 self._votes.append(vote)
                 self._publish_window(terminal_stage=True)
             return self._snapshot_unlocked()
+
+    def latest_detection_view(self) -> dict[str, Any] | None:
+        """Return the latest validated YOLO result for UI presentation.
+
+        This is deliberately separate from :meth:`snapshot`, which is the
+        frozen seven-field task-state contract consumed by the Supervisor.
+        """
+
+        with self._lock:
+            packet = self._last_detection_packet
+            if packet is None:
+                return None
+            return {
+                "observation_id": packet.observation_id,
+                "camera_id": packet.camera_id,
+                "image_width": packet.image_width,
+                "image_height": packet.image_height,
+                "detections": [item.to_dict() for item in packet.detections],
+            }
 
     def _require_fresh(self, observation_id: str, timestamp_ms: int) -> None:
         if not isinstance(observation_id, str) or not observation_id:
@@ -227,6 +248,7 @@ class OnlineTaskStateProvider:
             image=image,
             descriptor=self.perception.descriptor,
         )
+        self._last_detection_packet = packet
         candidates = [
             item for item in packet.detections if item.class_name in class_names
         ]
