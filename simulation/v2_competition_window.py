@@ -66,9 +66,7 @@ def _cjk_font_candidates() -> tuple[Path, ...]:
         extension_manager = omni.kit.app.get_app().get_extension_manager()
         for module in ("omni.kit.language.simplified_chinese",):
             try:
-                extension_path = extension_manager.get_extension_path_by_module(
-                    module
-                )
+                extension_path = extension_manager.get_extension_path_by_module(module)
             except (AttributeError, LookupError, RuntimeError):
                 continue
             if not extension_path:
