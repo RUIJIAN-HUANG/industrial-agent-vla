@@ -202,7 +202,6 @@ def _run_competition(args: argparse.Namespace) -> int:
         verifier_configured=True,
     )
     try:
-        isaac_compat.configure_simplified_chinese_ui()
         from isaacsim.core.api import World
         from isaacsim.core.prims import SingleArticulation
         from simulation.isaac_franka_controller import IsaacSimFrankaController
