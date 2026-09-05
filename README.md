@@ -7,7 +7,7 @@
 > 每次执行一个 7D 微动作并重新观测 → 3 帧 2 票终局核验 → 安全停止。
 
 总控不做 NLP、复杂度判断或模型选择，只验证冻结的 task_id、指令、对象和槽位
-是否逐字匹配。V1 四 Agent/双 VLA 生命周期已经废除，不属于正式演示或评测入口。
+是否逐字匹配。正式演示与评测入口统一使用 V2 架构和配置。
 
 当前状态（2026-09-05）：**V2 人工工业场景源码、训练、推理和工程验收链路均已
 完成；当前已具备 π0.5 与 YOLO 两个模型协同推理的能力。任务一、二、三的实现、
@@ -47,12 +47,7 @@
 V2 的配置、构建、采集与验收入口见
 [V2 人工工业采集说明](docs/v2-manual-industrial-collection.md)。
 
-历史 V1 源码与 `configs/agent.v1.legacy.json` 仅用于回归审计；生产组合入口会
-明确拒绝 1.x 配置。
-
-![中文版：冻结四 Agent 双 VLA 双臂闭环](docs/architecture/assets/four-agent-fixed-dual-vla-architecture-v4-zh.png)
-
-[查看简化 SVG 可编辑版](docs/architecture/assets/four-agent-single-bin-static-handoff-framework-v3.svg)
+最终演示只使用 V2 场景、V2 task catalog、π0.5/YOLO 双模型推理链路和 V2 服务配置。
 
 ## 不可变项目基线
 
@@ -60,9 +55,8 @@ V2 的配置、构建、采集与验收入口见
   [`docs/official/`](docs/official/)。
 - 当前架构图保存在 [`docs/architecture/assets/`](docs/architecture/assets/)；
   原始冻结图与 A-F 分工快照保存在 [`docs/assets/`](docs/assets/)。
-- 初版方案 DOCX 仅是可修订参考，保存在 [`docs/source/`](docs/source/)。
 - 运行 `python scripts/verify_official_baselines.py` 校验唯二官方 PDF；
-  `python scripts/verify_project_frozen_inputs.py` 单独校验两张冻结图和初版 DOCX 快照。
+  `python scripts/verify_project_frozen_inputs.py` 校验当前冻结项目输入。
 - 冲突、评分和六项提交物的工程化索引见
   [官方需求基线](docs/requirements/official-requirements-baseline.md)。
 
@@ -81,46 +75,13 @@ V2 正式运行边界：
 
 | 你要做什么 | 入口 |
 |---|---|
-| 查看 D01-D40 任务、Gate 和降级点 | [40 天逐日计划](docs/project-management/daily-plan.md) |
-| 查看 Epic/User Story/Task 分解 | [项目 WBS](docs/project-management/wbs.md) |
-| 查看每日 A-F 任务 | [每日任务公告索引](docs/project-management/daily/README.md) |
-| 查看每日 09:00 自动发布规则 | [每日任务自动化](docs/project-management/daily-task-automation.md) |
-| 学习 clone、分支、提交、PR、冲突处理 | [GitHub 协作指南](docs/project-management/github-collaboration-guide.md) |
-| 判断代码、模型、数据和报告应放哪里 | [仓库目录与文件规范](docs/repository-structure.md) |
-| 查看团队的 Issue/PR/DoD 规则 | [CONTRIBUTING.md](CONTRIBUTING.md) |
-| 查看总 Agent 设计 | [Agent 架构文档](docs/architecture/agent-framework.md) |
 | 查看当前 V2 工业场景 | [V2 人工工业采集说明](docs/v2-manual-industrial-collection.md) |
-| 查看 V2 正式闭环与历史 V1 边界 | [场景与流程总说明](docs/architecture/final-frozen-scene-and-flow.md) |
-| 对接 D/E/B/F 服务 | [极详细接口契约](docs/architecture/interface-contracts.md) |
-| 采集训练数据并安排 B-F 工作 | [数据采集与五人执行指南](docs/project-management/data-collection-and-five-member-execution-guide.md) |
-| 查看真实完成度与评分缺口 | [项目看板](docs/project-management/dashboard.md) |
-| 查看风险与回退 | [风险登记册](docs/project-management/risk-register.md) |
-
-## 历史 V1 Mock（仅回归）
-
-要求 Python 3.10+。核心包没有第三方运行时依赖。
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -e ".[test]"
-python scripts/run_mock_demo.py
-python -m unittest discover -s tests -v
-python scripts/verify_official_baselines.py
-python scripts/verify_project_frozen_inputs.py
-```
-
-macOS/Linux 使用：
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -e ".[test]"
-python scripts/run_mock_demo.py
-python -m pytest -q
-```
-
-该 Mock 读取 `agent.v1.legacy.json`，只保留历史回归价值，不能作为正式演示。
+| 查看冻结场景与流程 | [场景与流程总说明](docs/architecture/final-frozen-scene-and-flow.md) |
+| 对接模型与服务 | [接口契约](docs/architecture/interface-contracts.md) |
+| 查看模型制品与 SHA | [模型清单](models/MANIFEST.md) |
+| 查看验收证据 | [证据索引](reports/evidence-index.md) |
+| 判断代码、模型、数据和报告应放哪里 | [仓库目录与文件规范](docs/repository-structure.md) |
+| 查看提交规范 | [CONTRIBUTING.md](CONTRIBUTING.md) |
 
 开发验收：
 
@@ -149,36 +110,10 @@ src/industrial_agent/
 ├── safety.py          # NaN、限幅、工作空间与系统故障
 ├── verifier.py        # 多帧后置条件核验
 ├── orchestrator.py    # Arm_A→三帧交接核验→Arm_B 的闭环总循环
-└── mock.py            # 无第三方依赖演示环境
 ```
 
 机器可校验合同位于 [`schemas/`](schemas/)，默认配置位于
 [`configs/agent.default.json`](configs/agent.default.json)。
-
-## A-F 冻结职责
-
-| 角色 | 主责 | 关键验收/备份 |
-|---|---|---|
-| A（队长） | 需求、TaskEnvelope、FSM、令牌/恢复、总集成、答辩 | 验收 B 的动作/安全接口 |
-| B | 仿真、Franka/夹爪、控制器、物理、headless | 备份 A 的安全状态机 |
-| C | 场景、资产、教师轨迹、canonical 数据、split | 备份 F 的数据 QA |
-| D | OpenVLA-OFT 复现、转换、微调、服务 | 备份 E 的服务协议 |
-| E | π0.5/openpi、LeRobot、norm stats、训练、服务 | 备份 D 的动作适配 |
-| F | YOLO/核验、评测、CI、复现、报告/视频 | 备份 C 的数据 QA |
-
-B-F 姓名与 GitHub 用户名必须由 A 确认后再启用 CODEOWNERS；不得按成员名单
-顺序自行猜测映射。
-
-## 项目节奏
-
-- D01：2026-07-25；D40 内部封版：2026-09-02。
-- 2026-09-03 至 09-05 仅用于复现、校验、上传和回退。
-- 每天 09:00 发布每人一个主任务，17:00 交付，18:00 集成。
-- 先 Issue，再短分支，再 Draft PR；禁止直接 push `main`。
-- 模型权重、数据、录像、密钥不得进入普通 Git 历史。
-
-完整管理规则见
-[项目管理执行指南](docs/project-management/project-management-guide.md)。
 
 ## 许可证状态
 
