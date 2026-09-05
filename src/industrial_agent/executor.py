@@ -8,7 +8,7 @@ transport implementation (HTTP, Unix socket, gRPC, etc.) here.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Callable, Mapping, Protocol, Sequence, runtime_checkable
 from uuid import uuid4
 
@@ -81,6 +81,12 @@ class ExecutionContext:
     timeout_ms: int = 15_000
     original_instruction: str | None = None
     arm_id: str | None = None
+    # Model-facing identity is deliberately separate from Supervisor workflow
+    # stages.  For a multi-stage task these fields remain the frozen formal
+    # task identity and prompt for every π0.5 call.
+    model_task_id: str | None = None
+    model_subtask_id: str | None = None
+    model_instruction: str | None = None
 
 
 @runtime_checkable
@@ -469,6 +475,8 @@ def _validate_response_envelope(
     request_id: str,
     context: ExecutionContext,
     task: TaskSchema,
+    expected_task_id: str,
+    expected_subtask_id: str,
     observation: Observation,
     descriptor: ExecutorDescriptor,
 ) -> None:
@@ -488,8 +496,8 @@ def _validate_response_envelope(
         "request_id": request_id,
         "trace_id": context.run_id,
         "episode_id": context.run_id,
-        "task_id": task.task_id,
-        "subtask_id": str(task.metadata.get("subtask_id", task.task_id)),
+        "task_id": expected_task_id,
+        "subtask_id": expected_subtask_id,
         "step_id": context.step_id,
         "observation_id": observation.observation_id,
         "executor": descriptor.name,
@@ -684,10 +692,21 @@ class Pi05Adapter:
             camera_key=camera_key,
         )
         request_id = str(uuid4())
-        subtask_id = str(task.metadata.get("subtask_id", task.task_id))
-        self._cancel_context_by_task[task.task_id] = (context.run_id, subtask_id)
+        # `task.metadata.subtask_id` may be an internal Supervisor phase name.
+        # Never expose that workflow identity as the π0.5 model identity.
+        model_task_id = context.model_task_id or task.task_id
+        model_subtask_id = context.model_subtask_id or task.task_id
+        model_instruction = (
+            context.model_instruction
+            or context.original_instruction
+            or task.instruction
+        )
+        self._cancel_context_by_task[task.task_id] = (
+            context.run_id,
+            model_subtask_id,
+        )
         model_input = {
-            "prompt": context.original_instruction or task.instruction,
+            "prompt": model_instruction,
             "arm_id": arm_id,
             "observation": {
                 "camera": {
@@ -705,9 +724,9 @@ class Pi05Adapter:
             "request_id": request_id,
             "trace_id": context.run_id,
             "episode_id": context.run_id,
-            "task_id": task.task_id,
+            "task_id": model_task_id,
             "arm_id": arm_id,
-            "subtask_id": subtask_id,
+            "subtask_id": model_subtask_id,
             "step_id": context.step_id,
             "observation_id": observation.observation_id,
             "deadline_ms": context.timeout_ms,
@@ -739,12 +758,14 @@ class Pi05Adapter:
             request_id=request_id,
             context=context,
             task=task,
+            expected_task_id=model_task_id,
+            expected_subtask_id=model_subtask_id,
             observation=observation,
             descriptor=self.descriptor,
         )
         return _parse_canonical_chunk(
             response,
-            task=task,
+            task=replace(task, task_id=model_task_id),
             descriptor=self.descriptor,
         )
 

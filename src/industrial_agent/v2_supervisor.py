@@ -378,6 +378,11 @@ class V2Supervisor:
                         timeout_ms=self.executor_timeout_ms,
                         original_instruction=active_subtask.instruction,
                         arm_id=arm_id,
+                        # PI05 must always receive the frozen formal task,
+                        # while active_subtask remains Supervisor-only state.
+                        model_task_id=task.task_id,
+                        model_subtask_id=task.task_id,
+                        model_instruction=task.instruction,
                     )
                     target_location = next(
                         (

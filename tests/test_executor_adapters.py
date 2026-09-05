@@ -177,6 +177,34 @@ def test_pi05_routes_each_arm_to_its_camera_and_state() -> None:
         assert robot["state"][6] == gripper_opening
 
 
+def test_pi05_uses_formal_model_identity_for_internal_workflow_phase() -> None:
+    transport = EchoTransport()
+    adapter = Pi05Adapter(
+        transport,
+        checkpoint_sha=CHECKPOINT_SHA,
+        norm_stats_sha=NORM_STATS_SHA,
+    )
+    task = _task("Arm_A")
+    context = ExecutionContext(
+        run_id="episode-1",
+        strategy_attempt=1,
+        replan_index=0,
+        step_id=4,
+        arm_id="Arm_A",
+        original_instruction="把Bin_01搬到HANDOFF_CENTER",
+        model_task_id="BIN01_TO_FINISHED01",
+        model_subtask_id="BIN01_TO_FINISHED01",
+        model_instruction="把Bin_01搬到FINISHED_01",
+    )
+
+    adapter.plan(task, _observation(), context)
+
+    payload = transport.calls[-1][1]
+    assert payload["task_id"] == "BIN01_TO_FINISHED01"
+    assert payload["subtask_id"] == "BIN01_TO_FINISHED01"
+    assert payload["model_input"]["prompt"] == "把Bin_01搬到FINISHED_01"
+
+
 def test_pi05_context_arm_overrides_task_metadata() -> None:
     transport = EchoTransport()
     adapter = Pi05Adapter(
