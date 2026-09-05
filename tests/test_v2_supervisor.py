@@ -74,6 +74,9 @@ class _Executor:
         self.arm_calls: list[str] = []
         self.instructions: list[str] = []
         self.subtask_ids: list[str] = []
+        self.model_task_ids: list[str | None] = []
+        self.model_subtask_ids: list[str | None] = []
+        self.model_instructions: list[str | None] = []
 
     descriptor = ExecutorDescriptor(
         name="pi05",
@@ -92,6 +95,9 @@ class _Executor:
         self.arm_calls.append(context.arm_id)
         self.instructions.append(context.original_instruction or task.instruction)
         self.subtask_ids.append(str(task.metadata.get("subtask_id")))
+        self.model_task_ids.append(context.model_task_id)
+        self.model_subtask_ids.append(context.model_subtask_id)
+        self.model_instructions.append(context.model_instruction)
         return ActionChunk(
             contract_version="1.0",
             chunk_id=f"chunk-{context.step_id}",
@@ -226,6 +232,18 @@ def test_v2_supervisor_polls_without_motion_during_verified_dual_arm_handoff() -
     assert executor.subtask_ids == [
         "BIN01_TO_HANDOFF_CENTER",
         "BIN01_HANDOFF_TO_FINISHED01",
+    ]
+    assert executor.model_task_ids == [
+        "BIN01_TO_FINISHED01",
+        "BIN01_TO_FINISHED01",
+    ]
+    assert executor.model_subtask_ids == [
+        "BIN01_TO_FINISHED01",
+        "BIN01_TO_FINISHED01",
+    ]
+    assert executor.model_instructions == [
+        "把Bin_01搬到FINISHED_01",
+        "把Bin_01搬到FINISHED_01",
     ]
 
 
