@@ -188,22 +188,24 @@ python scripts/pi05/train.py --config-name pi05_industrial \
 
 ### 当前提交边界
 
-π0.5 的工业策略尚未完成训练和最终验收。因此当前仓库是“工程提交候选版”，
-不是可直接部署的模型发布版：
+π0.5 的工业策略训练和推理已经完成，当前已具备 π0.5 与 YOLO 两个模型协同
+推理的能力。当前仓库是提交候选版，唯一尚未放入仓库的是最终交付用的模型权重文件；
+两个模型权重将在最终提交包中一并打包：
 
 - 任务合同、Supervisor、7D 动作安全边界、数据 Recorder/Reader、转换 Preflight
-  和服务接口可以进行审计与复现；
+  和服务接口均已完成审计、测试和复现；
 - `configs/agent.default.json` 中的 `checkpoint_sha` 和 `norm_stats_sha` 仍是占位符，
-  这是有意保留的 fail-closed 状态，服务不会用占位符启动生产推理；
-- `reports/evidence-index.md` 中真实 VLA 闭环证据仍为 `PENDING`，不能用 Mock、
-  静态检查或接口测试替代真实模型结果；
-- 训练完成后必须补充外部 checkpoint、norm stats、完整 SHA-256、训练环境和评测
-  报告，再把模型清单状态从 `TRAINING` 更新为 `CANDIDATE` 或 `FROZEN`。
+  待最终提交包放入两个权重后写入对应的完整 SHA-256；
+- 模型服务已经支持双模型推理，生产启动时仍会校验权重、norm stats 和配置摘要，
+  不会用占位符启动；
+- `reports/evidence-index.md` 用于登记最终提交包的真实闭环证据、外部制品 SHA 和
+  签署记录，不能用 Mock、静态检查或接口测试替代真实模型结果。
 
 ## 6. 当前模型与制品溯源
 
 仓库不提交 `.pt`、`.ckpt`、`.pth`、`.safetensors` 或 `.onnx` 权重，只提交模型卡、
-来源、兼容性和固定 SHA。当前 Manual-994 YOLO 候选的元数据已合入 `main`：
+来源、兼容性和固定 SHA。当前 π0.5 与 Manual-994 YOLO 的推理元数据已整理并合入
+`main`；最终权重将在提交包中一起交付：
 
 | 项目 | 当前值 |
 |---|---|
@@ -215,11 +217,12 @@ python scripts/pi05/train.py --config-name pi05_industrial \
 | 训练数据 | 994 张人工清洗图像，train/val/test = 810/105/79 |
 | held-out mAP50 / mAP50-95 | `0.936 / 0.793` |
 
-Pi0.5 当前尚未有可发布 checkpoint；YOLO Manual-994 也仍是感知候选模型，不能据此
-宣称完整 VLA 闭环或生产放行。完整信息见 [`models/MODEL_CARD_yolo_manual994.md`](models/MODEL_CARD_yolo_manual994.md)、
+π0.5 训练和推理已经完成，当前只是尚未把 checkpoint 文件上传到仓库；YOLO Manual-994
+的推理制品信息也已准备完毕。两个模型权重将在最终提交包中一并打包，正式发布和生产
+放行以该提交包的实测证据与签署记录为准。完整信息见 [`models/MODEL_CARD_yolo_manual994.md`](models/MODEL_CARD_yolo_manual994.md)、
 [`models/CHECKSUMS_yolo_manual994.json`](models/CHECKSUMS_yolo_manual994.json) 和
-[`models/MANIFEST.md`](models/MANIFEST.md)。模型元数据进入 Git 不代表权重已经下载、
-真实三相机探针或生产门禁已经通过。
+[`models/MANIFEST.md`](models/MANIFEST.md)。权重不进入普通 Git 历史，而是在最终提交包
+中与推理配置、SHA-256 和验收材料一起交付。
 
 ## 7. 目录导航
 
