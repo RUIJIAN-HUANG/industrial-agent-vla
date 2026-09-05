@@ -13,6 +13,31 @@ class FakeUsdStage:
 
 
 class IsaacCompatibilityTests(unittest.TestCase):
+    def test_launch_can_preload_simplified_chinese_before_kit_startup(self) -> None:
+        simulation_app = object()
+        simulation_app_module = types.SimpleNamespace(
+            SimulationApp=lambda config: (simulation_app, config)
+        )
+        with patch.dict(
+            sys.modules,
+            {"isaacsim": simulation_app_module},
+        ):
+            result, config = isaac_compat.launch_simulation_app(
+                headless=False,
+                enable_chinese_ui=True,
+            )
+
+        self.assertIs(result, simulation_app)
+        self.assertEqual(config["headless"], False)
+        self.assertEqual(
+            config["extra_args"],
+            [
+                "--enable",
+                isaac_compat.SIMPLIFIED_CHINESE_EXTENSION,
+                isaac_compat.SIMPLIFIED_CHINESE_LOCALE_ARG,
+            ],
+        )
+
     def test_version_gate_accepts_isaac_sim_51(self) -> None:
         extension_manager = types.SimpleNamespace(
             is_extension_enabled=lambda extension_id: True,

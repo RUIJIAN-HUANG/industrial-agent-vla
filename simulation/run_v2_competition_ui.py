@@ -189,7 +189,10 @@ def _run_competition(args: argparse.Namespace) -> int:
         if args.output_scene is not None
         else artifact_root / "single_bin_scene_v2.usda"
     )
-    simulation_app = isaac_compat.launch_simulation_app(headless=False)
+    simulation_app = isaac_compat.launch_simulation_app(
+        headless=False,
+        enable_chinese_ui=True,
+    )
     rgb_pipeline = None
     window = None
     active_environment = None
