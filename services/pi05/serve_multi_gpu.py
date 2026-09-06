@@ -105,6 +105,8 @@ class Worker:
                 "127.0.0.1",
                 "--port",
                 str(port),
+                "--loop",
+                "asyncio",
             ],
             cwd=Path(__file__).resolve().parents[2],
             env=worker_env,
@@ -255,5 +257,8 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run(
-        app, host=os.environ.get("PI05_SERVICE_HOST", "0.0.0.0"), port=PUBLIC_PORT
+        app,
+        host=os.environ.get("PI05_SERVICE_HOST", "0.0.0.0"),
+        port=PUBLIC_PORT,
+        loop="asyncio",
     )

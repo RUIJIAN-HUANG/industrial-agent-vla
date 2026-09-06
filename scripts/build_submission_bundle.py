@@ -224,6 +224,36 @@ def _artifact_pi05(path: Path, bundle_root: Path) -> ArtifactInfo:
     )
 
 
+def _effective_yolo_config_sha(config_path: Path, device: str) -> str:
+    """Return the same effective identity hash that the YOLO service reports."""
+
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    config["mock_mode"] = False
+    model = dict(config["model"])
+    model["device"] = str(device)
+    image_cas = dict(config["image_cas"])
+    image_cas.pop("root", None)
+    identity = {
+        "schema_version": config["schema_version"],
+        "service": config["service"],
+        "service_version": config["service_version"],
+        "mock_mode": config["mock_mode"],
+        "supported_task_types": config["supported_task_types"],
+        "supported_detection_contracts": config["supported_detection_contracts"],
+        "api": config["api"],
+        "model": model,
+        "image_cas": image_cas,
+    }
+    encoded = json.dumps(
+        identity,
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
 def _write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -267,7 +297,10 @@ def _runtime_env(bundle_root: Path, manifest: dict[str, Any]) -> str:
         "YOLO_MODEL_FILE_HOST": absolute(yolo["relative_path"]),
         "YOLO_CHECKPOINT_SHA": yolo["sha256"],
         "YOLO_CLASS_MAP_SHA": class_map["sha256"],
-        "YOLO_CONFIG_SHA": yolo_config["sha256"],
+        "YOLO_CONFIG_SHA": _effective_yolo_config_sha(
+            bundle_root / yolo_config["relative_path"],
+            manifest["runtime"]["yolo_gpu_id"],
+        ),
     }
     return "\n".join(f"{key}={value}" for key, value in values.items()) + "\n"
 
