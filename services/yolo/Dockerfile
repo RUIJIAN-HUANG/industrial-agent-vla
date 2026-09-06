@@ -1,5 +1,12 @@
 FROM pytorch/pytorch:2.2.0-cuda12.1-cudnn8-runtime
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        libxcb1 \
+        libglib2.0-0 \
+        libgl1 \
+    && rm -rf /var/lib/apt/lists/*
+
 LABEL org.opencontainers.image.source="https://github.com/RUIJIAN-HUANG/industrial-agent-vla"
 LABEL org.opencontainers.image.ultralytics-version="8.4.104"
 
